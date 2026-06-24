@@ -13,8 +13,7 @@ import { defineComponent, h, type Component } from 'vue'
 // Static map of plugin ids -> dynamic import factory.
 // Built-in plugins are listed here; runtime-installed ones use the fallback.
 const BUILTIN_LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
-  'com.desktopsuite.clock': () =>
-    import('../../../packages/clock-widget/frontend/index.ts'),
+  'com.desktopsuite.clock': () => import('@plugins/clock-widget'),
 }
 
 export function usePluginFrontend() {

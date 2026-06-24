@@ -7,6 +7,6 @@ pub mod events;
 pub mod macros;
 pub mod traits;
 
-pub use context::CoreContext;
+pub use context::{CoreContext, CoreRequest};
 pub use events::{CoreEvent, PluginResponse};
 pub use traits::PluginTrait;

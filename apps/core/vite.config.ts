@@ -19,6 +19,10 @@ export default defineConfig({
         __dirname,
         '../../sdk/plugin-sdk-vue/src/index.ts',
       ),
+      '@plugins/clock-widget': resolve(
+        __dirname,
+        '../../packages/clock-widget/frontend/index.ts',
+      ),
     },
   },
   clearScreen: false,

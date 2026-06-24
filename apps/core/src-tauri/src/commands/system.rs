@@ -20,11 +20,16 @@ pub fn get_system_info() -> SystemInfo {
     );
     sys.refresh_cpu_usage();
     sys.refresh_memory();
-    let cpu_usage = sys.global_cpu_usage();
+    let cpus = sys.cpus();
+    let cpu_usage = if cpus.is_empty() {
+        0.0
+    } else {
+        cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpus.len() as f32
+    };
     SystemInfo {
         cpu_usage,
         memory_used: sys.used_memory(),
         memory_total: sys.total_memory(),
-        uptime_secs: System::uptime().as_secs(),
+        uptime_secs: System::uptime(),
     }
 }

@@ -67,9 +67,6 @@ pub fn run() {
             commands::config::set_config,
         ]);
 
-    #[cfg(debug_assertions)]
-    let app = app.devtools();
-
     app.run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

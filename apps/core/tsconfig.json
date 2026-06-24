@@ -8,6 +8,10 @@
     },
     "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"],
-  "references": [{ "path": "../../sdk/plugin-sdk-vue" }]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.vue",
+    "../../sdk/plugin-sdk-vue/src/**/*.ts"
+  ]
 }

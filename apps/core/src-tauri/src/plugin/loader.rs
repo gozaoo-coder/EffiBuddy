@@ -11,8 +11,8 @@ use std::sync::Arc;
 /// Loaded plugin backend: holds the dynamic library + the trait object.
 pub struct LoadedPlugin {
     pub id: String,
-    pub lib: Library,
-    pub instance: *mut dyn PluginTrait,
+    pub _lib: Library,
+    pub instance: Option<*mut dyn PluginTrait>,
 }
 
 unsafe impl Send for LoadedPlugin {}
@@ -20,20 +20,19 @@ unsafe impl Sync for LoadedPlugin {}
 
 impl LoadedPlugin {
     pub fn instance(&self) -> &mut dyn PluginTrait {
-        unsafe { &mut *self.instance }
+        unsafe { &mut *self.instance.expect("plugin instance already dropped") }
     }
 
     pub fn drop_instance(&mut self) {
-        unsafe { drop(Box::from_raw(self.instance)) };
-        self.instance = std::ptr::null_mut();
+        if let Some(ptr) = self.instance.take() {
+            unsafe { drop(Box::from_raw(ptr)) };
+        }
     }
 }
 
 impl Drop for LoadedPlugin {
     fn drop(&mut self) {
-        if !self.instance.is_null() {
-            self.drop_instance();
-        }
+        self.drop_instance();
     }
 }
 
@@ -42,7 +41,7 @@ impl Drop for LoadedPlugin {
 /// # Safety
 /// The library must be built against the same `plugin-sdk-rs` version as Core.
 pub unsafe fn load(path: PathBuf, expected_id: &str) -> Result<LoadedPlugin> {
-    let lib = Library::load(&path)
+    let lib = Library::new(&path)
         .with_context(|| format!("load plugin lib {}", path.display()))?;
     let init: Symbol<PluginInitFn> = lib
         .get(b"_plugin_init")
@@ -59,8 +58,8 @@ pub unsafe fn load(path: PathBuf, expected_id: &str) -> Result<LoadedPlugin> {
     }
     Ok(LoadedPlugin {
         id,
-        lib,
-        instance,
+        _lib: lib,
+        instance: Some(instance),
     })
 }
 

@@ -25,6 +25,7 @@ pub fn plugin_entry<T: PluginTrait + Default + 'static>() -> *mut dyn PluginTrai
 macro_rules! plugin_entry {
     ($ty:ty) => {
         #[no_mangle]
+        #[allow(improper_ctypes_definitions)]
         pub extern "C" fn _plugin_init() -> *mut dyn $crate::PluginTrait {
             $crate::macros::plugin_entry::<$ty>()
         }

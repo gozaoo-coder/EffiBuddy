@@ -93,5 +93,6 @@ pub fn disable_plugin(app: AppHandle, id: String) -> Result<(), String> {
 pub fn get_plugin_manifest(id: String) -> Result<Manifest, String> {
     let reg = lifecycle::registry_handle();
     let entry = reg.get(&id).ok_or("plugin not found")?;
-    Ok(entry.read().manifest.clone())
+    let manifest = entry.read().manifest.clone();
+    Ok(manifest)
 }

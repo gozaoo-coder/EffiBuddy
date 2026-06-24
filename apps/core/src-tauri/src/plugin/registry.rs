@@ -7,7 +7,6 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Default)]
 pub struct PluginEntry {
     pub manifest: Manifest,
     pub enabled: bool,

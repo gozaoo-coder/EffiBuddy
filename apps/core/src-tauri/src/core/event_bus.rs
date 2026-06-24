@@ -22,7 +22,7 @@ impl EventBus {
     }
 
     /// Subscribe to a topic. Returns a guard that unsubscribes on drop.
-    pub fn subscribe<F>(&self, topic: impl Into<String>, f: F) -> Subscription
+    pub fn subscribe<'a, F>(&'a self, topic: impl Into<String>, f: F) -> Subscription<'a>
     where
         F: Fn(Value) + Send + Sync + 'static,
     {

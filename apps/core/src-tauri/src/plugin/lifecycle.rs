@@ -8,7 +8,7 @@ use crate::plugin::registry::PluginRegistry;
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Scan the packages dir and register every manifest found.
 pub async fn autoload_enabled() -> Result<()> {
@@ -92,11 +92,12 @@ pub fn enable(app: &AppHandle, id: &str) -> Result<()> {
 }
 
 /// Disable a plugin: call on_disable + drop backend.
-pub fn disable(app: &AppHandle, id: &str) -> Result<()> {
+pub fn disable(_app: &AppHandle, id: &str) -> Result<()> {
     let reg = registry_handle();
     let entry = reg.get(id).ok_or_else(|| anyhow!("plugin not found: {id}"))?;
     {
-        let mut guard = entry.read().loaded.lock();
+        let entry_guard = entry.read();
+        let mut guard = entry_guard.loaded.lock();
         if let Some(p) = guard.as_mut() {
             p.instance().on_disable();
         }

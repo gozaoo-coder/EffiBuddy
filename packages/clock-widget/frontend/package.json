@@ -1,0 +1,17 @@
+{
+  "name": "@desktop-suite/clock-widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@desktop-suite/plugin-sdk-vue": "workspace:*",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vue-tsc": "^2.0.0"
+  }
+}
