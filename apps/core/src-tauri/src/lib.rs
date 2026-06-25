@@ -75,27 +75,35 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Apply native glass blur to every window. Tauri selects the best effect
-/// per OS: mica/acrylic on Windows, sidebar/hudWindow on macOS, no-op on
-/// Linux (falls back to plain transparency).
+/// Apply native glass blur to every window. Uses window-vibrancy on
+/// Windows/macOS so frameless windows actually get the blur; Linux falls
+/// back to plain transparency.
 fn apply_glass_effects(app: &tauri::App) {
-    use tauri::utils::config::WindowEffectsConfig;
-    use tauri::window::{Effect, EffectState};
-    use tauri::Manager;
-    let effects = WindowEffectsConfig {
-        effects: vec![
-            Effect::Mica,
-            Effect::Acrylic,
-            Effect::Sidebar,
-            Effect::HudWindow,
-        ],
-        state: Some(EffectState::Active),
-        radius: None,
-        color: None,
-    };
     for win in app.webview_windows().values() {
-        if let Err(e) = win.set_effects(Some(effects.clone())) {
-            log::warn!("set_effects on {} failed: {e}", win.label());
+        let label = win.label().to_string();
+
+        #[cfg(target_os = "windows")]
+        {
+            // Try Mica on Windows 11 first, then Acrylic for older builds.
+            if let Err(e) = window_vibrancy::apply_mica(&win, Some(true)) {
+                log::warn!("apply_mica on {label} failed: {e}");
+                if let Err(e) = window_vibrancy::apply_acrylic(&win, Some((0, 0, 0, 50))) {
+                    log::warn!("apply_acrylic on {label} also failed: {e}");
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            use window_vibrancy::NSVisualEffectMaterial;
+            if let Err(e) = window_vibrancy::apply_vibrancy(
+                &win,
+                NSVisualEffectMaterial::HudWindow,
+                None,
+                None,
+            ) {
+                log::warn!("apply_vibrancy on {label} failed: {e}");
+            }
         }
     }
 }

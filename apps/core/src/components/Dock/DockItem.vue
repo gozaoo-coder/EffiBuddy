@@ -6,29 +6,19 @@
     @mouseleave="$emit('leave')"
     @click="$emit('activate')"
   >
-    <span class="icon" :class="`icon-${icon}`">{{ iconChar }}</span>
+    <SvgIcon class="icon" :name="icon" />
   </button>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import SvgIcon from '@/components/Shared/SvgIcon.vue'
 
-const props = defineProps<{ label: string; icon: string }>()
+defineProps<{ label: string; icon: string }>()
 defineEmits<{
   (e: 'activate'): void
   (e: 'hover'): void
   (e: 'leave'): void
 }>()
-
-const iconChar = computed(() => {
-  const map: Record<string, string> = {
-    store: 'S',
-    settings: 'G',
-    widgets: 'W',
-    plugin: 'P',
-  }
-  return map[props.icon] ?? props.icon.charAt(0).toUpperCase()
-})
 </script>
 
 <style scoped>
