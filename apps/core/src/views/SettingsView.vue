@@ -1,57 +1,66 @@
 <template>
   <div class="settings">
-    <h1>Settings</h1>
-    <section class="panel">
-      <h2>General</h2>
-      <label class="row">
-        <span>Launch at login</span>
-        <input type="checkbox" v-model="autostart" @change="onAutostart" />
-      </label>
-    </section>
-    <section class="panel">
-      <h2>Appearance</h2>
-      <div class="row">
-        <span>Theme</span>
-        <div class="seg">
-          <button
-            v-for="opt in ['system', 'dark', 'light'] as const"
-            :key="opt"
-            :class="['seg-btn', mode === opt ? 'active' : '']"
-            @click="set(opt)"
-          >
-            {{ opt }}
-          </button>
+    <TitleBar title="Settings" window-label="settings" @close="onClose" @minimize="onClose" />
+    <div class="body">
+      <h1>Settings</h1>
+      <section class="panel">
+        <h2>General</h2>
+        <label class="row">
+          <span>Launch at login</span>
+          <input type="checkbox" v-model="autostart" @change="onAutostart" />
+        </label>
+      </section>
+      <section class="panel">
+        <h2>Appearance</h2>
+        <div class="row">
+          <span>Theme</span>
+          <div class="seg">
+            <button
+              v-for="opt in ['system', 'dark', 'light'] as const"
+              :key="opt"
+              :class="['seg-btn', mode === opt ? 'active' : '']"
+              @click="set(opt)"
+            >
+              {{ opt }}
+            </button>
+          </div>
         </div>
-      </div>
-      <p class="hint">System follows your OS color scheme automatically.</p>
-    </section>
-    <section class="panel">
-      <h2>Installed Packages</h2>
-      <ul>
-        <li v-for="p in packages" :key="p.id">
-          <strong>{{ p.name }}</strong> ({{ p.id }}) v{{ p.version }}
-          <span :class="['badge', p.enabled ? 'on' : 'off']">
-            {{ p.enabled ? 'enabled' : 'disabled' }}
-          </span>
-        </li>
-        <li v-if="packages.length === 0" class="muted">No packages installed.</li>
-      </ul>
-    </section>
+        <p class="hint">System follows your OS color scheme automatically.</p>
+      </section>
+      <section class="panel">
+        <h2>Installed Packages</h2>
+        <ul>
+          <li v-for="p in packages" :key="p.id">
+            <strong>{{ p.name }}</strong> ({{ p.id }}) v{{ p.version }}
+            <span :class="['badge', p.enabled ? 'on' : 'off']">
+              {{ p.enabled ? 'enabled' : 'disabled' }}
+            </span>
+          </li>
+          <li v-if="packages.length === 0" class="muted">No packages installed.</li>
+        </ul>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import TitleBar from '@/components/Shared/TitleBar.vue'
 import { usePackage, type PackageInfo } from '@/composables/usePackage'
-import { useTheme, type ThemeMode } from '@/composables/useTheme'
+import { useTheme } from '@/composables/useTheme'
+import { useWindow } from '@/composables/useWindow'
 
 const { listPackages } = usePackage()
 const { mode, set } = useTheme()
+const { hideWindow } = useWindow('settings')
 const packages = ref<PackageInfo[]>([])
 const autostart = ref(false)
 
 async function onAutostart() {
   console.log('autostart', autostart.value)
+}
+function onClose() {
+  hideWindow()
 }
 
 onMounted(async () => {
@@ -61,22 +70,27 @@ onMounted(async () => {
 
 <style scoped>
 .settings {
-  padding: 16px 24px;
+  display: flex;
+  flex-direction: column;
   height: 100vh;
-  overflow: auto;
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
+}
+.body {
+  padding: 8px 24px 24px;
+  overflow: auto;
 }
 h1 {
   font-size: 18px;
-  margin: 0 0 16px;
+  margin: 8px 0 16px;
 }
 .panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 16px;
   margin-bottom: 16px;
-  background: var(--bg-elev);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(8px);
 }
 .panel h2 {
   font-size: 14px;

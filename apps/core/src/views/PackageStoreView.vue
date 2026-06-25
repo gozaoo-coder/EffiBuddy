@@ -1,5 +1,6 @@
 <template>
   <div class="store">
+    <TitleBar title="Package Store" window-label="package-store" @close="onClose" @minimize="onClose" />
     <header class="store-header">
       <h1>Package Store</h1>
       <button class="refresh" @click="loadLocal">Refresh</button>
@@ -23,15 +24,17 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import PackageCard from '@/components/Store/PackageCard.vue'
+import TitleBar from '@/components/Shared/TitleBar.vue'
 import { usePackage, type PackageInfo } from '@/composables/usePackage'
+import { useWindow } from '@/composables/useWindow'
 
 const { listPackages, enablePlugin, disablePlugin, uninstallPackage } = usePackage()
+const { hideWindow } = useWindow('package-store')
 const packages = ref<PackageInfo[]>([])
 
 async function loadLocal() {
   packages.value = await listPackages()
 }
-
 async function onEnable(id: string) {
   await enablePlugin(id)
   await loadLocal()
@@ -44,6 +47,9 @@ async function onUninstall(id: string) {
   await uninstallPackage(id)
   await loadLocal()
 }
+function onClose() {
+  hideWindow()
+}
 
 onMounted(loadLocal)
 </script>
@@ -53,7 +59,7 @@ onMounted(loadLocal)
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
 }
 .store-header {
@@ -61,7 +67,6 @@ onMounted(loadLocal)
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--bg-elev);
 }
 .store-header h1 {
   font-size: 16px;

@@ -30,7 +30,8 @@ defineEmits<{
 
 <style scoped>
 .package-card {
-  background: var(--bg-elev);
+  background: var(--bg-overlay);
+  backdrop-filter: blur(10px);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;

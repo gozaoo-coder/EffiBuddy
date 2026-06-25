@@ -54,11 +54,12 @@
         "url": "package-store.html",
         "width": 900,
         "height": 600,
-        "decorations": true,
-        "transparent": false,
+        "decorations": false,
+        "transparent": true,
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "resizable": true,
+        "shadow": true,
         "visible": false
       },
       {
@@ -67,11 +68,12 @@
         "url": "settings.html",
         "width": 720,
         "height": 520,
-        "decorations": true,
-        "transparent": false,
+        "decorations": false,
+        "transparent": true,
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "resizable": true,
+        "shadow": true,
         "visible": false
       }
     ]

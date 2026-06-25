@@ -36,6 +36,10 @@ pub fn run() {
             app.manage(plugin_registry);
             app.manage(asset_server);
 
+            // Apply native glass effects (mica/acrylic/sidebar/hudWindow) to
+            // every window. Tauri picks the best effect per OS.
+            apply_glass_effects(app);
+
             // Auto-load enabled plugins from the packages dir.
             tauri::async_runtime::block_on(async {
                 if let Err(e) = plugin::lifecycle::autoload_enabled().await {
@@ -69,4 +73,29 @@ pub fn run() {
 
     app.run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Apply native glass blur to every window. Tauri selects the best effect
+/// per OS: mica/acrylic on Windows, sidebar/hudWindow on macOS, no-op on
+/// Linux (falls back to plain transparency).
+fn apply_glass_effects(app: &tauri::App) {
+    use tauri::utils::config::WindowEffectsConfig;
+    use tauri::window::{Effect, EffectState};
+    use tauri::Manager;
+    let effects = WindowEffectsConfig {
+        effects: vec![
+            Effect::Mica,
+            Effect::Acrylic,
+            Effect::Sidebar,
+            Effect::HudWindow,
+        ],
+        state: Some(EffectState::Active),
+        radius: None,
+        color: None,
+    };
+    for win in app.webview_windows().values() {
+        if let Err(e) = win.set_effects(Some(effects.clone())) {
+            log::warn!("set_effects on {} failed: {e}", win.label());
+        }
+    }
 }
