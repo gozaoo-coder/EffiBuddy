@@ -1,7 +1,6 @@
 /// Widget host window entry. Mounts WidgetHostView.
 import { createApp } from 'vue'
-import { createPinia } from 'pinia'
 import WidgetHostView from '@/views/WidgetHostView.vue'
-import '@/assets/styles/global.css'
+import { setup } from '@/bootstrap'
 
-createApp(WidgetHostView).use(createPinia()).mount('#app')
+setup(createApp(WidgetHostView)).mount('#app')

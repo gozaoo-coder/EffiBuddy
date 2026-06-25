@@ -50,7 +50,7 @@ onMounted(async () => {
   height: 100vh;
 }
 .empty {
-  color: #888;
+  color: var(--muted);
   font-size: 12px;
   text-align: center;
   padding: 16px;

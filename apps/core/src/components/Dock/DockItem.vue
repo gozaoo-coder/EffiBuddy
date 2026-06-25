@@ -1,7 +1,7 @@
 <template>
   <button
     class="dock-item"
-    :title="label"
+    v-tippy="label"
     @mouseenter="$emit('hover')"
     @mouseleave="$emit('leave')"
     @click="$emit('activate')"
@@ -38,7 +38,7 @@ const iconChar = computed(() => {
   border: none;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.08);
-  color: #cdd6f4;
+  color: var(--fg);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -47,7 +47,7 @@ const iconChar = computed(() => {
 }
 .dock-item:hover {
   transform: translateY(-6px) scale(1.15);
-  background: rgba(137, 180, 250, 0.25);
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .icon {
   font-size: 18px;

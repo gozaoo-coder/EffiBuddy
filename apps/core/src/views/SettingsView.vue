@@ -3,10 +3,27 @@
     <h1>Settings</h1>
     <section class="panel">
       <h2>General</h2>
-      <label>
+      <label class="row">
+        <span>Launch at login</span>
         <input type="checkbox" v-model="autostart" @change="onAutostart" />
-        Launch at login
       </label>
+    </section>
+    <section class="panel">
+      <h2>Appearance</h2>
+      <div class="row">
+        <span>Theme</span>
+        <div class="seg">
+          <button
+            v-for="opt in ['system', 'dark', 'light'] as const"
+            :key="opt"
+            :class="['seg-btn', mode === opt ? 'active' : '']"
+            @click="set(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+      <p class="hint">System follows your OS color scheme automatically.</p>
     </section>
     <section class="panel">
       <h2>Installed Packages</h2>
@@ -26,13 +43,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { usePackage, type PackageInfo } from '@/composables/usePackage'
+import { useTheme, type ThemeMode } from '@/composables/useTheme'
 
 const { listPackages } = usePackage()
+const { mode, set } = useTheme()
 const packages = ref<PackageInfo[]>([])
 const autostart = ref(false)
 
 async function onAutostart() {
-  // Autostart toggle wired via tauri-plugin-autostart commands in P6.
   console.log('autostart', autostart.value)
 }
 
@@ -46,23 +64,53 @@ onMounted(async () => {
   padding: 16px 24px;
   height: 100vh;
   overflow: auto;
-  background: #1e1e2e;
-  color: #cdd6f4;
+  background: var(--bg);
+  color: var(--fg);
 }
 h1 {
   font-size: 18px;
   margin: 0 0 16px;
 }
 .panel {
-  border: 1px solid #313244;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 16px;
   margin-bottom: 16px;
+  background: var(--bg-elev);
 }
 .panel h2 {
   font-size: 14px;
-  margin: 0 0 8px;
-  color: #89b4fa;
+  margin: 0 0 12px;
+  color: var(--accent);
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 0 0;
 }
 ul {
   list-style: none;
@@ -71,7 +119,7 @@ ul {
 }
 li {
   padding: 6px 0;
-  border-bottom: 1px solid #313244;
+  border-bottom: 1px solid var(--border);
 }
 .badge {
   font-size: 11px;
@@ -80,14 +128,14 @@ li {
   margin-left: 8px;
 }
 .badge.on {
-  background: #a6e3a1;
-  color: #1e1e2e;
+  background: var(--success);
+  color: var(--bg);
 }
 .badge.off {
-  background: #6c7086;
-  color: #1e1e2e;
+  background: var(--muted);
+  color: var(--bg);
 }
 .muted {
-  color: #6c7086;
+  color: var(--muted);
 }
 </style>

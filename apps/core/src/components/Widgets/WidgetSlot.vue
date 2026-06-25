@@ -27,21 +27,21 @@ onMounted(async () => {
 
 <style scoped>
 .widget-slot {
-  background: rgba(30, 30, 46, 0.6);
+  background: var(--bg-overlay);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 8px;
   min-height: 80px;
 }
 .fallback {
-  color: #cdd6f4;
+  color: var(--fg);
   font-size: 12px;
 }
 .title {
   font-weight: 600;
 }
 .hint {
-  color: #6c7086;
+  color: var(--muted);
 }
 </style>

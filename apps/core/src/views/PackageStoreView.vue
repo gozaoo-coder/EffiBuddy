@@ -53,23 +53,23 @@ onMounted(loadLocal)
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #1e1e2e;
-  color: #cdd6f4;
+  background: var(--bg);
+  color: var(--fg);
 }
 .store-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #313244;
+  border-bottom: 1px solid var(--bg-elev);
 }
 .store-header h1 {
   font-size: 16px;
   margin: 0;
 }
 .refresh {
-  background: #89b4fa;
-  color: #1e1e2e;
+  background: var(--accent);
+  color: var(--bg);
   border: none;
   padding: 6px 12px;
   border-radius: 6px;
@@ -83,7 +83,7 @@ onMounted(loadLocal)
   overflow: auto;
 }
 .empty {
-  color: #6c7086;
+  color: var(--muted);
   grid-column: 1 / -1;
   text-align: center;
   padding: 32px;

@@ -30,7 +30,8 @@ defineEmits<{
 
 <style scoped>
 .package-card {
-  background: #313244;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
   display: flex;
@@ -44,20 +45,21 @@ defineEmits<{
 }
 .name {
   font-weight: 600;
-  color: #cdd6f4;
+  color: var(--fg);
 }
 .ver {
   font-size: 11px;
-  color: #6c7086;
+  color: var(--muted);
 }
 .id {
   font-size: 11px;
-  color: #6c7086;
+  color: var(--muted);
   font-family: monospace;
 }
 .desc {
   font-size: 12px;
-  color: #a6adc8;
+  color: var(--fg);
+  opacity: 0.85;
   margin: 0;
   min-height: 32px;
 }
@@ -68,8 +70,8 @@ defineEmits<{
 }
 .perm {
   font-size: 10px;
-  background: #45475a;
-  color: #cdd6f4;
+  background: var(--border);
+  color: var(--fg);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -85,15 +87,15 @@ defineEmits<{
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
-  background: #45475a;
-  color: #cdd6f4;
+  background: var(--bg);
+  color: var(--fg);
 }
 .btn.primary {
-  background: #89b4fa;
-  color: #1e1e2e;
+  background: var(--accent);
+  color: var(--bg);
 }
 .btn.danger {
-  background: #f38ba8;
-  color: #1e1e2e;
+  background: var(--danger);
+  color: var(--bg);
 }
 </style>

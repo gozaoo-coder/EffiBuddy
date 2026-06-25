@@ -16,8 +16,10 @@
     "@tauri-apps/plugin-autostart": "^2.0.0",
     "@tauri-apps/plugin-store": "^2.0.0",
     "pinia": "^2.1.0",
+    "tippy.js": "^6.3.7",
     "vue": "^3.4.0",
-    "vue-router": "^4.3.0"
+    "vue-router": "^4.3.0",
+    "vue-tippy": "^6.7.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
