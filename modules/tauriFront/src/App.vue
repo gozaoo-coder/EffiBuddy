@@ -8,7 +8,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
-import { IconButton, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
+import { IconButton, Icon, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
 
 const agentBackend = ref('')
@@ -108,13 +108,14 @@ const modelDisplay = computed(() => {
     <header class="app-header">
       <div class="header-left">
         <IconButton
-          icon="☰"
           size="md"
           container
           dot
           title="侧栏"
           @click="toggleSideNav"
-        />
+        >
+          <Icon name="menu" :size="20" />
+        </IconButton>
       </div>
 
       <div class="header-center">
@@ -125,7 +126,9 @@ const modelDisplay = computed(() => {
       </div>
 
       <div class="header-right">
-        <IconButton icon="🔇" size="md" container title="静音" />
+        <IconButton size="md" container title="静音">
+          <Icon name="mute" :size="20" />
+        </IconButton>
       </div>
     </header>
 

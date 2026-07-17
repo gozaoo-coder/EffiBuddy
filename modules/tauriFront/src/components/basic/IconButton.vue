@@ -15,8 +15,8 @@ export type IconButtonVariant = 'normal' | 'primary' | 'danger'
 
 const props = withDefaults(
   defineProps<{
-    /** 图标内容：emoji 或字符 */
-    icon: string
+    /** 图标内容：emoji 或字符（使用 slot 时可省略） */
+    icon?: string
     /** 尺寸：sm 28 / md 36 / lg 44 */
     size?: IconButtonSize
     /** 带容器（card 背景 + border） */
@@ -29,6 +29,7 @@ const props = withDefaults(
     dot?: boolean
   }>(),
   {
+    icon: '',
     size: 'md',
     container: false,
     variant: 'normal',
@@ -101,13 +102,15 @@ function onPointerLeave() {
     ref="btnEl"
     :class="classes"
     :disabled="disabled"
-    :aria-label="icon"
+    :aria-label="icon ?? ''"
     @click="onClick"
     @pointerdown="onPointerDown"
     @pointerup="onPointerUp"
     @pointerleave="onPointerLeave"
   >
-    <span class="icon-btn-glyph">{{ icon }}</span>
+    <span class="icon-btn-glyph">
+      <slot>{{ icon }}</slot>
+    </span>
     <span v-if="dot" class="icon-btn-dot" aria-hidden="true"></span>
   </button>
 </template>

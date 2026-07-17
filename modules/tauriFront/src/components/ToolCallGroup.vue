@@ -212,14 +212,14 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   font-size: 13px;
 }
 
-/* 组标题：54px */
+/* 组标题：38px */
 .group-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 54px;
-  max-height: 54px;
-  padding: 0 14px;
+  gap: 6px;
+  height: 38px;
+  max-height: 38px;
+  padding: 0 12px;
   cursor: pointer;
   user-select: none;
   transition: background var(--duration-fast, 120ms) var(--ease-standard, ease);
@@ -264,14 +264,14 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   border-top: 1px solid var(--border, rgba(0, 0, 0, 0.05));
 }
 
-/* 每条 tool call：54px 高度 */
+/* 每条 tool call：38px 高度 */
 .tool-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 54px;
-  max-height: 54px;
-  padding: 0 14px;
+  gap: 8px;
+  height: 38px;
+  max-height: 38px;
+  padding: 0 12px;
   cursor: pointer;
   border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.04));
   transition: background var(--duration-fast, 120ms) var(--ease-standard, ease);

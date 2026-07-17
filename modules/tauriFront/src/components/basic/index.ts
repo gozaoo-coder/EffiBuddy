@@ -1,6 +1,9 @@
 // 基础组件库统一导出
 // 参考 HarmonyOS NEXT 设计规范，所有组件遵循 design tokens
 
+// 图标
+export { default as Icon } from '../Icon.vue'
+
 // 反馈类
 export { default as ToastHost } from './ToastHost.vue'
 export { default as SnackbarHost } from './SnackbarHost.vue'

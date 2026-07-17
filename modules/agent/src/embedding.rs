@@ -110,7 +110,7 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
         }
 
         // 1. 读缓存，找出未命中的下标
-        let mut cache = self.cache.read().await;
+        let cache = self.cache.read().await;
         let mut results: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
         let mut misses: Vec<(usize, String)> = Vec::with_capacity(texts.len());
         for (i, t) in texts.iter().enumerate() {
@@ -396,6 +396,7 @@ mod tests {
         let long = "a".repeat(300);
         let t = truncate_body(&long, 10);
         assert!(t.ends_with('…'));
-        assert!(t.len() <= 12);
+        // 截断 10 字节 + UTF-8 省略号 '…'（3 字节）= 13 字节
+        assert!(t.len() <= 13);
     }
 }
