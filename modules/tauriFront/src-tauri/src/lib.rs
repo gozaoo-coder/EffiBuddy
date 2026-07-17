@@ -16,8 +16,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use effisuite_agent::{ChatAgent, MockAgent, RigAgent};
 use effisuite_core::{
-    AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationStore, Device,
-    EventBus, Message, ProviderPreset, Role, ThemeMode, builtin_presets,
+    AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationMeta,
+    ConversationStore, Device, EventBus, Message, ProviderPreset, Role, SearchHit, ThemeMode,
+    builtin_presets,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
@@ -276,23 +277,7 @@ async fn set_theme(
 #[tauri::command]
 async fn list_conversations(state: tauri::State<'_, AppState>) -> Result<Vec<ConversationMeta>, String> {
     let store = state.store.clone();
-    let list = store.list().await.map_err(|e| e.to_string())?;
-    Ok(list
-        .into_iter()
-        .map(|(id, created_at, message_count)| ConversationMeta {
-            id,
-            created_at,
-            message_count,
-        })
-        .collect())
-}
-
-/// 会话元信息（轻量，不含消息体）
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ConversationMeta {
-    pub id: String,
-    pub created_at: u64,
-    pub message_count: usize,
+    store.list_meta().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -315,6 +300,47 @@ async fn create_conversation(state: tauri::State<'_, AppState>) -> Result<String
 #[tauri::command]
 async fn delete_conversation(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     state.store.delete(&id).await.map_err(|e| e.to_string())
+}
+
+/// 重命名会话标题
+#[tauri::command]
+async fn rename_conversation(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    title: String,
+) -> Result<(), String> {
+    state
+        .store
+        .rename(&id, title)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 置顶/取消置顶会话
+#[tauri::command]
+async fn toggle_pin_conversation(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    pinned: bool,
+) -> Result<(), String> {
+    state
+        .store
+        .set_pinned(&id, pinned, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 跨会话搜索消息内容
+#[tauri::command]
+async fn search_conversations(
+    state: tauri::State<'_, AppState>,
+    query: String,
+) -> Result<Vec<SearchHit>, String> {
+    state
+        .store
+        .search(&query)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // =========================================================
@@ -509,6 +535,87 @@ async fn pair_device(state: tauri::State<'_, AppState>, id: String) -> Result<()
 }
 
 // =========================================================
+// 命令：文件 / 图片选择
+// =========================================================
+
+/// 用户通过系统对话框选择的文件信息
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PickedFile {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+}
+
+/// 从 `FilePath` 提取 `(path_str, name, size)`，供 pick_file / pick_image 复用。
+fn picked_file_info(path_str: String) -> PickedFile {
+    let name = std::path::Path::new(&path_str)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let size = std::fs::metadata(&path_str).map(|m| m.len()).unwrap_or(0);
+    PickedFile {
+        path: path_str,
+        name,
+        size,
+    }
+}
+
+/// 弹出系统文件选择对话框（文档/图片/所有文件）
+#[tauri::command]
+async fn pick_file(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("文档", &["txt", "md", "pdf", "doc", "docx", "csv", "json", "rs", "py", "ts", "js"])
+        .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+        .add_filter("所有文件", &["*"])
+        .blocking_pick_file();
+    Ok(path.map(|fp| picked_file_info(fp.to_string())))
+}
+
+/// 弹出系统图片选择对话框
+#[tauri::command]
+async fn pick_image(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"])
+        .blocking_pick_file();
+    Ok(path.map(|fp| picked_file_info(fp.to_string())))
+}
+
+/// 调起系统相机应用（桌面端简化为复用图片选择器作为相机替代）
+#[tauri::command]
+async fn capture_photo(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> {
+    pick_image(app).await
+}
+
+/// 读取文件文本内容（供 agent 使用），默认最多 512KB。
+/// 截断处若落在多字节字符中间，回退到最后一个有效 UTF-8 边界。
+#[tauri::command]
+async fn read_file_text(path: String, max_bytes: Option<u64>) -> Result<String, String> {
+    let max = max_bytes.unwrap_or(512 * 1024) as usize;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let truncated: &[u8] = if bytes.len() > max { &bytes[..max] } else { &bytes[..] };
+    match std::str::from_utf8(truncated) {
+        Ok(s) => Ok(s.to_string()),
+        Err(e) => {
+            let cut = e.valid_up_to();
+            if cut == 0 {
+                Err("文件内容不是有效的 UTF-8 文本".to_string())
+            } else {
+                Ok(std::str::from_utf8(&truncated[..cut])
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_| "文件内容不是有效的 UTF-8 文本".to_string()))
+            }
+        }
+    }
+}
+
+// =========================================================
 // 入口
 // =========================================================
 
@@ -549,6 +656,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(state)
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // 订阅内部事件总线，转发为前端 Tauri 事件。
             // 使用 tauri::async_runtime::spawn 以兼容桌面与 mobile 运行时。
@@ -580,6 +690,9 @@ pub fn run() {
             get_conversation,
             create_conversation,
             delete_conversation,
+            rename_conversation,
+            toggle_pin_conversation,
+            search_conversations,
             // chat
             send_message,
             send_message_stream,
@@ -587,6 +700,11 @@ pub fn run() {
             scan_devices,
             get_devices,
             pair_device,
+            // 文件 / 图片选择
+            pick_file,
+            pick_image,
+            capture_photo,
+            read_file_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
