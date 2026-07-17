@@ -10,7 +10,9 @@ pub mod events;
 pub mod models;
 pub mod storage;
 
-pub use config::{AgentConfig, BackendKind};
+pub use config::{
+    AgentConfig, AvailableModel, BackendKind, ProviderPreset, ThemeMode, builtin_presets,
+};
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
 pub use models::{Conversation, Device, DeviceStatus, Message, Role};

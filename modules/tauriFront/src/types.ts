@@ -65,13 +65,41 @@ export interface ConversationMeta {
 
 export type BackendKind = 'mock' | 'openai'
 
+export type ThemeMode = 'system' | 'light' | 'dark'
+
 export interface AgentConfig {
   backend: BackendKind
   api_key: string
   base_url: string
   model_name: string
   preamble: string
+  provider_id: string
   enable_tools: boolean
+  theme: ThemeMode
+  models: AvailableModel[]
+  active_model_id: string | null
+}
+
+export interface AvailableModel {
+  id: string
+  label: string
+  provider_id: string
+  base_url: string
+  model_name: string
+  api_key: string
+  preamble: string
+  enable_tools: boolean
+  created_at: number
+}
+
+export interface ProviderPreset {
+  id: string
+  name: string
+  default_base_url: string
+  default_model: string
+  env_var: string
+  docs_url: string
+  openai_compat: boolean
 }
 
 // =========================================================

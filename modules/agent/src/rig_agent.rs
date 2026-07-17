@@ -1,5 +1,9 @@
 //! RigAgent：通过 [rig](https://crates.io/crates/rig-core) 调用 OpenAI 兼容接口
 //!
+//! 统一使用 `openai::CompletionsClient`（Chat Completions API）+ 可覆盖的 base_url，
+//! 支持所有 OpenAI 兼容 provider（openai/deepseek/groq/moonshot/openrouter/together/
+//! mistral/perplexity/hyperbolic 以及任意 custom 兼容服务）。
+//!
 //! 同时支持：
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
@@ -7,7 +11,7 @@
 //!   LLM 可主动调用以检索历史或获取时间
 //!
 //! 设计要点（对齐 user_rules 中的 Rust 性能/并发规则）：
-//! - `openai::Client` 内部已是 `Arc` 共享句柄，`RigAgent` 直接持有而**不**再包
+//! - `CompletionsClient` 内部已是 `Arc` 共享句柄，`RigAgent` 直接持有而**不**再包
 //!   `Arc<Mutex<...>>`，避免双重锁开销。
 //! - 每次 `chat`/`chat_stream` 构建一次 `Agent` 是 rig 推荐用法（builder 零成本），
 //!   不缓存带状态的 agent，天然支持并发请求。
@@ -34,7 +38,8 @@ use crate::agent::ChatAgent;
 use crate::tools::{GetTimeTool, SearchHistoryTool};
 
 pub struct RigAgent {
-    client: openai::Client,
+    /// 统一用 CompletionsClient（Chat Completions API），兼容所有 OpenAI 兼容 provider
+    client: openai::CompletionsClient,
     model_name: String,
     preamble: String,
     /// 共享历史快照，工具读取此数据做 RAG 检索
@@ -50,8 +55,8 @@ impl RigAgent {
         preamble: impl Into<String>,
         enable_tools: bool,
     ) -> Result<Self> {
-        let client = openai::Client::from_env()
-            .map_err(|e| CoreError::Agent(format!("openai client init: {e}")))?;
+        let client = openai::CompletionsClient::from_env()
+            .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
         Ok(Self {
             client,
             model_name: model_name.into(),
@@ -61,17 +66,27 @@ impl RigAgent {
         })
     }
 
-    /// 指定 API key 构造客户端（用于 OpenAI 兼容服务）
+    /// 指定 API key + base_url 构造客户端（用于任意 OpenAI 兼容服务）
     ///
-    /// rig 0.40 的 `Client::new` 返回 `Result`，需处理错误
+    /// - `api_key`：Bearer token，空串会被 rig 拒绝
+    /// - `base_url`：可覆盖默认 `https://api.openai.com/v1`，留空则用默认
+    /// - 走 Chat Completions API（`openai::CompletionsClient`）
     pub fn from_key(
         api_key: impl Into<String>,
+        base_url: impl Into<String>,
         model_name: impl Into<String>,
         preamble: impl Into<String>,
         enable_tools: bool,
     ) -> Result<Self> {
-        let client = openai::Client::new(api_key.into())
-            .map_err(|e| CoreError::Agent(format!("openai client init: {e}")))?;
+        let api_key = api_key.into();
+        let base_url = base_url.into();
+        let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+        if !base_url.trim().is_empty() {
+            builder = builder.base_url(&base_url);
+        }
+        let client = builder
+            .build()
+            .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
         Ok(Self {
             client,
             model_name: model_name.into(),
@@ -92,11 +107,12 @@ impl RigAgent {
     /// 装配工具时，所有工具共享同一份 history Arc，确保 LLM 调用
     /// search_history 时看到的是最新历史。
     ///
-    /// 返回类型用关联类型 `<openai::Client as CompletionClient>::CompletionModel`，
-    /// 避免硬编码 Responses vs Completions API 的具体 model 类型。
+    /// 返回类型用关联类型 `<openai::CompletionsClient as CompletionClient>::CompletionModel`，
+    /// 即 `GenericCompletionModel<OpenAICompletionsExt>`，统一所有 OpenAI 兼容 provider。
     fn build_agent(
         &self,
-    ) -> rig_core::agent::Agent<<openai::Client as CompletionClient>::CompletionModel> {
+    ) -> rig_core::agent::Agent<<openai::CompletionsClient as CompletionClient>::CompletionModel>
+    {
         let builder = self
             .client
             .agent(&self.model_name)
@@ -202,6 +218,6 @@ impl ChatAgent for RigAgent {
 
     #[inline]
     fn backend(&self) -> &'static str {
-        "rig-openai"
+        "rig-openai-compat"
     }
 }

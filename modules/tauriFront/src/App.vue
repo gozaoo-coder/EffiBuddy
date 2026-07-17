@@ -4,11 +4,11 @@ import { invoke } from '@tauri-apps/api/core'
 import ChatWindow from './components/ChatWindow.vue'
 import DevicePanel from './components/DevicePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
+import ThemeSwitcher from './components/ThemeSwitcher.vue'
+import { applyThemeNow } from './composables/useTheme'
 
 const agentBackend = ref('')
-// 窄屏下设备面板以抽屉形式折叠，默认收起。
 const panelOpen = ref(false)
-// 设置面板开关
 const settingsOpen = ref(false)
 
 async function refreshBackend() {
@@ -19,7 +19,16 @@ async function refreshBackend() {
   }
 }
 
-onMounted(refreshBackend)
+onMounted(async () => {
+  // 启动时立即应用持久化的主题，避免闪烁
+  try {
+    const config = await invoke<{ theme: 'system' | 'light' | 'dark' }>('get_config')
+    applyThemeNow(config.theme)
+  } catch {
+    // 默认 system
+  }
+  await refreshBackend()
+})
 
 function togglePanel() {
   panelOpen.value = !panelOpen.value
@@ -30,7 +39,6 @@ function openSettings() {
 }
 
 function onSettingsSaved(backend: string) {
-  // 后端已热替换，刷新顶部 badge
   agentBackend.value = backend
 }
 </script>
@@ -43,6 +51,7 @@ function onSettingsSaved(backend: string) {
         <span v-if="agentBackend" class="agent-badge">backend: {{ agentBackend }}</span>
       </div>
       <div class="header-actions">
+        <ThemeSwitcher />
         <button class="header-btn" @click="openSettings">设置</button>
         <button class="panel-toggle" :class="{ active: panelOpen }" @click="togglePanel">
           设备

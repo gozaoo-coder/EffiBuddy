@@ -16,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use effisuite_agent::{ChatAgent, MockAgent, RigAgent};
 use effisuite_core::{
-    AgentConfig, BackendKind, BusEvent, Conversation, ConversationStore, Device, EventBus, Message,
-    Role,
+    AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationStore, Device,
+    EventBus, Message, ProviderPreset, Role, ThemeMode, builtin_presets,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
@@ -90,6 +90,7 @@ fn build_agent(config: &AgentConfig) -> Arc<dyn ChatAgent> {
         BackendKind::Openai if config.is_rig_ready() => {
             match RigAgent::from_key(
                 &config.api_key,
+                &config.base_url,
                 &config.model_name,
                 &config.preamble,
                 config.enable_tools,
@@ -167,6 +168,104 @@ async fn set_config(
     // 通知前端 backend 变化
     let _ = app_handle.emit("agent-backend-changed", ());
 
+    Ok(())
+}
+
+// =========================================================
+// 命令：Provider 预设 & 可使用模型管理
+// =========================================================
+
+/// 返回内置 provider 预设列表（openai/deepseek/groq/...）
+#[tauri::command]
+fn list_provider_presets() -> Vec<ProviderPreset> {
+    builtin_presets()
+}
+
+/// 保存当前 draft 配置为一个可使用模型（model.id 由前端生成）
+/// 返回新模型的 id
+#[tauri::command]
+async fn save_model(
+    state: tauri::State<'_, AppState>,
+    model: AvailableModel,
+) -> Result<String, String> {
+    let mut config = state.config.write().await.clone();
+    // 若 id 已存在则更新，否则新增
+    let id = model.id.clone();
+    if let Some(existing) = config.models.iter_mut().find(|m| m.id == id) {
+        *existing = model;
+    } else {
+        config.models.push(model);
+    }
+    save_config(&config)?;
+    *state.config.write().await = config;
+    Ok(id)
+}
+
+/// 删除指定 id 的可使用模型；若它是当前激活模型则清空 active_model_id
+#[tauri::command]
+async fn delete_model(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let mut config = state.config.write().await.clone();
+    config.models.retain(|m| m.id != id);
+    if config.active_model_id.as_deref() == Some(id.as_str()) {
+        config.active_model_id = None;
+    }
+    save_config(&config)?;
+    *state.config.write().await = config;
+    Ok(())
+}
+
+/// 激活指定 id 的可使用模型：把该模型配置写入 AgentConfig 的运行时字段，
+/// 并重建 agent。返回新的激活模型 id。
+#[tauri::command]
+async fn set_active_model(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<String, String> {
+    let mut config = state.config.write().await.clone();
+    let model = config
+        .models
+        .iter()
+        .find(|m| m.id == id)
+        .cloned()
+        .ok_or_else(|| format!("模型 {} 不存在", id))?;
+
+    // 把模型配置注入运行时字段
+    config.api_key = model.api_key.clone();
+    config.base_url = model.base_url.clone();
+    config.model_name = model.model_name.clone();
+    config.preamble = model.preamble.clone();
+    config.provider_id = model.provider_id.clone();
+    config.enable_tools = model.enable_tools;
+    config.backend = BackendKind::Openai;
+    config.active_model_id = Some(id.clone());
+
+    save_config(&config)?;
+
+    let new_agent = build_agent(&config);
+    {
+        let mut agent_lock = state.agent.write().await;
+        *agent_lock = new_agent;
+    }
+    *state.config.write().await = config;
+
+    let _ = app_handle.emit("agent-backend-changed", ());
+    Ok(id)
+}
+
+/// 设置主题模式（持久化，不重建 agent）
+#[tauri::command]
+async fn set_theme(
+    state: tauri::State<'_, AppState>,
+    theme: ThemeMode,
+) -> Result<(), String> {
+    let mut config = state.config.write().await.clone();
+    config.theme = theme;
+    save_config(&config)?;
+    *state.config.write().await = config;
     Ok(())
 }
 
@@ -469,6 +568,13 @@ pub fn run() {
             // config
             get_config,
             set_config,
+            // providers & models
+            list_provider_presets,
+            save_model,
+            delete_model,
+            set_active_model,
+            // theme
+            set_theme,
             // conversations
             list_conversations,
             get_conversation,
