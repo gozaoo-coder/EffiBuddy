@@ -36,3 +36,5 @@ chrono.workspace = true
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
+# read_attachment 命令把图片编码为 base64 data URL 供前端渲染
+base64 = "0.22"

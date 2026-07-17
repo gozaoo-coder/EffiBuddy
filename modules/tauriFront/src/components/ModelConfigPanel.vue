@@ -15,7 +15,7 @@ import {
   useSnackbar,
 } from './basic'
 import { useAnimeTransition } from '../composables/useAnimeTransition'
-import type { AgentConfig, AvailableModel, ProviderPreset, BackendKind } from '../types'
+import type { AgentConfig, AvailableModel, ProviderPreset, BackendKind, ModelKind } from '../types'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', backend: string): void }>()
@@ -37,7 +37,24 @@ const draft = ref({
   model_name: '',
   preamble: '你是 EffiSuite 的 AI 助手，简洁友好地回答用户问题。',
   enable_tools: true,
+  // 模型能力类型：chat（对话）/ image_gen（图像生成）
+  kind: 'chat' as ModelKind,
+  // 图像生成专用字段
+  image_size: '' as string,
+  image_quality: '' as string,
 })
+
+// 模型类型选项
+const kindOptions: { value: ModelKind; label: string; icon: string; desc: string }[] = [
+  { value: 'chat', label: '对话模型', icon: 'chat', desc: 'LLM 文本对话与推理' },
+  { value: 'image_gen', label: '图像生成', icon: 'image', desc: 'DALL-E / SD / Flux 等文生图' },
+]
+
+// 图像尺寸预设
+const imageSizePresets = ['1024x1024', '1792x1024', '1024x1792', '512x512', '256x256']
+const imageQualityPresets = ['standard', 'hd']
+
+const isImageGen = computed(() => draft.value.kind === 'image_gen')
 
 // 是否已选择 provider（控制 Step 2 展开）
 const providerSelected = computed(() => !!draft.value.provider_id)
@@ -118,6 +135,9 @@ function syncDraftFromConfig(c: AgentConfig) {
     model_name: c.model_name,
     preamble: c.preamble,
     enable_tools: c.enable_tools,
+    kind: 'chat' as ModelKind,
+    image_size: '',
+    image_quality: '',
   }
   editingId.value = null
   saveLabel.value = ''
@@ -215,6 +235,14 @@ async function saveAsModel() {
       api_key: draft.value.api_key,
       preamble: draft.value.preamble,
       enable_tools: draft.value.enable_tools,
+      kind: draft.value.kind,
+      // 图像生成专用字段：仅 kind=image_gen 时有值，否则传 null 让后端忽略
+      image_size: draft.value.kind === 'image_gen' && draft.value.image_size.trim()
+        ? draft.value.image_size.trim()
+        : null,
+      image_quality: draft.value.kind === 'image_gen' && draft.value.image_quality.trim()
+        ? draft.value.image_quality.trim()
+        : null,
       created_at: Date.now(),
     }
     await invoke('save_model', { model })
@@ -242,6 +270,9 @@ function editModel(m: AvailableModel) {
     model_name: m.model_name,
     preamble: m.preamble,
     enable_tools: m.enable_tools,
+    kind: m.kind ?? 'chat',
+    image_size: m.image_size ?? '',
+    image_quality: m.image_quality ?? '',
   }
   editingId.value = m.id
   saveLabel.value = m.label
@@ -250,12 +281,23 @@ function editModel(m: AvailableModel) {
 }
 
 // ---------- 激活模型 ----------
+// 根据 model.kind 走不同命令：
+// - chat：set_active_model 重建对话 agent
+// - image_gen：set_image_gen_model 更新图像生成配置（不重建对话 agent）
 async function activateModel(id: string) {
+  const m = config.value?.models.find((x) => x.id === id)
+  const kind = m?.kind ?? 'chat'
   try {
-    await invoke('set_active_model', { id })
-    config.value = await invoke<AgentConfig>('get_config')
-    if (config.value) syncDraftFromConfig(config.value)
-    toast({ content: '已切换模型并热替换 agent', type: 'success' })
+    if (kind === 'image_gen') {
+      await invoke('set_image_gen_model', { id })
+      config.value = await invoke<AgentConfig>('get_config')
+      toast({ content: '已激活图像生成模型', type: 'success' })
+    } else {
+      await invoke('set_active_model', { id })
+      config.value = await invoke<AgentConfig>('get_config')
+      if (config.value) syncDraftFromConfig(config.value)
+      toast({ content: '已切换对话模型并热替换 agent', type: 'success' })
+    }
     emit('saved', 'rig-openai-compat')
   } catch (e) {
     toast({ content: `激活失败：${e}`, type: 'error' })
@@ -422,6 +464,28 @@ function onClose() {
             <span v-if="editingId" class="editing-tag">编辑中</span>
           </div>
 
+          <!-- 模型类型选择 -->
+          <div class="field">
+            <label class="field-label">模型类型</label>
+            <div class="kind-grid">
+              <button
+                v-for="k in kindOptions"
+                :key="k.value"
+                type="button"
+                class="kind-card"
+                :class="{ selected: draft.kind === k.value }"
+                @click="draft.kind = k.value"
+              >
+                <span class="kind-glyph"><Icon :name="k.icon" :size="18" /></span>
+                <span class="kind-info">
+                  <span class="kind-label">{{ k.label }}</span>
+                  <span class="kind-desc">{{ k.desc }}</span>
+                </span>
+                <span v-if="draft.kind === k.value" class="kind-check">✓</span>
+              </button>
+            </div>
+          </div>
+
           <!-- API Key -->
           <div class="field">
             <label class="field-label">API Key</label>
@@ -461,7 +525,7 @@ function onClose() {
           <div class="field">
             <label class="field-label">模型名</label>
             <Dropdown
-              v-if="hasModelRecommendations"
+              v-if="hasModelRecommendations && !isImageGen"
               :model-value="draft.model_name"
               :options="modelDropdownOptions"
               :searchable="true"
@@ -473,10 +537,40 @@ function onClose() {
               v-else
               v-model="draft.model_name"
               type="text"
-              placeholder="gpt-4o-mini"
+              :placeholder="isImageGen ? 'dall-e-3 / flux-pro / sd3' : 'gpt-4o-mini'"
               class="field-input"
             />
           </div>
+
+          <!-- 图像生成专用字段：尺寸与质量（仅 kind=image_gen 时显示） -->
+          <template v-if="isImageGen">
+            <div class="field">
+              <label class="field-label">默认尺寸</label>
+              <input
+                v-model="draft.image_size"
+                type="text"
+                placeholder="1024x1024（留空用模型默认）"
+                class="field-input"
+                list="image-size-list"
+              />
+              <datalist id="image-size-list">
+                <option v-for="s in imageSizePresets" :key="s" :value="s" />
+              </datalist>
+            </div>
+            <div class="field">
+              <label class="field-label">默认质量</label>
+              <input
+                v-model="draft.image_quality"
+                type="text"
+                placeholder="standard / hd（留空用模型默认）"
+                class="field-input"
+                list="image-quality-list"
+              />
+              <datalist id="image-quality-list">
+                <option v-for="q in imageQualityPresets" :key="q" :value="q" />
+              </datalist>
+            </div>
+          </template>
 
           <!-- System Preamble（折叠） -->
           <div class="field">
@@ -498,11 +592,11 @@ function onClose() {
             ></textarea>
           </div>
 
-          <!-- Enable Tools -->
-          <div class="field field-row">
+          <!-- Enable Tools（仅对话模型有意义） -->
+          <div v-if="!isImageGen" class="field field-row">
             <div class="field-row-text">
               <label class="field-label">启用工具调用</label>
-              <span class="field-row-hint">RAG 历史检索 / 时间查询</span>
+              <span class="field-row-hint">RAG 历史检索 / 时间查询 / 图像生成</span>
             </div>
             <Switch v-model="draft.enable_tools" size="md" />
           </div>
@@ -552,17 +646,34 @@ function onClose() {
             v-for="m in config!.models"
             :key="m.id"
             class="model-card"
-            :class="{ active: config!.active_model_id === m.id }"
+            :class="{
+              active: config!.active_model_id === m.id || config!.active_image_gen_model_id === m.id,
+            }"
           >
             <div class="model-card-main" @click="activateModel(m.id)">
               <span
                 class="model-card-glyph"
                 :style="{ background: visualOf(m.provider_id).accent }"
-              ><Icon :name="visualOf(m.provider_id).glyph" :size="20" /></span>
+              ><Icon :name="(m.kind ?? 'chat') === 'image_gen' ? 'image' : visualOf(m.provider_id).glyph" :size="20" /></span>
               <div class="model-card-info">
                 <div class="model-card-top">
                   <span class="model-card-label">{{ m.label }}</span>
-                  <span v-if="config!.active_model_id === m.id" class="active-pill">当前使用</span>
+                  <span
+                    v-if="m.kind === 'image_gen'"
+                    class="kind-pill kind-pill--image"
+                  >图像</span>
+                  <span
+                    v-else
+                    class="kind-pill kind-pill--chat"
+                  >对话</span>
+                  <span
+                    v-if="config!.active_model_id === m.id"
+                    class="active-pill"
+                  >对话已激活</span>
+                  <span
+                    v-else-if="config!.active_image_gen_model_id === m.id"
+                    class="active-pill active-pill--image"
+                  >图像已激活</span>
                 </div>
                 <div class="model-card-meta">
                   {{ m.provider_id }} · {{ m.model_name }}
@@ -1116,5 +1227,111 @@ function onClose() {
 .model-card-menu:hover {
   background: var(--card-2);
   color: var(--text);
+}
+
+/* ---------- 模型类型选择 ---------- */
+.kind-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.kind-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+  text-align: left;
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.kind-card:hover {
+  border-color: var(--primary);
+  background: var(--card-2);
+}
+
+.kind-card.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.kind-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.kind-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kind-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.kind-desc {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kind-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* 模型卡片类型标签 */
+.kind-pill {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-full);
+  font-weight: 500;
+}
+
+.kind-pill--chat {
+  color: var(--primary);
+  background: rgba(74, 126, 255, 0.12);
+}
+
+.kind-pill--image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.12);
+}
+
+.active-pill--image {
+  background: #a855f7 !important;
 }
 </style>

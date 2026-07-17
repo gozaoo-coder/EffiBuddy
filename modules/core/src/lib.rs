@@ -15,7 +15,8 @@ pub mod skill_store;
 pub mod storage;
 
 pub use config::{
-    AgentConfig, AvailableModel, BackendKind, ProviderPreset, ThemeMode, builtin_presets,
+    AgentConfig, AvailableModel, BackendKind, ModelKind, ProviderPreset, ThemeMode,
+    builtin_presets,
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};

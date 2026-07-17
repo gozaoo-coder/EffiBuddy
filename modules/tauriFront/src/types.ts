@@ -7,11 +7,29 @@ export type Role = 'system' | 'user' | 'assistant'
 
 export type DeviceStatus = 'discovered' | 'paired' | 'offline' | 'pairing'
 
+// ModelKind: #[serde(rename_all = "snake_case")]
+export type ModelKind = 'chat' | 'image_gen' | 'video_gen'
+
+// AttachmentKind: #[serde(rename_all = "snake_case")]
+export type AttachmentKind = 'image' | 'file' | 'audio'
+
+export interface Attachment {
+  id: string
+  kind: AttachmentKind
+  /** 相对 attachments 目录的文件名（如 gen_xxx.png） */
+  path: string
+  name: string
+  mime_type: string
+  size: number
+}
+
 export interface Message {
   id: string
   content: string
   timestamp: number
   role: Role
+  /** 消息附件（图片/文件），旧消息无此字段时为空数组 */
+  attachments?: Attachment[]
 }
 
 export interface Device {
@@ -97,17 +115,8 @@ export interface PickedFile {
 }
 
 // =========================================================
-// 附件（输入区工具 Sheet 选中后附加到输入）
+// 附件（已上移到文件顶部与 Message 一起定义）
 // =========================================================
-
-export type AttachmentKind = 'image' | 'file'
-
-export interface Attachment {
-  kind: AttachmentKind
-  path: string
-  name: string
-  size: number
-}
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -122,6 +131,8 @@ export interface AgentConfig {
   theme: ThemeMode
   models: AvailableModel[]
   active_model_id: string | null
+  /** 当前激活的图像生成模型 id（独立于 active_model_id） */
+  active_image_gen_model_id?: string | null
 }
 
 export interface AvailableModel {
@@ -133,6 +144,12 @@ export interface AvailableModel {
   api_key: string
   preamble: string
   enable_tools: boolean
+  /** 模型能力类型：chat（对话）/ image_gen（图像生成）/ video_gen（视频生成，预留） */
+  kind?: ModelKind
+  /** 图像生成专用：默认尺寸（如 1024x1024），仅 kind=image_gen 时有效 */
+  image_size?: string | null
+  /** 图像生成专用：默认质量（如 standard/hd），仅 kind=image_gen 时有效 */
+  image_quality?: string | null
   created_at: number
 }
 
@@ -183,6 +200,13 @@ export interface AgentToolResultPayload {
   call_id: string
   output: string
   is_error: boolean
+}
+
+// 图片附件生成 payload（agent-attachment 事件）
+// image_gen 工具成功生成图片时实时 emit，前端收到后立即渲染图片
+export interface AgentAttachmentPayload {
+  conversation_id: string
+  attachment: Attachment
 }
 
 // 单次工具调用记录（前端聚合 ToolCallStart + ToolResult 后的结构）

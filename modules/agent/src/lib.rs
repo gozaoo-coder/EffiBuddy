@@ -20,4 +20,6 @@ pub use agent::{AgentStreamItem, ChatAgent};
 pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::RigAgent;
-pub use tools::{GetTimeTool, SearchHistoryTool, SearchMemoryTool};
+pub use tools::{
+    GetTimeTool, ImageGenConfig, ImageGenTool, SearchHistoryTool, SearchMemoryTool,
+};

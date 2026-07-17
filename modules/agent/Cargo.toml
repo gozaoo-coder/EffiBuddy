@@ -20,9 +20,8 @@ tracing.workspace = true
 futures = "0.3"
 async-stream = "0.3"
 chrono.workspace = true
-# WebFetchTool 与 EmbeddingProvider 使用 reqwest；rustls-tls 避免依赖 OpenSSL，json 供 .json()/.bearer_auth()
+# WebFetchTool / ImageGenTool 使用 reqwest；rustls-tls 避免依赖 OpenSSL，json 供 .json()/.bearer_auth()
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-
-[dev-dependencies]
-# 仅测试用：embedding 缓存测试生成临时目录名
-uuid = { workspace = true }
+# ImageGenTool 生成图片文件名前缀与 base64 解码
+uuid.workspace = true
+base64 = "0.22"

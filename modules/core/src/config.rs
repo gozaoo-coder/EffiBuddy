@@ -26,6 +26,29 @@ impl Default for BackendKind {
     }
 }
 
+/// 模型能力类型：区分 LLM 对话 / 图像生成 / 视频生成
+///
+/// 切换激活模型时根据 kind 决定走哪个后端：
+/// - Chat：走 RigAgent（Chat Completions API）
+/// - ImageGen：走图像生成工具（OpenAI 兼容 /images/generations）
+/// - VideoGen：预留，暂未实现
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    /// LLM 对话模型（默认）
+    Chat,
+    /// 图像生成模型（如 DALL-E 3、SD、Flux）
+    ImageGen,
+    /// 视频生成模型（预留，暂未实现）
+    VideoGen,
+}
+
+impl Default for ModelKind {
+    fn default() -> Self {
+        Self::Chat
+    }
+}
+
 /// 主题模式：系统 / 亮色 / 暗色
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,8 +88,13 @@ pub struct AgentConfig {
 
     // ===== 可使用模型列表（用户保存的预设） =====
     pub models: Vec<AvailableModel>,
-    /// 当前激活的模型 id（指向 models 中的某一项）；None 表示使用内联配置
+    /// 当前激活的对话模型 id（指向 models 中 kind=Chat 的一项）；None 表示使用内联配置
     pub active_model_id: Option<String>,
+    /// 当前激活的图像生成模型 id（指向 models 中 kind=ImageGen 的一项）；
+    /// None 表示未配置图像生成能力，image_gen 工具调用会返回错误提示。
+    /// 与 active_model_id 独立：用户可同时激活一个对话模型和一个图像生成模型。
+    #[serde(default)]
+    pub active_image_gen_model_id: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -82,6 +110,7 @@ impl Default for AgentConfig {
             theme: ThemeMode::System,
             models: Vec::new(),
             active_model_id: None,
+            active_image_gen_model_id: None,
         }
     }
 }
@@ -108,6 +137,16 @@ pub struct AvailableModel {
     pub api_key: String,
     pub preamble: String,
     pub enable_tools: bool,
+    /// 模型能力类型：Chat（对话）/ ImageGen（图像生成）/ VideoGen（视频生成，预留）
+    /// 旧配置无此字段时默认为 Chat（向后兼容）
+    #[serde(default)]
+    pub kind: ModelKind,
+    /// 图像生成专用：默认尺寸（如 "1024x1024"），仅 kind=ImageGen 时有效
+    #[serde(default)]
+    pub image_size: Option<String>,
+    /// 图像生成专用：默认质量（如 "standard"/"hd"），仅 kind=ImageGen 时有效
+    #[serde(default)]
+    pub image_quality: Option<String>,
     pub created_at: u64,
 }
 
@@ -271,9 +310,13 @@ mod tests {
                 api_key: "sk-x".into(),
                 preamble: "p".into(),
                 enable_tools: true,
+                kind: ModelKind::Chat,
+                image_size: None,
+                image_quality: None,
                 created_at: 1000,
             }],
             active_model_id: Some("m1".into()),
+            active_image_gen_model_id: None,
         };
         let s = serde_json::to_string(&c).unwrap();
         let back: AgentConfig = serde_json::from_str(&s).unwrap();

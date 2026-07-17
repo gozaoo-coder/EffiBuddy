@@ -11,11 +11,13 @@ import ToolCallGroup from './ToolCallGroup.vue'
 import type {
   Message,
   Conversation,
+  Attachment,
   StreamTokenPayload,
   StreamErrorPayload,
   AgentReasoningPayload,
   AgentToolCallPayload,
   AgentToolResultPayload,
+  AgentAttachmentPayload,
   ToolCallRecord,
   PickedFile,
 } from '../types'
@@ -61,6 +63,11 @@ interface BubbleMeta {
   toolCalls: ToolCallRecord[]
 }
 const bubbleMeta = reactive<Record<string, BubbleMeta>>({})
+
+// 附件图片 base64 data URL 缓存：attachment.id -> data URL
+// read_attachment 命令把图片文件编码成 data URL 返回，避免 Tauri 2 资源协议配置。
+// 历史消息和实时生成共用此缓存。
+const attachmentUrls = reactive<Record<string, string>>({})
 
 // 获取某条消息的元数据（若不存在返回 null）
 function getMeta(id: string): BubbleMeta | null {
@@ -162,8 +169,9 @@ async function loadConversation() {
   const id = activeId.value
   if (!id) {
     messages.value = []
-    // 清空 meta
+    // 清空 meta 与附件缓存
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
     return
   }
@@ -172,14 +180,19 @@ async function loadConversation() {
     messages.value = conv?.messages ?? []
     // 历史会话不携带 reasoning/tools 元数据，清空
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    // 切换会话时清空旧附件缓存，避免上一会话的 data URL 残留占用内存
+    Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     // 加载会话级工作区
     workingDir.value = conv?.working_dir ?? null
+    // 历史消息可能携带 attachments（如历史 image_gen 结果），回填 base64
+    await loadConversationAttachments()
     await nextTick()
     scrollBottom()
   } catch (e) {
     console.warn('get_conversation failed', e)
     messages.value = []
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
   }
 }
@@ -317,6 +330,74 @@ async function onToolResult(result: AgentToolResultPayload) {
   }
   await nextTick()
   scrollBottom()
+}
+
+// ---------- 附件图片渲染 ----------
+// 调用 read_attachment 命令把图片文件读成 base64 data URL，缓存到 attachmentUrls。
+// 一次加载后多次复用（同附件 id 在流式与历史加载间不重复请求）。
+async function loadAttachmentDataUrl(att: Attachment) {
+  if (attachmentUrls[att.id]) return
+  try {
+    const dataUrl = await invoke<string>('read_attachment', { path: att.path })
+    attachmentUrls[att.id] = dataUrl
+  } catch (e) {
+    console.warn('read_attachment failed', att.path, e)
+  }
+}
+
+// 批量加载一组消息的所有附件（用于 loadConversation 历史回填）
+async function loadConversationAttachments() {
+  const tasks: Promise<void>[] = []
+  for (const m of messages.value) {
+    if (m.attachments && m.attachments.length > 0) {
+      for (const att of m.attachments) {
+        if (!attachmentUrls[att.id]) tasks.push(loadAttachmentDataUrl(att))
+      }
+    }
+  }
+  if (tasks.length > 0) await Promise.all(tasks)
+}
+
+// ---------- 图片附件事件 ----------
+// image_gen 工具成功生成图片时，后端 emit "agent-attachment" 实时推送 Attachment。
+// 前端立即把它挂到当前流式气泡上并加载 base64，用户可在文本生成完成前就看到图片。
+async function onAttachment(payload: AgentAttachmentPayload) {
+  if (!streamingBubbleId.value) return
+  const target = messages.value.find((m) => m.id === streamingBubbleId.value)
+  if (!target) return
+  if (!target.attachments) target.attachments = []
+  // 防止重复推送（同 id 二次到达）
+  if (!target.attachments.some((a) => a.id === payload.attachment.id)) {
+    target.attachments.push(payload.attachment)
+  }
+  await loadAttachmentDataUrl(payload.attachment)
+  await nextTick()
+  scrollBottom()
+}
+
+// ---------- 图片预览 ----------
+// 点击消息内图片打开全屏预览（Teleport 到 body），再次点击遮罩或按 Esc 关闭
+const previewState = reactive({
+  visible: false,
+  url: '',
+  name: '',
+})
+
+function openImagePreview(url: string, name: string) {
+  if (!url) return
+  previewState.url = url
+  previewState.name = name
+  previewState.visible = true
+}
+
+function closeImagePreview() {
+  previewState.visible = false
+  previewState.url = ''
+  previewState.name = ''
+}
+
+function onPreviewKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closeImagePreview()
 }
 
 async function finalizeStream(full: string) {
@@ -492,6 +573,14 @@ onMounted(async () => {
   )
 
   unlistens.push(
+    await listen<AgentAttachmentPayload>('agent-attachment', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onAttachment(p)
+    }),
+  )
+
+  unlistens.push(
     await listen<StreamTokenPayload>('agent-done', async (e) => {
       const p = e.payload
       if (activeId.value && p.conversation_id !== activeId.value) return
@@ -515,6 +604,9 @@ onMounted(async () => {
       sending.value = false
     }),
   )
+
+  // 图片预览 Esc 关闭
+  window.addEventListener('keydown', onPreviewKeydown)
 })
 
 onUnmounted(() => {
@@ -528,6 +620,7 @@ onUnmounted(() => {
     cancelAnimationFrame(scrollRafId)
     scrollRafId = null
   }
+  window.removeEventListener('keydown', onPreviewKeydown)
 })
 </script>
 
@@ -595,6 +688,32 @@ onUnmounted(() => {
                 theme: { light: 'vitesse-light', dark: 'vitesse-dark' },
               }"
             />
+            <!-- 附件图片区域：image_gen 工具生成的图片在此渲染 -->
+            <div
+              v-if="m.attachments && m.attachments.length > 0"
+              class="msg-attachments"
+            >
+              <div
+                v-for="att in m.attachments"
+                :key="att.id"
+                class="msg-attachment"
+                :class="`att-${att.kind}`"
+              >
+                <img
+                  v-if="attachmentUrls[att.id]"
+                  :src="attachmentUrls[att.id]"
+                  :alt="att.name"
+                  class="msg-attachment-img"
+                  loading="lazy"
+                  @click="openImagePreview(attachmentUrls[att.id], att.name)"
+                />
+                <div v-else class="msg-attachment-loading">
+                  <Icon name="image" :size="20" />
+                  <span>加载中…</span>
+                </div>
+                <div class="msg-attachment-meta">{{ att.name }}</div>
+              </div>
+            </div>
           </template>
           <template v-else>{{ m.content }}</template>
         </div>
@@ -740,6 +859,33 @@ onUnmounted(() => {
         </p>
       </div>
     </BindSheet>
+
+    <!-- 图片全屏预览：Teleport 到 body，避免被 scoped 样式和层级影响 -->
+    <Teleport to="body">
+      <Transition name="img-preview-fade">
+        <div
+          v-if="previewState.visible"
+          class="img-preview-overlay"
+          @click="closeImagePreview"
+        >
+          <img
+            :src="previewState.url"
+            :alt="previewState.name"
+            class="img-preview-img"
+            @click.stop
+          />
+          <div class="img-preview-name">{{ previewState.name }}</div>
+          <button
+            type="button"
+            class="img-preview-close"
+            title="关闭（Esc）"
+            @click.stop="closeImagePreview"
+          >
+            <Icon name="close" :size="22" />
+          </button>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -973,5 +1119,128 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+/* 消息内附件图片区域 */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.msg-attachment {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-md, 12px);
+  overflow: hidden;
+  background: var(--card-2, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border);
+  max-width: 320px;
+}
+
+.msg-attachment-img {
+  display: block;
+  max-width: 320px;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  cursor: zoom-in;
+  transition: transform var(--duration-fast, 0.15s) var(--ease-standard, ease);
+}
+
+.msg-attachment-img:hover {
+  transform: scale(1.02);
+}
+
+.msg-attachment-loading {
+  width: 200px;
+  height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.msg-attachment-meta {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--card-2, rgba(0, 0, 0, 0.02));
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+</style>
+
+<!-- 非 scoped：图片预览遮罩通过 Teleport 渲染到 body，scoped 样式不会应用 -->
+<style>
+.img-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  cursor: zoom-out;
+}
+
+.img-preview-img {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.img-preview-name {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  font-weight: 500;
+  max-width: 80vw;
+  text-align: center;
+  word-break: break-all;
+}
+
+.img-preview-close {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.img-preview-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.img-preview-fade-enter-active,
+.img-preview-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.img-preview-fade-enter-from,
+.img-preview-fade-leave-to {
+  opacity: 0;
 }
 </style>

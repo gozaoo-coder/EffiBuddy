@@ -45,8 +45,9 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent};
 use crate::tools::{
-    DeletePinnedMemoryTool, GetTimeTool, ListFilesTool, ListPinnedMemoriesTool, PinMemoryTool,
-    ReadFileTool, SearchHistoryTool, SearchMemoryTool, ShellTool, WebFetchTool,
+    DeletePinnedMemoryTool, GetTimeTool, ImageGenConfig, ImageGenTool, ListFilesTool,
+    ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchHistoryTool, SearchMemoryTool,
+    ShellTool, WebFetchTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -79,6 +80,11 @@ pub struct RigAgent {
     /// read_file / list_files / shell 据此解析相对路径与设置子进程 cwd。
     /// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
     working_dir: Arc<RwLock<Option<PathBuf>>>,
+    /// 图像生成模型配置句柄：set_active_model 切到 kind=ImageGen 的模型时更新。
+    /// build_agent 注入到 ImageGenTool；为 None 时 image_gen 工具返回错误。
+    image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
+    /// 附件保存目录（绝对路径），ImageGenTool 把生成图片落盘到此目录。
+    attachments_dir: PathBuf,
 }
 
 impl RigAgent {
@@ -87,6 +93,8 @@ impl RigAgent {
     /// `memory` 与 `current_conversation_id` 用于 RAG 记忆增强；传 None / 默认句柄
     /// 则关闭记忆增强能力（行为同旧版）。`pinned_memory` 用于永久记忆注入。
     /// `working_dir` 共享句柄用于工作区路径注入，传新的空句柄则默认不限制。
+    /// `image_gen_config` 共享句柄供 ImageGenTool 读取，None 则 image_gen 工具不可用。
+    /// `attachments_dir` 为图片落盘目录（绝对路径）。
     pub fn from_env(
         model_name: impl Into<String>,
         preamble: impl Into<String>,
@@ -95,6 +103,8 @@ impl RigAgent {
         pinned_memory: Option<Arc<PinnedMemoryStore>>,
         current_conversation_id: Arc<RwLock<Option<String>>>,
         working_dir: Arc<RwLock<Option<PathBuf>>>,
+        image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
+        attachments_dir: PathBuf,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -108,6 +118,8 @@ impl RigAgent {
             pinned_memory,
             current_conversation_id,
             working_dir,
+            image_gen_config,
+            attachments_dir,
         })
     }
 
@@ -119,6 +131,9 @@ impl RigAgent {
     /// - `memory` 注入后启用 RAG 记忆增强（自动上文 + search_memory 工具）
     /// - `pinned_memory` 注入后启用永久记忆（每轮注入 `[永久记忆]` 段 + pin_memory 工具）
     /// - `working_dir` 共享句柄用于工作区路径注入
+    /// - `image_gen_config` 共享句柄供 ImageGenTool 读取（用户切换到 image_gen 模型时由
+    ///   Tauri 命令层更新），None 时 image_gen 工具调用返回错误提示
+    /// - `attachments_dir` 为图片落盘目录（绝对路径），ImageGenTool 据此保存生成结果
     pub fn from_key(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
@@ -129,6 +144,8 @@ impl RigAgent {
         pinned_memory: Option<Arc<PinnedMemoryStore>>,
         current_conversation_id: Arc<RwLock<Option<String>>>,
         working_dir: Arc<RwLock<Option<PathBuf>>>,
+        image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
+        attachments_dir: PathBuf,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -149,7 +166,15 @@ impl RigAgent {
             pinned_memory,
             current_conversation_id,
             working_dir,
+            image_gen_config,
+            attachments_dir,
         })
+    }
+
+    /// 共享 image_gen_config 句柄，供 Tauri 命令层在 set_active_model 时更新
+    #[inline]
+    pub fn image_gen_config_handle(&self) -> Arc<RwLock<Option<ImageGenConfig>>> {
+        Arc::clone(&self.image_gen_config)
     }
 
     /// 共享 working_dir 句柄，供 Tauri 命令层在每次 send_message 前更新。
@@ -202,6 +227,13 @@ impl RigAgent {
                 None => ShellTool::new(),
             };
             let web_fetch = WebFetchTool::new();
+            // 图像生成工具：共享 image_gen_config 句柄，调用时读取最新配置。
+            // 用户切换到 kind=ImageGen 的模型时由 Tauri 命令层更新 config，
+            // LLM 可主动调用此工具为用户生成图片。
+            let image_gen = ImageGenTool::new(
+                Arc::clone(&self.image_gen_config),
+                self.attachments_dir.clone(),
+            );
 
             let mut b = builder
                 .tool(search)
@@ -209,7 +241,8 @@ impl RigAgent {
                 .tool(read_file)
                 .tool(list_files)
                 .tool(shell)
-                .tool(web_fetch);
+                .tool(web_fetch)
+                .tool(image_gen);
 
             // 跨会话记忆检索工具：仅在 MemoryIndex 可用时注册
             if let Some(memory) = &self.memory {

@@ -14,12 +14,16 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use effisuite_agent::{AgentStreamItem, ChatAgent, MockAgent, OpenAIEmbeddingProvider, RigAgent, DEFAULT_EMBEDDING_MODEL};
+use effisuite_agent::{
+    AgentStreamItem, ChatAgent, ImageGenConfig, ImageGenTool, MockAgent, OpenAIEmbeddingProvider,
+    RigAgent, DEFAULT_EMBEDDING_MODEL,
+};
 use effisuite_core::{
-    AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationMeta,
-    ConversationStore, Device, EventBus, MemoryHit, MemoryIndex, MemoryStats, Message,
-    PinnedMemory, PinnedMemorySource, PinnedMemoryStore, ProviderPreset, Role, ScheduledTask,
-    ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore, ThemeMode, builtin_presets,
+    AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, Conversation,
+    ConversationMeta, ConversationStore, Device, EventBus, MemoryHit, MemoryIndex, MemoryStats,
+    Message, ModelKind, PinnedMemory, PinnedMemorySource, PinnedMemoryStore, ProviderPreset, Role,
+    ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore, ThemeMode,
+    builtin_presets,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
@@ -53,6 +57,11 @@ pub struct AppState {
     /// 当前工作区路径，由 send_message 命令更新；agent 据此解析相对路径与设置 shell cwd。
     /// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
     pub working_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
+    /// 图像生成模型配置句柄：set_image_gen_model 时更新，build_agent 注入到 ImageGenTool。
+    /// None 表示未配置图像生成能力，image_gen 工具调用会返回错误提示。
+    pub image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
+    /// 附件存储目录（绝对路径），ImageGenTool 据此落盘生成图片。
+    pub attachments_dir: std::path::PathBuf,
     /// cron 调度器 task 句柄（setup 中 spawn 后写入；shutdown 时可 abort）。
     /// 用 `Mutex` 是因为句柄在 setup 阶段才产生，需运行时回填到已 manage 的 state。
     pub scheduler_handle: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -105,6 +114,13 @@ fn pinned_memories_path() -> std::path::PathBuf {
     appdata_root().join("pinned_memories.json")
 }
 
+/// 附件存储目录：`<appdata>/attachments`
+///
+/// ImageGenTool 把生成图片落盘到此目录；前端通过 read_attachment 命令读取。
+fn attachments_dir() -> std::path::PathBuf {
+    appdata_root().join("attachments")
+}
+
 /// 加载配置；不存在时返回默认值
 fn load_config_or_default() -> AgentConfig {
     let path = config_path();
@@ -130,6 +146,8 @@ fn save_config(config: &AgentConfig) -> std::result::Result<(), String> {
 /// `memory` 与 `current_conversation_id` 注入到 RigAgent 以启用 RAG 记忆增强；
 /// `pinned_memory` 注入以启用永久记忆能力（每轮注入 `[永久记忆]` 段 + pin_memory 工具）。
 /// `working_dir` 注入以启用工作区路径解析（read_file/list_files/shell 据此锚定相对路径）。
+/// `image_gen_config` 注入以启用图像生成工具（LLM 可主动调用 image_gen 为用户作画）。
+/// `attachments_dir` 为图片落盘目录。
 /// MockAgent 后端忽略这些参数。
 fn build_agent(
     config: &AgentConfig,
@@ -137,6 +155,8 @@ fn build_agent(
     pinned_memory: Arc<PinnedMemoryStore>,
     current_conversation_id: Arc<RwLock<Option<String>>>,
     working_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
+    image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
+    attachments_dir: std::path::PathBuf,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -150,6 +170,8 @@ fn build_agent(
                 Some(pinned_memory),
                 current_conversation_id,
                 working_dir,
+                image_gen_config,
+                attachments_dir,
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -290,13 +312,22 @@ async fn set_config(
     // 根据新配置刷新 embedding provider（启用/禁用向量检索路）
     apply_embedding_provider(&config, &state.memory).await;
 
-    // 构造新 agent：注入 memory / pinned_memory / current_conversation_id
+    // 同步图像生成配置：若 active_image_gen_model_id 指向有效模型则更新句柄
+    if let Some(cfg) = resolve_image_gen_config(&config) {
+        *state.image_gen_config.write().await = Some(cfg);
+    } else {
+        *state.image_gen_config.write().await = None;
+    }
+
+    // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config
     let new_agent = build_agent(
         &config,
         Arc::clone(&state.memory),
         Arc::clone(&state.pinned_memory),
         Arc::clone(&state.current_conversation_id),
         Arc::clone(&state.working_dir),
+        Arc::clone(&state.image_gen_config),
+        state.attachments_dir.clone(),
     );
 
     // 替换 state 中的 agent 和 config
@@ -323,6 +354,138 @@ async fn set_config(
 #[tauri::command]
 fn list_provider_presets() -> Vec<ProviderPreset> {
     builtin_presets()
+}
+
+/// 从 AgentConfig 解析当前激活的图像生成配置。
+///
+/// 根据 `active_image_gen_model_id` 在 models 列表中查找 kind=ImageGen 的模型，
+/// 构造 ImageGenConfig 快照。未配置时返回 None。
+fn resolve_image_gen_config(config: &AgentConfig) -> Option<ImageGenConfig> {
+    let id = config.active_image_gen_model_id.as_ref()?;
+    let m = config.models.iter().find(|m| m.id == *id)?;
+    if m.kind != ModelKind::ImageGen {
+        return None;
+    }
+    Some(ImageGenConfig {
+        api_key: m.api_key.clone(),
+        base_url: m.base_url.clone(),
+        model: m.model_name.clone(),
+        default_size: m.image_size.clone(),
+        default_quality: m.image_quality.clone(),
+    })
+}
+
+/// 激活指定 id 的图像生成模型：更新 image_gen_config 句柄，不重建对话 agent。
+///
+/// 与 `set_active_model`（切换对话模型）独立：用户可同时激活一个对话模型和一个图像生成模型。
+/// 激活后，LLM 在对话中调用 image_gen 工具时会使用此配置。
+#[tauri::command]
+async fn set_image_gen_model(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<String, String> {
+    let mut config = state.config.write().await.clone();
+    let model = config
+        .models
+        .iter()
+        .find(|m| m.id == id)
+        .cloned()
+        .ok_or_else(|| format!("模型 {} 不存在", id))?;
+    if model.kind != ModelKind::ImageGen {
+        return Err(format!("模型 {} 不是图像生成模型（kind != image_gen）", id));
+    }
+    let cfg = ImageGenConfig {
+        api_key: model.api_key.clone(),
+        base_url: model.base_url.clone(),
+        model: model.model_name.clone(),
+        default_size: model.image_size.clone(),
+        default_quality: model.image_quality.clone(),
+    };
+    config.active_image_gen_model_id = Some(id.clone());
+    save_config(&config)?;
+    *state.image_gen_config.write().await = Some(cfg);
+    *state.config.write().await = config;
+    Ok(id)
+}
+
+/// 直接调用图像生成 API 生成图片（绕过 LLM，供前端"立即生成"按钮使用）。
+///
+/// 返回附件信息（id/path/name），前端通过 read_attachment 读取图片二进制。
+#[tauri::command]
+async fn generate_image(
+    state: tauri::State<'_, AppState>,
+    prompt: String,
+    size: Option<String>,
+    quality: Option<String>,
+) -> Result<Attachment, String> {
+    // 确认图像生成模型已配置
+    let _cfg = state
+        .image_gen_config
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "未配置图像生成模型，请先在设置中激活一个 kind=image_gen 的模型".to_string())?;
+
+    let tool = ImageGenTool::new(
+        Arc::clone(&state.image_gen_config),
+        state.attachments_dir.clone(),
+    );
+    let output = tool.generate(prompt, size, quality).await.map_err(|e| e.to_string())?;
+
+    // 读取文件大小
+    let filepath = state.attachments_dir.join(&output.path);
+    let file_size = std::fs::metadata(&filepath).map(|m| m.len()).unwrap_or(0);
+
+    Ok(Attachment {
+        id: output.id,
+        kind: AttachmentKind::Image,
+        path: output.path,
+        name: output.name,
+        mime_type: "image/png".to_string(),
+        size: file_size,
+    })
+}
+
+/// 读取附件文件并返回 base64 data URL，供前端 `<img src>` 直接渲染。
+///
+/// 采用 base64 data URL 而非 asset 协议，避免 Tauri 2 资源协议配置复杂性，
+/// 同时保证跨平台（Windows/macOS/Linux）一致行为。
+/// 仅支持图片类型（image/png, image/jpeg, image/gif, image/webp）。
+#[tauri::command]
+async fn read_attachment(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let filepath = state.attachments_dir.join(&path);
+    let bytes = tokio::fs::read(&filepath)
+        .await
+        .map_err(|e| format!("读取附件失败: {e}"))?;
+    let mime = guess_mime(&path);
+    let b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &bytes,
+    );
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+/// 根据文件扩展名猜测 MIME 类型
+fn guess_mime(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".bmp") {
+        "image/bmp"
+    } else if lower.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 /// 保存当前 draft 配置为一个可使用模型（model.id 由前端生成）
@@ -361,8 +524,13 @@ async fn delete_model(
     Ok(())
 }
 
-/// 激活指定 id 的可使用模型：把该模型配置写入 AgentConfig 的运行时字段，
-/// 并重建 agent。返回新的激活模型 id。
+/// 激活指定 id 的可使用模型：根据模型 kind 走不同后端。
+///
+/// - kind=Chat：把模型配置写入 AgentConfig 运行时字段，重建对话 agent。
+///   用户后续对话走此模型；同时它是"默认对话模型"。
+/// - kind=ImageGen：更新 image_gen_config 句柄，不重建对话 agent。
+///   LLM 调用 image_gen 工具时使用此配置。
+/// - kind=VideoGen：暂未实现，返回错误。
 #[tauri::command]
 async fn set_active_model(
     state: tauri::State<'_, AppState>,
@@ -377,36 +545,61 @@ async fn set_active_model(
         .cloned()
         .ok_or_else(|| format!("模型 {} 不存在", id))?;
 
-    // 把模型配置注入运行时字段
-    config.api_key = model.api_key.clone();
-    config.base_url = model.base_url.clone();
-    config.model_name = model.model_name.clone();
-    config.preamble = model.preamble.clone();
-    config.provider_id = model.provider_id.clone();
-    config.enable_tools = model.enable_tools;
-    config.backend = BackendKind::Openai;
-    config.active_model_id = Some(id.clone());
+    match model.kind {
+        ModelKind::ImageGen => {
+            // 图像生成模型：只更新 image_gen_config，不重建对话 agent
+            let cfg = ImageGenConfig {
+                api_key: model.api_key.clone(),
+                base_url: model.base_url.clone(),
+                model: model.model_name.clone(),
+                default_size: model.image_size.clone(),
+                default_quality: model.image_quality.clone(),
+            };
+            config.active_image_gen_model_id = Some(id.clone());
+            save_config(&config)?;
+            *state.image_gen_config.write().await = Some(cfg);
+            *state.config.write().await = config;
+            let _ = app_handle.emit("agent-backend-changed", ());
+            Ok(id)
+        }
+        ModelKind::VideoGen => {
+            Err("视频生成模型暂未实现".to_string())
+        }
+        ModelKind::Chat => {
+            // 对话模型：写入运行时字段并重建 agent
+            config.api_key = model.api_key.clone();
+            config.base_url = model.base_url.clone();
+            config.model_name = model.model_name.clone();
+            config.preamble = model.preamble.clone();
+            config.provider_id = model.provider_id.clone();
+            config.enable_tools = model.enable_tools;
+            config.backend = BackendKind::Openai;
+            config.active_model_id = Some(id.clone());
 
-    save_config(&config)?;
+            save_config(&config)?;
 
-    // 切换模型时刷新 embedding provider（base_url/api_key 可能变化）
-    apply_embedding_provider(&config, &state.memory).await;
+            // 切换模型时刷新 embedding provider（base_url/api_key 可能变化）
+            apply_embedding_provider(&config, &state.memory).await;
 
-    let new_agent = build_agent(
-        &config,
-        Arc::clone(&state.memory),
-        Arc::clone(&state.pinned_memory),
-        Arc::clone(&state.current_conversation_id),
-        Arc::clone(&state.working_dir),
-    );
-    {
-        let mut agent_lock = state.agent.write().await;
-        *agent_lock = new_agent;
+            let new_agent = build_agent(
+                &config,
+                Arc::clone(&state.memory),
+                Arc::clone(&state.pinned_memory),
+                Arc::clone(&state.current_conversation_id),
+                Arc::clone(&state.working_dir),
+                Arc::clone(&state.image_gen_config),
+                state.attachments_dir.clone(),
+            );
+            {
+                let mut agent_lock = state.agent.write().await;
+                *agent_lock = new_agent;
+            }
+            *state.config.write().await = config;
+
+            let _ = app_handle.emit("agent-backend-changed", ());
+            Ok(id)
+        }
     }
-    *state.config.write().await = config;
-
-    let _ = app_handle.emit("agent-backend-changed", ());
-    Ok(id)
 }
 
 /// 设置主题模式（持久化，不重建 agent）
@@ -757,6 +950,11 @@ async fn send_message_stream(
     tauri::async_runtime::spawn(async move {
         let mut stream = agent.chat_stream(&history);
         let mut full = String::with_capacity(256);
+        // 跟踪 call_id → tool_name 映射，用于在 ToolResult 时判断是否为 image_gen
+        let mut tool_call_names: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        // 收集 image_gen 工具生成的图片附件，流结束后注入到助手消息
+        let mut image_attachments: Vec<Attachment> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
             match chunk {
@@ -785,6 +983,8 @@ async fn send_message_stream(
                     );
                 }
                 Ok(AgentStreamItem::ToolCallStart { call_id, tool_name, arguments }) => {
+                    // 记录 call_id → tool_name，供 ToolResult 时判断是否为 image_gen
+                    tool_call_names.insert(call_id.clone(), tool_name.clone());
                     let args_str = serde_json::to_string(&arguments).unwrap_or_else(|_| "null".to_string());
                     let _ = handle.emit(
                         "agent-tool-call",
@@ -797,6 +997,22 @@ async fn send_message_stream(
                     );
                 }
                 Ok(AgentStreamItem::ToolResult { call_id, output, is_error }) => {
+                    // 若为 image_gen 工具结果，解析 JSON 提取图片信息并收集为附件
+                    if let Some(name) = tool_call_names.get(&call_id) {
+                        if name == "image_gen" && !is_error {
+                            if let Some(att) = parse_image_gen_output(&output) {
+                                // 实时通知前端有新图片生成，可立即渲染
+                                let _ = handle.emit(
+                                    "agent-attachment",
+                                    &AgentAttachmentPayload {
+                                        conversation_id: &conv_id,
+                                        attachment: &att,
+                                    },
+                                );
+                                image_attachments.push(att);
+                            }
+                        }
+                    }
                     let _ = handle.emit(
                         "agent-tool-result",
                         &AgentToolResultPayload {
@@ -821,13 +1037,17 @@ async fn send_message_stream(
             }
         }
 
-        // 3. 流结束，持久化完整回复
-        let assistant_msg = Message::new(
+        // 3. 流结束，持久化完整回复（含图片附件）
+        let mut assistant_msg = Message::new(
             uuid::Uuid::new_v4().to_string(),
             Role::Assistant,
             full.clone(),
             now_ms(),
         );
+        // 把 image_gen 工具生成的图片注入到消息附件，持久化后前端可历史回看
+        if !image_attachments.is_empty() {
+            assistant_msg.attachments = image_attachments.clone();
+        }
         let assistant_msg_for_memory = assistant_msg.clone();
         if let Err(e) = store
             .append_message(&conv_id, assistant_msg, now_ms())
@@ -890,6 +1110,37 @@ struct AgentToolResultPayload<'a> {
     call_id: &'a str,
     output: &'a str,
     is_error: bool,
+}
+
+/// 图片附件生成 payload（agent-attachment 事件）
+///
+/// 当 image_gen 工具成功生成图片时实时 emit，前端收到后立即渲染图片，
+/// 无需等待流结束。
+#[derive(Debug, serde::Serialize)]
+struct AgentAttachmentPayload<'a> {
+    conversation_id: &'a str,
+    attachment: &'a Attachment,
+}
+
+/// 解析 image_gen 工具输出为 Attachment。
+///
+/// ImageGenTool 返回的 ImageGenOutput 序列化为 JSON：
+/// `{"id":"...","path":"gen_xxx.png","name":"生成图片_xxx.png","elapsed_ms":1234}`
+/// rig 把它作为 ToolResultContent::Text 传回，extract_tool_output 提取为字符串。
+/// 此函数尝试反序列化并构造 Attachment；失败时返回 None（静默跳过）。
+fn parse_image_gen_output(output: &str) -> Option<Attachment> {
+    let v: serde_json::Value = serde_json::from_str(output).ok()?;
+    let id = v.get("id")?.as_str()?.to_string();
+    let path = v.get("path")?.as_str()?.to_string();
+    let name = v.get("name")?.as_str()?.to_string();
+    Some(Attachment {
+        id,
+        kind: AttachmentKind::Image,
+        path,
+        name,
+        mime_type: "image/png".to_string(),
+        size: 0,
+    })
 }
 
 // =========================================================
@@ -1262,6 +1513,12 @@ pub fn run() {
     // 工作区句柄：send_message 时根据会话级/技能级 working_dir 更新
     let working_dir: Arc<RwLock<Option<std::path::PathBuf>>> = Arc::new(RwLock::new(None));
 
+    // 图像生成配置句柄：从 config 解析 active_image_gen_model_id 对应的配置
+    let image_gen_config: Arc<RwLock<Option<ImageGenConfig>>> =
+        Arc::new(RwLock::new(resolve_image_gen_config(&config)));
+    // 附件目录：ImageGenTool 落盘生成图片到此目录
+    let attachments_root = attachments_dir();
+
     // 初始化永久记忆存储（用户主动要求"记住"的内容）
     let pinned_memory: Arc<PinnedMemoryStore> = match PinnedMemoryStore::new(pinned_memories_path()) {
         Ok(s) => Arc::new(s),
@@ -1274,13 +1531,15 @@ pub fn run() {
         }
     };
 
-    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir
+    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir / image_gen_config
     let agent: Arc<dyn ChatAgent> = build_agent(
         &config,
         Arc::clone(&memory),
         Arc::clone(&pinned_memory),
         Arc::clone(&current_conversation_id),
         Arc::clone(&working_dir),
+        Arc::clone(&image_gen_config),
+        attachments_root.clone(),
     );
 
     // 初始化存储
@@ -1331,6 +1590,8 @@ pub fn run() {
         pinned_memory: Arc::clone(&pinned_memory),
         current_conversation_id: Arc::clone(&current_conversation_id),
         working_dir: Arc::clone(&working_dir),
+        image_gen_config: Arc::clone(&image_gen_config),
+        attachments_dir: attachments_root,
         scheduler_handle: std::sync::Mutex::new(None),
     };
 
@@ -1388,6 +1649,9 @@ pub fn run() {
             save_model,
             delete_model,
             set_active_model,
+            set_image_gen_model,
+            generate_image,
+            read_attachment,
             // theme
             set_theme,
             // conversations
