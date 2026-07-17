@@ -47,6 +47,10 @@ const input = ref('')
 const sending = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充的气泡 id
+// 工具结果到达后置位：下一个文本/推理 token 应新建气泡，实现"每段答复独立气泡"
+// 规则：文本 + 工具调用归同一气泡；工具结果后下一段文本/推理新建气泡
+// 连续多个工具无中间文本时，工具调用仍追加到当前气泡（视觉连贯）
+const needNewBubbleAfterTool = ref(false)
 
 // 自动滚动控制：markstream-vue 的 smooth-streaming 内部异步渲染，
 // nextTick 后 DOM 可能尚未增长，scrollHeight 是旧值导致 scrollBottom 失效。
@@ -249,6 +253,11 @@ async function addMessage(msg: Message) {
 }
 
 async function appendStreamToken(token: string) {
+  // 工具结果后下一段文本应新建气泡（实现"每段答复独立气泡"）
+  if (needNewBubbleAfterTool.value) {
+    streamingBubbleId.value = null
+    needNewBubbleAfterTool.value = false
+  }
   if (!streamingBubbleId.value) {
     streamingBubbleId.value = newId()
     await addMessage({
@@ -274,6 +283,11 @@ async function appendStreamToken(token: string) {
 
 // ---------- 推理事件 ----------
 async function onReasoning(content: string) {
+  // 工具结果后新一轮推理也应新建气泡（新一轮思考 = 新一段答复）
+  if (needNewBubbleAfterTool.value) {
+    streamingBubbleId.value = null
+    needNewBubbleAfterTool.value = false
+  }
   if (!streamingBubbleId.value) {
     // 没有气泡时先创建一个空的 assistant 气泡
     streamingBubbleId.value = newId()
@@ -328,6 +342,9 @@ async function onToolResult(result: AgentToolResultPayload) {
     target.is_error = result.is_error
     target.pending = false
   }
+  // 标记：下一个文本/推理 token 应新建气泡
+  // 实现"文本+工具归同一气泡，工具结果后下段答复独立气泡"
+  needNewBubbleAfterTool.value = true
   await nextTick()
   scrollBottom()
 }
@@ -401,6 +418,9 @@ function onPreviewKeydown(e: KeyboardEvent) {
 }
 
 async function finalizeStream(full: string) {
+  // 分气泡流式：工具结果后已新建多个气泡，full 是全部文本拼接，不能覆盖。
+  // 仅在"没有任何气泡"的回退场景下用 full 创建一条消息（理论上不会发生，
+  // 因为首个 token 就会创建气泡，但作为防御性兜底）。
   if (!streamingBubbleId.value) {
     if (full) {
       await addMessage({
@@ -410,11 +430,11 @@ async function finalizeStream(full: string) {
         timestamp: Date.now(),
       })
     }
-  } else {
-    const target = messages.value.find((m) => m.id === streamingBubbleId.value)
-    if (target && full) target.content = full
   }
+  // 注：不再用 full 覆盖最后一个气泡 content，因为分气泡场景下
+  // 各气泡已通过 appendStreamToken 正确累积自己的片段，full 是整体拼接会破坏分段
   streamingBubbleId.value = null
+  needNewBubbleAfterTool.value = false
   // 流式结束后通知 App 刷新 SideNav 列表（消息数/时间更新）
   emit('conversation-changed')
 }
