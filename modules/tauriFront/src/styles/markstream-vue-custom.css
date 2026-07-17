@@ -1,3 +1,84 @@
-.markstream-vue *{
-    --ms-text-body: 14px;
+/*
+ * markstream-vue 紧凑高可读性排版覆盖
+ *
+ * 目标：基准 14px，标题与正文差距缩小以降低阅读难度，
+ *       padding/margin 收紧但保留可读性。
+ *
+ * 覆盖方式：CSS 变量是继承的，设置在 .markstream-vue 容器上，
+ *           所有子元素自动继承新值。
+ */
+
+.markstream-vue {
+  /* —— 字号：基准 14px，标题与正文差距缩小 —— */
+  --ms-text-body: 14px;
+  --ms-leading-body: 1.65;
+
+  /* 标题字号：与 14px 差距从最大 22px 缩到 6px 内 */
+  --ms-text-h1: 20px; /* 原 36px → 20px */
+  --ms-text-h2: 17px; /* 原 24px → 17px */
+  --ms-text-h3: 16px; /* 原 20px → 16px */
+  --ms-text-h4: 15px; /* 原 16px → 15px */
+  --ms-text-h5: 14px; /* 原 16px → 14px */
+  --ms-text-h6: 14px; /* 原 16px → 14px */
+
+  /* 标题行高：稍紧凑 */
+  --ms-leading-h1: 1.3;
+  --ms-leading-h2: 1.4;
+  --ms-leading-h3: 1.5;
+
+  /* 标题字重：保持层次但不过重 */
+  --ms-weight-h1: 650;
+  --ms-weight-h2: 600;
+  --ms-weight-h3: 600;
+  --ms-weight-h4: 600;
+
+  /* —— 紧凑但可读的 margin/padding —— */
+  /* 段落间距：原 1.5em → 0.75em */
+  --ms-flow-paragraph-y: 0.75em;
+
+  /* 标题外边距：收紧，避免大段空白 */
+  --ms-flow-heading-1-mt: 0.6em;
+  --ms-flow-heading-1-mb: 0.35em;
+  --ms-flow-heading-2-mt: 0.7em;
+  --ms-flow-heading-2-mb: 0.35em;
+  --ms-flow-heading-3-mt: 0.6em;
+  --ms-flow-heading-3-mb: 0.3em;
+  --ms-flow-heading-4-mt: 0.5em;
+  --ms-flow-heading-4-mb: 0.25em;
+  --ms-flow-heading-5-mt: 0.5em;
+  --ms-flow-heading-5-mb: 0.2em;
+  --ms-flow-heading-6-mt: 0.5em;
+  --ms-flow-heading-6-mb: 0.2em;
+
+  /* 列表间距：原 1em → 0.5em */
+  --ms-flow-list-y: 0.5em;
+  --ms-flow-list-item-y: 0.2em;
+  --ms-flow-list-indent: 1.4em;
+
+  /* 代码块间距：原 1.5em → 0.75em */
+  --ms-flow-codeblock-y: 0.75em;
+
+  /* 表格间距：原 2em → 0.75em，单元格 padding 收紧 */
+  --ms-flow-table-y: 0.75em;
+  --ms-flow-table-cell: 0.35em 0.6em;
+
+  /* 引用块间距：原 1.25em → 0.6em */
+  --ms-flow-blockquote-y: 0.6em;
+  --ms-flow-blockquote-indent: 1em;
+
+  /* 分隔线间距：原 2.5em → 1.2em */
+  --ms-flow-hr-y: 1.2em;
+
+  /* 图表/流程图间距：原 1.5em → 0.75em */
+  --ms-flow-diagram-y: 0.75em;
+
+  /* 定义列表间距 */
+  --ms-flow-definition-term-mt: 0.5em;
+  --ms-flow-definition-desc-ml: 1em;
+  --ms-flow-definition-desc-mb: 0.3em;
+
+  /* 内嵌面板内边距收紧 */
+  --ms-inset-panel-x: 8px;
+  --ms-inset-panel-y: 5px;
+  --ms-inset-panel-body: 12px;
 }
