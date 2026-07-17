@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import ChatWindow from './components/ChatWindow.vue'
 import DevicePanel from './components/DevicePanel.vue'
@@ -44,32 +44,49 @@ function onSettingsSaved(backend: string) {
   agentBackend.value = backend
   toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
+
+// 顶部药丸导航中显示的当前模型名称
+const modelDisplay = computed(() => {
+  if (!agentBackend.value || agentBackend.value === 'unknown') return 'EffiBuddy'
+  // 简单处理：截取 provider/model 的最后一段，如 openai:gpt-4o -> gpt-4o
+  const idx = agentBackend.value.lastIndexOf(':')
+  const name = idx >= 0 ? agentBackend.value.slice(idx + 1) : agentBackend.value
+  return name || 'EffiBuddy'
+})
 </script>
 
 <template>
   <div class="app-shell">
+    <!-- Kimi 风格顶部导航：左侧汉堡菜单、中间模型药丸、右侧操作 -->
     <header class="app-header">
-      <div class="brand">
-        <span class="brand-mark">EffiSuite</span>
-        <span v-if="agentBackend" class="agent-badge">backend: {{ agentBackend }}</span>
-      </div>
-      <div class="header-actions">
-        <ThemeSwitcher />
-        <IconButton icon="⚙" size="sm" container title="设置" @click="openSettings" />
+      <div class="header-left">
         <IconButton
-          :icon="panelOpen ? '✕' : '📱'"
-          size="sm"
+          icon="☰"
+          size="md"
           container
-          :variant="panelOpen ? 'primary' : 'normal'"
-          :title="panelOpen ? '关闭设备面板' : '打开设备面板'"
+          dot
+          title="设备面板"
           @click="togglePanel"
         />
+      </div>
+
+      <div class="header-center">
+        <div class="model-pill">
+          <span class="model-name">{{ modelDisplay }}</span>
+          <span class="model-tag">Fast</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <ThemeSwitcher />
+        <IconButton icon="🔇" size="md" container title="静音" />
+        <IconButton icon="⚙" size="md" container title="设置" @click="openSettings" />
       </div>
     </header>
 
     <main class="app-main">
       <section class="chat-area">
-        <ChatWindow />
+        <ChatWindow :backend="agentBackend" />
       </section>
       <aside class="device-area" :class="{ open: panelOpen }">
         <DevicePanel />

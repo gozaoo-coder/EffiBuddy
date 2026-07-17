@@ -25,12 +25,15 @@ const props = withDefaults(
     variant?: IconButtonVariant
     /** 禁用 */
     disabled?: boolean
+    /** 是否显示未读红点（左上角） */
+    dot?: boolean
   }>(),
   {
     size: 'md',
     container: false,
     variant: 'normal',
     disabled: false,
+    dot: false,
   },
 )
 
@@ -105,5 +108,6 @@ function onPointerLeave() {
     @pointerleave="onPointerLeave"
   >
     <span class="icon-btn-glyph">{{ icon }}</span>
+    <span v-if="dot" class="icon-btn-dot" aria-hidden="true"></span>
   </button>
 </template>

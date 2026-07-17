@@ -22,15 +22,15 @@
 
 /* 亮色主题：useTheme 通过 document.documentElement.setAttribute('data-theme', 'light') 应用 */
 [data-theme='light'] {
-  --bg: #f6f7f9;
+  --bg: #fafafa;
   --bg-2: #ffffff;
   --card: #ffffff;
-  --card-2: #f0f2f5;
-  --border: #e1e4ea;
-  --primary: #2563eb;
-  --primary-dim: #1d4ed8;
-  --text: #1a1d27;
-  --muted: #6b7280;
+  --card-2: #f2f3f6;
+  --border: #eceef2;
+  --primary: #1d1d1f;
+  --primary-dim: #000000;
+  --text: #1d1d1f;
+  --muted: #8e8e93;
   --danger: #dc2626;
   --success: #059669;
   --warn: #d97706;
@@ -49,9 +49,9 @@
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius: 12px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
   --radius-full: 999px;
 
   /* 控件高度（统一三档：sm 28 / md 36 / lg 44） */
@@ -85,10 +85,10 @@
   --duration-base: 0.25s;
   --duration-slow: 0.4s;
 
-  /* 阴影 */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
-  --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.45);
+  /* 阴影：更柔和的弥散阴影（Kimi 风格） */
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.08);
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.16);
 
   /* z-index 层级（toast > dialog > sheet > menu > popup > dropdown > default） */
   --z-dropdown: 100;
@@ -100,9 +100,9 @@
 }
 
 [data-theme='light'] {
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
-  --shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.1);
 }
 
 * {
@@ -150,11 +150,63 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 18px;
-  height: 52px;
+  padding: 0 14px;
+  height: 56px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  gap: 12px;
+}
+
+.header-left,
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.header-right {
+  justify-content: flex-end;
+}
+
+.header-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.model-pill:hover {
+  background: var(--card-2);
+  border-color: var(--primary);
+}
+
+.model-name {
+  font-weight: 500;
+}
+
+.model-tag {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .brand {
@@ -261,6 +313,12 @@ button:disabled {
   overflow: hidden;
 }
 
+@media (max-width: 899px) {
+  .conv-sidebar {
+    display: none;
+  }
+}
+
 .conv-head {
   display: flex;
   align-items: center;
@@ -297,7 +355,8 @@ button:disabled {
 }
 
 .conv-item {
-  padding: 10px 12px;
+  position: relative;
+  padding: 10px 32px 10px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.15s;
@@ -310,6 +369,19 @@ button:disabled {
 .conv-item.active {
   background: var(--card-2);
   border: 1px solid var(--border);
+}
+
+.conv-delete {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.conv-item:hover .conv-delete {
+  opacity: 1;
 }
 
 .conv-item-title {
@@ -331,6 +403,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: var(--bg);
 }
 
 .chat-title {
@@ -361,20 +434,21 @@ button:disabled {
 .msg-list {
   flex: 1;
   overflow-y: auto;
-  padding: 18px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .msg-bubble {
-  max-width: 75%;
-  padding: 10px 14px;
-  border-radius: 14px;
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: var(--radius-xl);
   word-break: break-word;
   white-space: pre-wrap;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
+  box-shadow: var(--shadow-sm);
 }
 
 .msg-bubble.streaming {
@@ -398,15 +472,15 @@ button:disabled {
   align-self: flex-end;
   background: var(--primary);
   color: #fff;
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: var(--radius-sm);
 }
 
 .msg-bubble.role-assistant {
   align-self: flex-start;
-  background: var(--card-2);
+  background: var(--card);
   color: var(--text);
   border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: var(--radius-sm);
   /* AI 消息使用 MarkdownRender 渲染，交给 markdown 处理换行/空白 */
   white-space: normal;
 }
@@ -503,46 +577,36 @@ button:disabled {
   padding: 4px 8px;
 }
 
-.composer {
-  display: flex;
-  gap: 10px;
-  padding: 12px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-2);
+/* Kimi 风格底部输入栏 */
+.composer-kimi {
   flex-shrink: 0;
+  padding: 12px 16px 18px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.composer textarea {
-  flex: 1;
-  resize: none;
-  min-height: 42px;
-  max-height: 120px;
-  padding: 10px 12px;
-  font-family: inherit;
-  font-size: 14px;
-  color: var(--text);
+.composer-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  transition: border-color 0.15s;
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
 }
 
-.composer textarea:focus {
+.composer-inner:focus-within {
   border-color: var(--primary);
+  box-shadow: var(--shadow);
 }
 
-.composer button {
-  padding: 0 18px;
-  font-size: 14px;
-  color: #fff;
-  background: var(--primary);
-  border-radius: var(--radius-sm);
-  transition: background 0.15s;
-}
-
-.composer button:hover:not(:disabled) {
-  background: var(--primary-dim);
+.composer-footer {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* ---------- Device panel ---------- */
@@ -1607,6 +1671,7 @@ button:disabled {
 /* 形状：circle 圆形（仅 icon-only） */
 .btn-base--circle {
   border-radius: var(--radius-full);
+  padding: 0;
 }
 
 /* loading 状态：隐藏内容 */
@@ -1737,13 +1802,14 @@ button:disabled {
 
 /* ---------- IconButton 独立图标按钮 ---------- */
 .icon-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   aspect-ratio: 1 / 1;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text);
   font-family: inherit;
@@ -1797,6 +1863,7 @@ button:disabled {
 .icon-btn--normal.icon-btn--container {
   background: var(--card);
   border-color: var(--border);
+  box-shadow: var(--shadow-sm);
 }
 .icon-btn--normal.icon-btn--container:not(:disabled):hover {
   background: var(--card-2);
@@ -1830,6 +1897,18 @@ button:disabled {
   align-items: center;
   justify-content: center;
   line-height: 1;
+}
+
+.icon-btn-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1d88ff;
+  border: 1.5px solid var(--card);
+  pointer-events: none;
 }
 
 /* ---------- Dropdown 下拉选择 ---------- */

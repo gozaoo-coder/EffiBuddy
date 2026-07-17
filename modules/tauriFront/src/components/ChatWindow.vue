@@ -6,7 +6,7 @@ import { animate, stagger } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
 import { useLayout } from '../composables/useLayout'
-import { Button, IconButton, Dialog, useToast } from './basic'
+import { Button, IconButton, Dialog, BindSheet, Chips, useToast } from './basic'
 import type {
   Message,
   Conversation,
@@ -14,6 +14,11 @@ import type {
   StreamTokenPayload,
   StreamErrorPayload,
 } from '../types'
+
+// 后端名称（来自 App.vue 顶部模型药丸）
+const props = defineProps<{
+  backend?: string
+}>()
 
 // 主题：用于把 is-dark 传给 MarkdownRender，确保代码块/深色样式正确
 const { resolvedTheme } = useTheme()
@@ -33,13 +38,13 @@ const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充�
 const deleteDialogVisible = ref(false)
 const pendingDeleteId = ref<string | null>(null)
 
+// 底部工具/附件 Sheet
+const toolSheetOpen = ref(false)
+
 // 会话列表容器 ref：用于 anime.js v4 Layout 动画
 const convListEl = ref<HTMLElement | null>(null)
 
 // anime.js v4 Layout 实例：会话列表项进出场 + 位置重排动画
-// - enterFrom: 新会话从左侧滑入并淡入
-// - leaveTo: 删除时缩小淡出
-// - swapAt: opacity:1 避免未显式定位的子元素中途闪烁（官方 gotchas 建议）
 const { update: updateConvLayout } = useLayout(convListEl, {
   children: '.conv-item',
   duration: 320,
@@ -83,17 +88,19 @@ function formatTime(ts: number): string {
   }
 }
 
-// 当前会话 meta（用于顶部标题）
+// 当前会话 meta
 const currentMeta = computed<ConversationMeta | null>(() => {
   if (!currentId.value) return null
   return conversations.value.find((c) => c.id === currentId.value) ?? null
 })
 
+// 是否显示空状态首页
+const isEmptyHome = computed(() => messages.value.length === 0 && !sending.value)
+
 // ---------- 会话管理 ----------
 async function loadConversations() {
   try {
     conversations.value = await invoke<ConversationMeta[]>('list_conversations')
-    // Vue patch 后触发 anime.js Layout 检测 enter/leave/swap
     await nextTick()
     updateConvLayout(() => {
       /* Vue 已更新 DOM，layout 自动记录差分 */
@@ -128,10 +135,15 @@ async function newConversation() {
   }
 }
 
-// 用 Dialog 替代 confirm()：先打开对话框，确认后真正删除
 function askDeleteCurrent() {
   if (!currentId.value || sending.value) return
   pendingDeleteId.value = currentId.value
+  deleteDialogVisible.value = true
+}
+
+function askDeleteById(id: string) {
+  if (sending.value) return
+  pendingDeleteId.value = id
   deleteDialogVisible.value = true
 }
 
@@ -166,7 +178,6 @@ async function addMessage(msg: Message) {
   scrollBottom()
 }
 
-// 流式：追加 token 到当前 streaming 气泡；不存在则新建
 async function appendStreamToken(token: string) {
   if (!streamingBubbleId.value) {
     streamingBubbleId.value = newId()
@@ -188,7 +199,6 @@ async function appendStreamToken(token: string) {
 
 async function finalizeStream(full: string) {
   if (!streamingBubbleId.value) {
-    // 未收到任何 token，但收到了 done 事件（例如纯工具调用）
     if (full) {
       await addMessage({
         id: newId(),
@@ -198,12 +208,10 @@ async function finalizeStream(full: string) {
       })
     }
   } else {
-    // 校正内容（避免增量漏字），并刷新 meta
     const target = messages.value.find((m) => m.id === streamingBubbleId.value)
     if (target && full) target.content = full
   }
   streamingBubbleId.value = null
-  // 刷新会话列表的 message_count
   await loadConversations()
 }
 
@@ -212,7 +220,6 @@ async function send() {
   const content = input.value.trim()
   if (!content || sending.value) return
   if (!currentId.value) {
-    // 自动新建会话
     await newConversation()
     if (!currentId.value) return
   }
@@ -220,7 +227,6 @@ async function send() {
   sending.value = true
   input.value = ''
 
-  // 立即显示用户气泡
   await addMessage({
     id: newId(),
     role: 'user',
@@ -229,12 +235,10 @@ async function send() {
   })
 
   try {
-    // 触发后端流式 task，token 通过事件异步到达
     await invoke('send_message_stream', {
       conversationId: currentId.value,
       content,
     })
-    // 不在此处 resetting sending —— 等流结束事件
   } catch (e) {
     sending.value = false
     await addMessage({
@@ -254,28 +258,54 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+// ---------- 快捷胶囊 ----------
+const quickActions = [
+  { label: 'PPT', icon: '🖥' },
+  { label: '集群', icon: '🌐' },
+  { label: '网站', icon: '🌐' },
+  { label: '深度研究', icon: '🔬' },
+]
+
+function applyQuickAction(label: string) {
+  input.value = `帮我做一个${label}相关的方案`
+}
+
+// ---------- 底部工具 Sheet ----------
+const toolCategories = [
+  { label: '拍照', icon: '📷' },
+  { label: '照片', icon: '🖼' },
+  { label: '本地文件', icon: '📁' },
+  { label: '微信文件', icon: '💬' },
+]
+
+const pluginItems = [
+  { label: '插件', desc: '接入 App 和数据库，帮你自动操作', icon: '🔌' },
+  { label: '技能', desc: '复用专业能力，稳定处理特定任务', icon: '🛠' },
+]
+
+function onToolClick(label: string) {
+  toolSheetOpen.value = false
+  toast({ content: `${label} 功能即将上线`, type: 'info' })
+}
+
 // ---------- 事件订阅 ----------
 onMounted(async () => {
   await loadConversations()
-  // 自动选中第一个会话（若有）
   if (conversations.value.length > 0) {
     await selectConversation(conversations.value[0].id)
   } else {
-    // 无会话时也自动新建一个，避免空状态
     await newConversation()
   }
 
-  // 流式 token
   unlistens.push(
     await listen<StreamTokenPayload>('agent-token', async (e) => {
       const p = e.payload
-      if (p.done) return // 由 agent-done 处理
+      if (p.done) return
       if (currentId.value && p.conversation_id !== currentId.value) return
       await appendStreamToken(p.content)
     }),
   )
 
-  // 流结束
   unlistens.push(
     await listen<StreamTokenPayload>('agent-done', async (e) => {
       const p = e.payload
@@ -285,7 +315,6 @@ onMounted(async () => {
     }),
   )
 
-  // 流错误
   unlistens.push(
     await listen<StreamErrorPayload>('agent-stream-error', async (e) => {
       const p = e.payload
@@ -311,7 +340,7 @@ onUnmounted(() => {
 
 <template>
   <div class="chat-window">
-    <!-- 左侧：会话列表 -->
+    <!-- 左侧：会话列表（桌面端常驻，窄屏折叠） -->
     <aside class="conv-sidebar">
       <div class="conv-head">
         <span class="conv-head-title">会话</span>
@@ -333,33 +362,48 @@ onUnmounted(() => {
         >
           <div class="conv-item-title">{{ c.id.slice(0, 8) }}…</div>
           <div class="conv-item-meta">{{ c.message_count }} 条 · {{ formatTime(c.created_at) }}</div>
+          <IconButton
+            class="conv-delete"
+            icon="🗑"
+            size="sm"
+            variant="danger"
+            title="删除会话"
+            @click.stop="askDeleteById(c.id)"
+          />
         </div>
       </div>
     </aside>
 
     <!-- 右侧：聊天主区 -->
     <section class="chat-main">
-      <div class="chat-title">
-        <span v-if="currentMeta" class="chat-title-text">
-          对话 · {{ currentMeta.id.slice(0, 8) }}… · {{ currentMeta.message_count }} 条
-        </span>
-        <span v-else class="chat-title-text muted">未选择会话</span>
-        <IconButton
-          v-if="currentId"
-          icon="🗑"
-          size="sm"
-          container
-          variant="danger"
-          :disabled="sending"
-          title="删除当前会话"
-          @click="askDeleteCurrent"
-        />
+      <!-- 空状态首页：Kimi 风格中央品牌区 + 快捷胶囊 -->
+      <div v-if="isEmptyHome" class="home-empty">
+        <div class="home-brand">
+          <div class="home-logo">
+            <span class="home-logo-text">Effi</span>
+            <span class="home-logo-icon">🤖</span>
+            <span class="home-logo-text">Buddy</span>
+          </div>
+          <div class="home-subtitle">
+            {{ props.backend && props.backend !== 'unknown' ? props.backend : 'Kimi K3: 2.8万亿参数' }}
+          </div>
+          <div class="home-subtitle secondary">为你进化</div>
+        </div>
+
+        <div class="home-actions">
+          <Chips
+            v-for="action in quickActions"
+            :key="action.label"
+            :label="action.label"
+            :icon="action.icon"
+            size="md"
+            @click="applyQuickAction(action.label)"
+          />
+        </div>
       </div>
 
-      <div ref="scroller" class="msg-list">
-        <div v-if="messages.length === 0" class="empty-hint">
-          输入消息开始对话。流式响应会逐字显示。
-        </div>
+      <!-- 消息列表 -->
+      <div v-else ref="scroller" class="msg-list">
         <div
           v-for="m in messages"
           :key="m.id"
@@ -383,22 +427,49 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="composer">
-        <textarea
-          v-model="input"
-          class="composer-input"
-          :placeholder="sending ? '生成中…' : '输入消息，Enter 发送，Shift+Enter 换行'"
-          :disabled="sending || !currentId"
-          @keydown="onKeydown"
-        ></textarea>
-        <Button
-          variant="primary"
-          :loading="sending"
-          :disabled="!input.trim() || !currentId"
-          @click="send"
-        >
-          {{ sending ? '生成中' : '发送' }}
-        </Button>
+      <!-- Kimi 风格底部输入栏 -->
+      <div class="composer-kimi">
+        <div class="composer-inner">
+          <IconButton
+            icon="＋"
+            size="md"
+            container
+            title="附件"
+            @click="toolSheetOpen = true"
+          />
+          <textarea
+            v-model="input"
+            class="composer-input"
+            :placeholder="sending ? '生成中…' : '尽管问，带图也行'"
+            :disabled="sending || !currentId"
+            rows="1"
+            @keydown="onKeydown"
+          ></textarea>
+          <Button
+            v-if="!input.trim()"
+            icon-only
+            shape="circle"
+            size="md"
+            variant="normal"
+            title="语音输入"
+            @click="toast({ content: '语音输入即将上线', type: 'info' })"
+          >
+            <template #icon>🎙</template>
+          </Button>
+          <Button
+            v-else
+            icon-only
+            shape="circle"
+            size="md"
+            variant="primary"
+            :disabled="!input.trim() || !currentId"
+            title="发送"
+            @click="send"
+          >
+            <template #icon>↑</template>
+          </Button>
+        </div>
+        <div class="composer-footer">内容由 AI 生成</div>
       </div>
     </section>
 
@@ -419,6 +490,48 @@ onUnmounted(() => {
         </div>
       </div>
     </Dialog>
+
+    <!-- 底部工具/附件 Sheet -->
+    <BindSheet v-model:visible="toolSheetOpen" title="工具" side="bottom" :height="'auto'">
+      <div class="tool-sheet">
+        <div class="tool-row">
+          <div
+            v-for="t in toolCategories"
+            :key="t.label"
+            class="tool-card"
+            @click="onToolClick(t.label)"
+          >
+            <span class="tool-card-icon">{{ t.icon }}</span>
+            <span class="tool-card-label">{{ t.label }}</span>
+          </div>
+        </div>
+
+        <div class="tool-list">
+          <div
+            v-for="p in pluginItems"
+            :key="p.label"
+            class="tool-list-item"
+            @click="onToolClick(p.label)"
+          >
+            <span class="tool-list-icon">{{ p.icon }}</span>
+            <div class="tool-list-text">
+              <div class="tool-list-title">{{ p.label }}</div>
+              <div class="tool-list-desc">{{ p.desc }}</div>
+            </div>
+            <span class="tool-list-arrow">›</span>
+          </div>
+        </div>
+
+        <div class="tool-list-item" @click="onToolClick('联网搜索')">
+          <span class="tool-list-icon">🌐</span>
+          <div class="tool-list-text">
+            <div class="tool-list-title">联网搜索</div>
+          </div>
+          <span class="tool-list-status">自动</span>
+          <span class="tool-list-arrow">›</span>
+        </div>
+      </div>
+    </BindSheet>
   </div>
 </template>
 
@@ -443,21 +556,21 @@ onUnmounted(() => {
 .composer-input {
   flex: 1;
   resize: none;
-  min-height: 42px;
+  min-height: 40px;
   max-height: 120px;
   padding: 10px 12px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-full);
   outline: none;
-  transition: border-color var(--duration-fast) var(--ease-standard);
+  line-height: 1.4;
 }
 
-.composer-input:focus {
-  border-color: var(--primary);
+.composer-input::placeholder {
+  color: var(--muted);
 }
 
 .composer-input:disabled {
@@ -477,5 +590,163 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--muted);
   font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+/* Kimi 风格空状态首页 */
+.home-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 48px;
+  overflow-y: auto;
+}
+
+.home-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.home-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--text);
+}
+
+.home-logo-icon {
+  font-size: 0.8em;
+}
+
+.home-subtitle {
+  font-size: 16px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.home-subtitle.secondary {
+  font-size: 15px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* Kimi 风格底部工具 Sheet */
+.tool-sheet {
+  padding: 8px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 8px 0 16px;
+}
+
+.tool-card {
+  flex: 0 0 auto;
+  width: 88px;
+  height: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--card-2);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.tool-card:hover {
+  background: var(--border);
+  transform: translateY(-2px);
+}
+
+.tool-card-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.tool-card-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.tool-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.tool-list-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.tool-list-item:last-child {
+  border-bottom: none;
+}
+
+.tool-list-item:hover {
+  background: var(--card-2);
+  margin: 0 -20px;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.tool-list-icon {
+  font-size: 22px;
+  line-height: 1;
+  width: 28px;
+  text-align: center;
+}
+
+.tool-list-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-list-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.tool-list-desc {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.tool-list-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.tool-list-arrow {
+  font-size: 18px;
+  color: var(--muted);
 }
 </style>
