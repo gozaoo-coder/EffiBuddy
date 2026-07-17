@@ -10,8 +10,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// 工具参数（无参数，但 rig 要求 Args 实现 Deserialize）
+///
+/// 必须用空体 `{}` 而非 unit struct `;`，否则 LLM 传入 `{}` 时
+/// serde 会因 "invalid type: map, expected unit struct" 反序列化失败。
 #[derive(Deserialize)]
-pub struct GetTimeArgs;
+pub struct GetTimeArgs {}
 
 /// 工具错误（thiserror 派生，满足 Tool::Error bound）
 #[derive(Debug, thiserror::Error)]
