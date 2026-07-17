@@ -264,16 +264,6 @@ button:disabled {
   flex-direction: column;
 }
 
-.device-area {
-  width: 340px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border);
-  background: var(--bg-2);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
 .header-actions {
   display: flex;
   gap: 8px;
@@ -771,31 +761,6 @@ button:disabled {
 @media (max-width: 899px) {
   .panel-toggle {
     display: inline-block;
-  }
-
-  .device-area {
-    position: fixed;
-    top: 52px;
-    right: 0;
-    bottom: 0;
-    width: 86%;
-    max-width: 360px;
-    z-index: 20;
-    transform: translateX(100%);
-    transition: transform 0.25s ease;
-    box-shadow: var(--shadow);
-  }
-
-  .device-area.open {
-    transform: translateX(0);
-  }
-
-  .overlay {
-    display: block;
-    position: fixed;
-    inset: 52px 0 0 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 10;
   }
 }
 

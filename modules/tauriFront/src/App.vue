@@ -8,8 +8,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
-import ThemeSwitcher from './components/ThemeSwitcher.vue'
-import { IconButton, ToastHost, SnackbarHost, useToast } from './components/basic'
+import { IconButton, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
 
 const agentBackend = ref('')
@@ -126,7 +125,6 @@ const modelDisplay = computed(() => {
       </div>
 
       <div class="header-right">
-        <ThemeSwitcher />
         <IconButton icon="🔇" size="md" container title="静音" />
       </div>
     </header>
@@ -140,12 +138,17 @@ const modelDisplay = computed(() => {
           @conversation-changed="onConversationChanged"
         />
       </section>
-      <aside class="device-area" :class="{ open: devicePanelOpen }">
-        <DevicePanel />
-      </aside>
     </main>
 
-    <div v-if="devicePanelOpen" class="overlay" @click="devicePanelOpen = false"></div>
+    <!-- 设备管理面板：按需弹出，非常驻 -->
+    <BindSheet
+      v-model:visible="devicePanelOpen"
+      side="right"
+      title="设备管理"
+      width="380px"
+    >
+      <DevicePanel />
+    </BindSheet>
 
     <!-- 左侧抽屉导航 -->
     <SideNav
