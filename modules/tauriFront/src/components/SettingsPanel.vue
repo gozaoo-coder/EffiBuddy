@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   BindSheet,
   Button,
+  Icon,
   RadioGroup,
   Radio,
   Slider,
@@ -25,9 +26,9 @@ type SettingsTab = 'appearance' | 'data' | 'about'
 const activeTab = ref<SettingsTab>('appearance')
 
 const tabs: { key: SettingsTab; icon: string; label: string }[] = [
-  { key: 'appearance', icon: '🎨', label: '外观' },
-  { key: 'data', icon: '💾', label: '数据管理' },
-  { key: 'about', icon: 'ℹ', label: '关于' },
+  { key: 'appearance', icon: 'palette', label: '外观' },
+  { key: 'data', icon: 'cloud', label: '数据管理' },
+  { key: 'about', icon: 'info', label: '关于' },
 ]
 
 // 字体大小（本地占位，未来可持久化）
@@ -154,7 +155,7 @@ function onClose() {
           :class="{ active: activeTab === t.key }"
           @click="activeTab = t.key"
         >
-          <span class="nav-icon">{{ t.icon }}</span>
+          <span class="nav-icon"><Icon :name="t.icon" :size="20" /></span>
           <span class="nav-label">{{ t.label }}</span>
         </button>
       </nav>
@@ -185,7 +186,7 @@ function onClose() {
                     <span class="radio-row-label">跟随系统</span>
                     <span class="radio-row-hint">自动匹配操作系统主题</span>
                   </span>
-                  <span class="radio-row-glyph">⌂</span>
+                  <span class="radio-row-glyph"><Icon name="auto" :size="22" /></span>
                 </label>
                 <label class="radio-row">
                   <Radio value="light" />
@@ -193,7 +194,7 @@ function onClose() {
                     <span class="radio-row-label">亮色</span>
                     <span class="radio-row-hint">明亮、清爽的日间模式</span>
                   </span>
-                  <span class="radio-row-glyph">☀</span>
+                  <span class="radio-row-glyph"><Icon name="sun" :size="22" /></span>
                 </label>
                 <label class="radio-row">
                   <Radio value="dark" />
@@ -201,7 +202,7 @@ function onClose() {
                     <span class="radio-row-label">暗色</span>
                     <span class="radio-row-hint">护眼、沉浸的夜间模式</span>
                   </span>
-                  <span class="radio-row-glyph">☾</span>
+                  <span class="radio-row-glyph"><Icon name="moon" :size="22" /></span>
                 </label>
               </RadioGroup>
             </div>
@@ -296,12 +297,12 @@ function onClose() {
 
             <div class="card about-links">
               <button type="button" class="link-row" @click="openGithub">
-                <span class="link-glyph">⌥</span>
+                <span class="link-glyph"><Icon name="book" :size="18" /></span>
                 <span class="link-text">GitHub 仓库</span>
-                <span class="link-arrow">↗</span>
+                <span class="link-arrow"><Icon name="external-link" :size="14" /></span>
               </button>
               <div class="link-row link-row--static">
-                <span class="link-glyph">§</span>
+                <span class="link-glyph"><Icon name="book" :size="18" /></span>
                 <span class="link-text">开源许可 (MIT)</span>
               </div>
             </div>

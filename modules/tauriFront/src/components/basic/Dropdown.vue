@@ -6,6 +6,7 @@
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useAnimeTransition } from '../../composables/useAnimeTransition'
+import Icon from '../Icon.vue'
 
 export interface DropdownOption {
   label: string
@@ -213,10 +214,10 @@ function onSearchKeydown(e: KeyboardEvent) {
       @click="onTriggerClick"
     >
       <span v-if="selectedOption?.icon" class="dropdown-trigger-icon">
-        {{ selectedOption.icon }}
+        <Icon :name="selectedOption.icon" :size="18" :fallback="selectedOption.icon" />
       </span>
       <span class="dropdown-trigger-label">{{ triggerLabel }}</span>
-      <span class="dropdown-trigger-arrow" :class="{ 'is-open': open }">▾</span>
+      <span class="dropdown-trigger-arrow" :class="{ 'is-open': open }"><Icon name="chevron-down" :size="14" /></span>
     </button>
 
     <!-- 浮层：Teleport 到 body -->
@@ -254,9 +255,9 @@ function onSearchKeydown(e: KeyboardEvent) {
               :class="{ 'is-selected': opt.value === modelValue }"
               @click="onSelect(opt)"
             >
-              <span v-if="opt.icon" class="dropdown-item-icon">{{ opt.icon }}</span>
+              <span v-if="opt.icon" class="dropdown-item-icon"><Icon :name="opt.icon" :size="18" :fallback="opt.icon" /></span>
               <span class="dropdown-item-label">{{ opt.label }}</span>
-              <span v-if="opt.value === modelValue" class="dropdown-item-check">✓</span>
+              <span v-if="opt.value === modelValue" class="dropdown-item-check"><Icon name="check-builtin" :size="14" /></span>
             </button>
           </div>
         </div>

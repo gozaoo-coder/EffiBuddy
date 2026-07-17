@@ -5,6 +5,7 @@ import {
   BindSheet,
   Button,
   IconButton,
+  Icon,
   Switch,
   Dropdown,
   Menu,
@@ -60,16 +61,16 @@ interface ProviderVisual {
 }
 
 const providerVisuals: Record<string, ProviderVisual> = {
-  openai: { glyph: '✦', accent: '#10a37f', desc: 'GPT 系列模型，通用能力强' },
-  deepseek: { glyph: '🐋', accent: '#4d6bfe', desc: '高性价比推理与对话' },
-  groq: { glyph: '⚡', accent: '#f55036', desc: '超低延迟推理加速' },
-  anthropic: { glyph: '✸', accent: '#d97757', desc: 'Claude 系列长文本模型' },
-  moonshot: { glyph: '🌙', accent: '#16161a', desc: 'Kimi 长上下文模型' },
-  custom: { glyph: '⚙', accent: '#4a7eff', desc: '任意 OpenAI 兼容端点' },
+  openai: { glyph: 'spark', accent: '#10a37f', desc: 'GPT 系列模型，通用能力强' },
+  deepseek: { glyph: 'globe', accent: '#4d6bfe', desc: '高性价比推理与对话' },
+  groq: { glyph: 'bolt', accent: '#f55036', desc: '超低延迟推理加速' },
+  anthropic: { glyph: 'spark', accent: '#d97757', desc: 'Claude 系列长文本模型' },
+  moonshot: { glyph: 'moon', accent: '#16161a', desc: 'Kimi 长上下文模型' },
+  custom: { glyph: 'settings', accent: '#4a7eff', desc: '任意 OpenAI 兼容端点' },
 }
 
 function visualOf(id: string): ProviderVisual {
-  return providerVisuals[id] ?? { glyph: '◆', accent: '#4a7eff', desc: '自定义模型端点' }
+  return providerVisuals[id] ?? { glyph: 'spark', accent: '#4a7eff', desc: '自定义模型端点' }
 }
 
 // 推荐模型列表（部分 provider）
@@ -308,9 +309,9 @@ const menuItems = computed<MenuItemOption[]>(() => {
   const m = menuModel.value
   const isActive = !!m && config.value?.active_model_id === m.id
   return [
-    { key: 'edit', label: '编辑', icon: '✎' },
-    { key: 'default', label: isActive ? '当前默认' : '设为默认', icon: '★', divided: true, disabled: isActive },
-    { key: 'delete', label: '删除', icon: '🗑', danger: true, divided: true },
+    { key: 'edit', label: '编辑', icon: 'edit' },
+    { key: 'default', label: isActive ? '当前默认' : '设为默认', icon: 'star', divided: true, disabled: isActive },
+    { key: 'delete', label: '删除', icon: 'delete', danger: true, divided: true },
   ]
 })
 
@@ -378,7 +379,7 @@ function onClose() {
             <span
               class="provider-glyph"
               :style="{ background: visualOf(p.id).accent }"
-            >{{ visualOf(p.id).glyph }}</span>
+            ><Icon :name="visualOf(p.id).glyph" :size="20" /></span>
             <span class="provider-info">
               <span class="provider-name">{{ p.name }}</span>
               <span class="provider-desc">{{ visualOf(p.id).desc }}</span>
@@ -393,7 +394,7 @@ function onClose() {
             :class="{ selected: draft.provider_id === 'custom' }"
             @click="selectPreset({ id: 'custom', name: '自定义', default_base_url: '', default_model: '', env_var: '', docs_url: '', openai_compat: true } as ProviderPreset)"
           >
-            <span class="provider-glyph" :style="{ background: visualOf('custom').accent }">{{ visualOf('custom').glyph }}</span>
+            <span class="provider-glyph" :style="{ background: visualOf('custom').accent }"><Icon :name="visualOf('custom').glyph" :size="20" /></span>
             <span class="provider-info">
               <span class="provider-name">自定义</span>
               <span class="provider-desc">{{ visualOf('custom').desc }}</span>
@@ -432,12 +433,13 @@ function onClose() {
                 class="field-input"
               />
               <IconButton
-                :icon="showApiKey ? '🙈' : '👁'"
                 size="sm"
                 container
                 :title="showApiKey ? '隐藏' : '显示'"
                 @click="showApiKey = !showApiKey"
-              />
+              >
+                <Icon :name="showApiKey ? 'eye-off' : 'eye'" :size="18" />
+              </IconButton>
             </div>
           </div>
 
@@ -485,7 +487,7 @@ function onClose() {
               @click="preambleExpanded = !preambleExpanded"
             >
               <span class="collapsible-label">系统提示词（preamble）</span>
-              <span class="collapsible-arrow">{{ preambleExpanded ? '▾' : '▸' }}</span>
+              <span class="collapsible-arrow"><Icon :name="preambleExpanded ? 'chevron-down' : 'chevron-right'" :size="14" /></span>
             </button>
             <textarea
               v-if="preambleExpanded"
@@ -556,7 +558,7 @@ function onClose() {
               <span
                 class="model-card-glyph"
                 :style="{ background: visualOf(m.provider_id).accent }"
-              >{{ visualOf(m.provider_id).glyph }}</span>
+              ><Icon :name="visualOf(m.provider_id).glyph" :size="20" /></span>
               <div class="model-card-info">
                 <div class="model-card-top">
                   <span class="model-card-label">{{ m.label }}</span>
@@ -567,12 +569,13 @@ function onClose() {
                 </div>
               </div>
             </div>
-            <button
-              type="button"
+            <IconButton
               class="model-card-menu"
               title="更多操作"
               @click="(e) => openModelMenu(m, e)"
-            >⋯</button>
+            >
+              <Icon name="more-horizontal" :size="20" />
+            </IconButton>
           </div>
         </div>
       </section>

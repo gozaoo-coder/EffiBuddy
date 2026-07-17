@@ -2,14 +2,15 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useToast } from '../../composables/useFeedback'
 import { useLayout } from '../../composables/useLayout'
+import Icon from '../Icon.vue'
 
 const { state, dismiss } = useToast()
 
 const typeIcon: Record<string, string> = {
-  info: 'ℹ',
-  success: '✓',
-  warn: '⚠',
-  error: '✕',
+  info: 'info',
+  success: 'check-builtin',
+  warn: 'warning',
+  error: 'close',
 }
 
 // 顶部 / 底部 toast 容器引用
@@ -79,7 +80,7 @@ watch(
         :class="[`toast--${t.type}`, { 'is-hidden': t.hiding }]"
         @click="dismiss(t.id)"
       >
-        <span class="toast-icon">{{ typeIcon[t.type] }}</span>
+        <span class="toast-icon"><Icon :name="typeIcon[t.type]" :size="18" /></span>
         <span class="toast-content">{{ t.content }}</span>
       </div>
     </div>
@@ -93,7 +94,7 @@ watch(
         :class="[`toast--${t.type}`, { 'is-hidden': t.hiding }]"
         @click="dismiss(t.id)"
       >
-        <span class="toast-icon">{{ typeIcon[t.type] }}</span>
+        <span class="toast-icon"><Icon :name="typeIcon[t.type]" :size="18" /></span>
         <span class="toast-content">{{ t.content }}</span>
       </div>
     </div>

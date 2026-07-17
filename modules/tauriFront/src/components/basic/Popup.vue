@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useAnimeTransition } from '../../composables/useAnimeTransition'
+import Icon from '../Icon.vue'
 
 export type PopupPlacement = 'top' | 'bottom' | 'left' | 'right'
 export type PopupAlign = 'start' | 'center' | 'end'
@@ -301,7 +302,7 @@ const hasHeader = computed(() => props.title || props.icon || props.showClose)
         <span class="popup-arrow" :class="`popup-arrow--${placement}`" :style="arrowStyle"></span>
 
         <!-- 图标 -->
-        <div v-if="icon" class="popup-icon">{{ icon }}</div>
+        <div v-if="icon" class="popup-icon"><Icon :name="icon" :size="20" :fallback="icon" /></div>
 
         <div class="popup-body">
           <!-- 头部：title + close -->
@@ -312,7 +313,7 @@ const hasHeader = computed(() => props.title || props.icon || props.showClose)
               class="popup-close"
               aria-label="关闭"
               @click="onClose"
-            >×</button>
+            ><Icon name="close" :size="18" /></button>
           </div>
           <!-- 消息 -->
           <div class="popup-message">{{ message }}</div>

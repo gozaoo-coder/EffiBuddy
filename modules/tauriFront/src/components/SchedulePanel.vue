@@ -13,6 +13,8 @@ import {
   Switch,
   Dropdown,
   Dialog,
+  IconButton,
+  Icon,
   useToast,
   type DropdownOption,
 } from './basic'
@@ -158,7 +160,7 @@ const draft = ref({
 })
 
 const skillDropdownOptions = computed<DropdownOption[]>(() =>
-  skills.value.map((s) => ({ label: s.name, value: s.id, icon: s.builtin ? '★' : '✦' })),
+  skills.value.map((s) => ({ label: s.name, value: s.id, icon: s.builtin ? 'star' : 'spark' })),
 )
 
 function onSkillChange(v: string | number, _opt: DropdownOption) {
@@ -236,11 +238,10 @@ async function setupListeners() {
   unlistens.push(
     await listen<ScheduledTaskResult>('scheduled-task-result', (e) => {
       const p = e.payload
-      const icon = p.success ? '✅' : '⚠'
-      const head = `${icon} 定时任务「${p.task_name}」执行${p.success ? '完成' : '失败'}`
+      const head = `定时任务「${p.task_name}」执行${p.success ? '完成' : '失败'}`
       const preview = p.content.length > 80 ? p.content.slice(0, 80) + '…' : p.content
       toast({
-        content: p.success ? `${head}：${preview}` : `${head}：${preview}`,
+        content: `${head}：${preview}`,
         type: p.success ? 'success' : 'error',
         duration: p.success ? 4000 : 0,
       })
@@ -275,7 +276,7 @@ function onClose() {
     <div class="sched-body">
       <!-- 顶部说明 -->
       <header class="sched-hero">
-        <div class="hero-mark">⏰</div>
+        <div class="hero-mark"><Icon name="alarm" :size="28" /></div>
         <div class="hero-text">
           <h2 class="hero-title">定时任务</h2>
           <p class="hero-sub">按 cron 表达式定时触发技能，结果会以通知形式推送</p>
@@ -290,7 +291,7 @@ function onClose() {
         </div>
 
         <div v-if="!tasks.length && !loading" class="empty-state">
-          <div class="empty-illust">⏰</div>
+          <div class="empty-illust"><Icon name="alarm" :size="48" /></div>
           <p class="empty-text">还没有定时任务</p>
           <p class="empty-hint">点击下方按钮，创建你的第一个定时任务</p>
         </div>
@@ -308,7 +309,7 @@ function onClose() {
                 <span class="task-cron">{{ humanizeCron(t.cron) }}</span>
               </div>
               <div class="task-meta">
-                <span class="task-skill">⚡ {{ skillNameOf(t.skill_id) }}</span>
+                <span class="task-skill"><Icon name="bolt" :size="16" /> {{ skillNameOf(t.skill_id) }}</span>
                 <span class="task-last">上次：{{ formatRelativeTime(t.last_run) }}</span>
               </div>
             </div>
@@ -318,12 +319,11 @@ function onClose() {
                 size="sm"
                 @update:model-value="(v: boolean) => onToggle(t, v)"
               />
-              <button
-                type="button"
-                class="task-delete"
+              <IconButton
+                size="sm"
                 title="删除"
                 @click="askDelete(t)"
-              >🗑</button>
+              ><Icon name="delete" :size="18" /></IconButton>
             </div>
           </div>
         </div>
@@ -332,7 +332,7 @@ function onClose() {
       <!-- 底部新建按钮 -->
       <div class="sched-footer">
         <Button variant="primary" block @click="openCreate">
-          <template #icon>＋</template>
+          <template #icon><Icon name="plus" :size="18" /></template>
           新建任务
         </Button>
       </div>

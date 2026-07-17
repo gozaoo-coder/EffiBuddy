@@ -10,6 +10,7 @@
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useAnimeTransition } from '../../composables/useAnimeTransition'
+import Icon from '../Icon.vue'
 
 export interface PickerOption {
   /** 显示文本 */
@@ -218,7 +219,7 @@ const { onEnter: onSheetEnter, onLeave: onSheetLeave } = useAnimeTransition({
       @click="openPanel"
     >
       <span class="picker-trigger-label">{{ triggerLabel }}</span>
-      <span class="picker-trigger-arrow" :class="{ 'is-open': open }">▾</span>
+      <span class="picker-trigger-arrow" :class="{ 'is-open': open }"><Icon name="chevron-down" :size="14" /></span>
     </button>
 
     <!-- 面板：Teleport 到 body -->

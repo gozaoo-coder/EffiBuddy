@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
-import { Button, IconButton, BindSheet, Chips, useToast } from './basic'
+import { Button, IconButton, BindSheet, Chips, Icon, useToast } from './basic'
 import ReasoningBox from './ReasoningBox.vue'
 import ToolCallGroup from './ToolCallGroup.vue'
 import type {
@@ -349,10 +349,10 @@ function onKeydown(e: KeyboardEvent) {
 
 // ---------- 快捷胶囊 ----------
 const quickActions = [
-  { label: 'PPT', icon: '🖥' },
-  { label: '集群', icon: '🌐' },
-  { label: '网站', icon: '🌐' },
-  { label: '深度研究', icon: '🔬' },
+  { label: 'PPT', icon: 'image' },
+  { label: '集群', icon: 'globe' },
+  { label: '网站', icon: 'globe' },
+  { label: '深度研究', icon: 'search' },
 ]
 
 function applyQuickAction(label: string) {
@@ -361,15 +361,15 @@ function applyQuickAction(label: string) {
 
 // ---------- 底部工具 Sheet ----------
 const toolCategories = [
-  { label: '拍照', icon: '📷' },
-  { label: '照片', icon: '🖼' },
-  { label: '本地文件', icon: '📁' },
-  { label: '微信文件', icon: '💬' },
+  { label: '拍照', icon: 'camera' },
+  { label: '照片', icon: 'image' },
+  { label: '本地文件', icon: 'folder' },
+  { label: '微信文件', icon: 'wechat' },
 ]
 
 const pluginItems = [
-  { label: '插件', desc: '接入 App 和数据库，帮你自动操作', icon: '🔌' },
-  { label: '技能', desc: '复用专业能力，稳定处理特定任务', icon: '🛠' },
+  { label: '插件', desc: '接入 App 和数据库，帮你自动操作', icon: 'plug' },
+  { label: '技能', desc: '复用专业能力，稳定处理特定任务', icon: 'tool' },
 ]
 
 function formatFileSize(bytes: number): string {
@@ -493,7 +493,7 @@ onUnmounted(() => {
         <div class="home-brand">
           <div class="home-logo">
             <span class="home-logo-text">Effi</span>
-            <span class="home-logo-icon">🤖</span>
+            <span class="home-logo-icon"><Icon name="robot" :size="48" /></span>
             <span class="home-logo-text">Buddy</span>
           </div>
           <div class="home-subtitle">
@@ -507,10 +507,11 @@ onUnmounted(() => {
             v-for="action in quickActions"
             :key="action.label"
             :label="action.label"
-            :icon="action.icon"
             size="md"
             @click="applyQuickAction(action.label)"
-          />
+          >
+            <template #icon><Icon :name="action.icon" :size="16" /></template>
+          </Chips>
         </div>
       </div>
 
@@ -556,12 +557,13 @@ onUnmounted(() => {
       <div class="composer-kimi">
         <div class="composer-inner">
           <IconButton
-            icon="＋"
             size="md"
             container
             title="附件"
             @click="toolSheetOpen = true"
-          />
+          >
+            <Icon name="plus" :size="22" />
+          </IconButton>
           <textarea
             v-model="input"
             class="composer-input"
@@ -579,7 +581,7 @@ onUnmounted(() => {
             title="语音输入"
             @click="toast({ content: '语音输入即将上线', type: 'info' })"
           >
-            <template #icon>🎙</template>
+            <template #icon><Icon name="mic" :size="22" /></template>
           </Button>
           <Button
             v-else
@@ -591,7 +593,7 @@ onUnmounted(() => {
             title="发送"
             @click="send"
           >
-            <template #icon>↑</template>
+            <template #icon><Icon name="arrow-up" :size="22" /></template>
           </Button>
         </div>
         <div class="composer-footer">内容由 AI 生成</div>
@@ -608,7 +610,7 @@ onUnmounted(() => {
             class="tool-card"
             @click="onToolClick(t.label)"
           >
-            <span class="tool-card-icon">{{ t.icon }}</span>
+            <span class="tool-card-icon"><Icon :name="t.icon" :size="24" /></span>
             <span class="tool-card-label">{{ t.label }}</span>
           </div>
         </div>
@@ -620,22 +622,22 @@ onUnmounted(() => {
             class="tool-list-item"
             @click="onToolClick(p.label)"
           >
-            <span class="tool-list-icon">{{ p.icon }}</span>
+            <span class="tool-list-icon"><Icon :name="p.icon" :size="20" /></span>
             <div class="tool-list-text">
               <div class="tool-list-title">{{ p.label }}</div>
               <div class="tool-list-desc">{{ p.desc }}</div>
             </div>
-            <span class="tool-list-arrow">›</span>
+            <span class="tool-list-arrow"><Icon name="chevron-right" :size="16" /></span>
           </div>
         </div>
 
         <div class="tool-list-item" @click="onToolClick('联网搜索')">
-          <span class="tool-list-icon">🌐</span>
+          <span class="tool-list-icon"><Icon name="globe" :size="20" /></span>
           <div class="tool-list-text">
             <div class="tool-list-title">联网搜索</div>
           </div>
           <span class="tool-list-status">自动</span>
-          <span class="tool-list-arrow">›</span>
+          <span class="tool-list-arrow"><Icon name="chevron-right" :size="16" /></span>
         </div>
       </div>
     </BindSheet>

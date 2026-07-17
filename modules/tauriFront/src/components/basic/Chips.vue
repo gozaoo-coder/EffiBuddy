@@ -9,6 +9,7 @@
  */
 import { computed, ref } from 'vue'
 import { animate } from 'animejs'
+import Icon from '../Icon.vue'
 
 export type ChipsSize = 'sm' | 'md'
 
@@ -95,7 +96,9 @@ function onRemove(ev: MouseEvent) {
     <span v-if="image" class="chips-image">
       <img :src="image" :alt="label" />
     </span>
-    <span v-else-if="icon" class="chips-icon">{{ icon }}</span>
+    <span v-else-if="icon || $slots.icon" class="chips-icon">
+      <slot name="icon">{{ icon }}</slot>
+    </span>
     <span class="chips-label">{{ label }}</span>
     <button
       v-if="removable"
@@ -104,6 +107,6 @@ function onRemove(ev: MouseEvent) {
       :aria-label="`移除 ${label}`"
       :disabled="disabled"
       @click="onRemove"
-    >×</button>
+    ><Icon name="close" :size="14" /></button>
   </span>
 </template>

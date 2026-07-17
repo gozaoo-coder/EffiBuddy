@@ -18,6 +18,7 @@ import {
   Menu,
   Dialog,
   BindSheet,
+  Icon,
   useToast,
   useSnackbar,
 } from './basic'
@@ -87,15 +88,15 @@ function removeChip(i: number) {
 // ===== Menu =====
 const menuVisible = ref(false)
 const menuItems: MenuItemOption[] = [
-  { key: 'new', label: '新建', icon: '✚' },
-  { key: 'open', label: '打开', icon: '📂' },
-  { key: 'save', label: '保存', icon: '💾', divided: true },
-  { key: 'export', label: '导出', icon: '⤴', children: [
+  { key: 'new', label: '新建', icon: 'plus' },
+  { key: 'open', label: '打开', icon: 'folder' },
+  { key: 'save', label: '保存', icon: 'cloud', divided: true },
+  { key: 'export', label: '导出', icon: 'external-link', children: [
     { key: 'pdf', label: 'PDF' },
     { key: 'word', label: 'Word' },
     { key: 'html', label: 'HTML' },
   ]},
-  { key: 'delete', label: '删除', icon: '🗑', danger: true, divided: true },
+  { key: 'delete', label: '删除', icon: 'delete', danger: true, divided: true },
 ]
 
 function onMenuSelect(item: MenuItemOption) {
@@ -179,9 +180,9 @@ const sheetSide = ref<'bottom' | 'right'>('bottom')
         <Button :disabled="true" variant="primary">禁用</Button>
       </div>
       <div class="demo-row">
-        <IconButton icon="⚙" container />
-        <IconButton icon="🔍" container variant="primary" />
-        <IconButton icon="🗑" container variant="danger" />
+        <IconButton container><Icon name="settings" :size="20" /></IconButton>
+        <IconButton container variant="primary"><Icon name="search" :size="20" /></IconButton>
+        <IconButton container variant="danger"><Icon name="delete" :size="20" /></IconButton>
         <ToggleButton v-model="toggleVal" active-text="已启用" inactive-text="已禁用" />
       </div>
     </section>

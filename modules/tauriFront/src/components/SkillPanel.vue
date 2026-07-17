@@ -12,6 +12,8 @@ import {
   Chips,
   Menu,
   Dialog,
+  IconButton,
+  Icon,
   useToast,
   type MenuItemOption,
 } from './basic'
@@ -29,12 +31,12 @@ const loading = ref(false)
 // 内置技能的视觉映射（覆盖后端返回的描述以突出能力说明）
 const builtinVisuals: Record<string, { glyph: string; desc: string; accent: string }> = {
   'agent-reach': {
-    glyph: '🌐',
+    glyph: 'globe',
     desc: '互联网访问能力，可搜索 Twitter/YouTube/B站/Reddit 等',
     accent: '#4a7eff',
   },
   'browser-act': {
-    glyph: '🖥',
+    glyph: 'device',
     desc: '浏览器自动化，抓取页面、表单填写、截图',
     accent: '#10a37f',
   },
@@ -42,7 +44,7 @@ const builtinVisuals: Record<string, { glyph: string; desc: string; accent: stri
 
 function glyphOf(s: Skill): string {
   if (s.builtin && builtinVisuals[s.id]) return builtinVisuals[s.id].glyph
-  return '✦'
+  return 'spark'
 }
 
 function descOf(s: Skill): string {
@@ -57,12 +59,12 @@ function accentOf(s: Skill): string {
 
 // ---------- 工具选项 ----------
 const toolOptions: { key: string; label: string; icon: string }[] = [
-  { key: 'search_history', label: '搜索历史', icon: '🔍' },
-  { key: 'get_time', label: '获取时间', icon: '🕐' },
-  { key: 'read_file', label: '读取文件', icon: '📄' },
-  { key: 'list_files', label: '列出文件', icon: '📁' },
-  { key: 'shell', label: '执行命令', icon: '⌨' },
-  { key: 'web_fetch', label: '网页抓取', icon: '🌐' },
+  { key: 'search_history', label: '搜索历史', icon: 'search' },
+  { key: 'get_time', label: '获取时间', icon: 'clock' },
+  { key: 'read_file', label: '读取文件', icon: 'file' },
+  { key: 'list_files', label: '列出文件', icon: 'folder' },
+  { key: 'shell', label: '执行命令', icon: 'keyboard' },
+  { key: 'web_fetch', label: '网页抓取', icon: 'globe' },
 ]
 
 const toolLabelMap = new Map(toolOptions.map((t) => [t.key, t.label]))
@@ -127,8 +129,8 @@ function openSkillMenu(s: Skill, e: MouseEvent) {
 }
 
 const menuItems = computed<MenuItemOption[]>(() => [
-  { key: 'edit', label: '编辑', icon: '✎' },
-  { key: 'delete', label: '删除', icon: '🗑', danger: true, divided: true },
+  { key: 'edit', label: '编辑', icon: 'edit' },
+  { key: 'delete', label: '删除', icon: 'delete', danger: true, divided: true },
 ])
 
 function onMenuSelect(item: MenuItemOption) {
@@ -251,7 +253,7 @@ function onClose() {
     <div class="skill-body">
       <!-- 顶部说明 -->
       <header class="skill-hero">
-        <div class="hero-mark">⚡</div>
+        <div class="hero-mark"><Icon name="bolt" :size="28" /></div>
         <div class="hero-text">
           <h2 class="hero-title">技能</h2>
           <p class="hero-sub">点击技能卡片可应用到当前会话；内置技能提供联网与浏览器能力</p>
@@ -271,7 +273,7 @@ function onClose() {
             class="skill-card builtin"
             @click="applySkill(s)"
           >
-            <span class="skill-glyph" :style="{ background: accentOf(s) }">{{ glyphOf(s) }}</span>
+            <span class="skill-glyph" :style="{ background: accentOf(s) }"><Icon :name="glyphOf(s)" :size="20" /></span>
             <div class="skill-info">
               <div class="skill-top">
                 <span class="skill-name">{{ s.name }}</span>
@@ -299,7 +301,7 @@ function onClose() {
         </div>
 
         <div v-if="!userSkills.length && !loading" class="empty-state">
-          <div class="empty-illust">✦</div>
+          <div class="empty-illust"><Icon name="spark" :size="48" /></div>
           <p class="empty-text">还没有自定义技能</p>
           <p class="empty-hint">点击下方按钮，创建你的第一个技能</p>
         </div>
@@ -312,7 +314,7 @@ function onClose() {
             @click="applySkill(s)"
           >
             <div class="skill-card-main">
-              <span class="skill-glyph" :style="{ background: accentOf(s) }">{{ glyphOf(s) }}</span>
+              <span class="skill-glyph" :style="{ background: accentOf(s) }"><Icon :name="glyphOf(s)" :size="20" /></span>
               <div class="skill-info">
                 <div class="skill-top">
                   <span class="skill-name">{{ s.name }}</span>
@@ -328,12 +330,11 @@ function onClose() {
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              class="skill-card-menu"
+            <IconButton
+              size="sm"
               title="更多操作"
               @click.stop="(e) => openSkillMenu(s, e)"
-            >⋯</button>
+            ><Icon name="more-horizontal" :size="20" /></IconButton>
           </div>
         </div>
       </section>
@@ -341,7 +342,7 @@ function onClose() {
       <!-- 底部新建按钮 -->
       <div class="skill-footer">
         <Button variant="primary" block @click="openCreate">
-          <template #icon>＋</template>
+          <template #icon><Icon name="plus" :size="18" /></template>
           新建技能
         </Button>
       </div>

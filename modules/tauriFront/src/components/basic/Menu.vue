@@ -14,6 +14,7 @@
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useAnimeTransition } from '../../composables/useAnimeTransition'
+import Icon from '../Icon.vue'
 
 /** 菜单项配置 */
 export interface MenuItemOption {
@@ -472,9 +473,9 @@ export function useContextMenu(): {
               @mouseleave="onItemLeave"
             >
               <!-- 选中状态占位（左侧 ✓） -->
-              <span class="menu-item-check">{{ item.selected ? '✓' : '' }}</span>
+              <span class="menu-item-check"><Icon v-if="item.selected" name="check-builtin" :size="16" /></span>
               <!-- 图标 -->
-              <span v-if="item.icon" class="menu-item-icon">{{ item.icon }}</span>
+              <span v-if="item.icon" class="menu-item-icon"><Icon :name="item.icon" :size="18" /></span>
               <!-- 文本 -->
               <span class="menu-item-label">{{ item.label }}</span>
               <!-- 子菜单指示箭头 -->
@@ -482,7 +483,7 @@ export function useContextMenu(): {
                 v-if="item.children && item.children.length > 0"
                 class="menu-item-arrow"
                 :class="{ 'is-expanded': expandedKeys.has(item.key) }"
-              >▸</span>
+              ><Icon name="chevron-right" :size="12" /></span>
             </button>
 
             <!-- inline 模式：展开子项在原位置下方 -->
@@ -501,8 +502,8 @@ export function useContextMenu(): {
                 :disabled="child.disabled"
                 @click="onItemClick(child)"
               >
-                <span class="menu-item-check">{{ child.selected ? '✓' : '' }}</span>
-                <span v-if="child.icon" class="menu-item-icon">{{ child.icon }}</span>
+                <span class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
+                <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="18" /></span>
                 <span class="menu-item-label">{{ child.label }}</span>
               </button>
             </template>
@@ -534,8 +535,8 @@ export function useContextMenu(): {
                   :disabled="child.disabled"
                   @click="onItemClick(child)"
                 >
-                  <span class="menu-item-check">{{ child.selected ? '✓' : '' }}</span>
-                  <span v-if="child.icon" class="menu-item-icon">{{ child.icon }}</span>
+                  <span class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
+                  <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="18" /></span>
                   <span class="menu-item-label">{{ child.label }}</span>
                 </button>
               </div>
