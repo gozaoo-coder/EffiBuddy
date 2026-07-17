@@ -13,6 +13,7 @@
  */
 import { ref, watch, computed } from 'vue'
 import { animate } from 'animejs'
+import { Icon } from './basic'
 
 const props = withDefaults(
   defineProps<{
@@ -93,21 +94,18 @@ const titleText = computed(() => {
   if (thinkDuration.value > 0) return `已思考 ${thinkDuration.value} 秒`
   return '推理过程'
 })
-
-// 图标朝向：展开时朝下，折叠时朝右
-const arrowIcon = computed(() => (collapsed.value ? '▸' : '▾'))
 </script>
 
 <template>
   <div class="reasoning-box" :class="{ collapsed }">
     <!-- 标题栏：高度 54px，点击切换 -->
     <div class="reasoning-header" @click="toggle">
-      <span class="reasoning-icon">{{ isThinking ? '🌀' : '💭' }}</span>
+      <span class="reasoning-icon"><Icon name="thinking" :size="16" /></span>
       <span class="reasoning-title">{{ titleText }}</span>
       <span v-if="isThinking" class="reasoning-dots">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
       </span>
-      <span class="reasoning-arrow">{{ arrowIcon }}</span>
+      <span class="reasoning-arrow"><Icon :name="collapsed ? 'chevron-right' : 'chevron-down'" :size="12" /></span>
     </div>
     <!-- 内容区：展开时最高 200px，可滚动 -->
     <div v-show="!collapsed" ref="bodyRef" class="reasoning-body">

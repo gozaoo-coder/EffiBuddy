@@ -11,7 +11,7 @@
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { BindSheet, Button, Menu, Dialog, useToast, type MenuItemOption } from './basic'
+import { BindSheet, Button, Menu, Dialog, Icon, useToast, type MenuItemOption } from './basic'
 import type { ConversationMeta, SearchHit } from '../types'
 
 const props = defineProps<{
@@ -103,9 +103,9 @@ const itemMenuItems = computed<MenuItemOption[]>(() => {
   const c = menuTargetConv.value
   if (!c) return []
   return [
-    { key: 'rename', label: '改名', icon: '✏' },
-    { key: 'pin', label: c.pinned ? '取消置顶' : '置顶', icon: c.pinned ? '📌' : '📍' },
-    { key: 'delete', label: '删除', icon: '🗑', danger: true, divided: true },
+    { key: 'rename', label: '改名', icon: 'edit' },
+    { key: 'pin', label: c.pinned ? '取消置顶' : '置顶', icon: c.pinned ? 'pin-filled' : 'pin' },
+    { key: 'delete', label: '删除', icon: 'delete', danger: true, divided: true },
   ]
 })
 
@@ -243,30 +243,30 @@ defineExpose({ refresh })
       <!-- 顶部功能入口 -->
       <div class="sidenav-entries">
         <button type="button" class="entry-btn" @click="emit('open-settings')">
-          <span class="entry-icon">⚙</span>
+          <span class="entry-icon"><Icon name="settings" :size="20" /></span>
           <span class="entry-label">设置</span>
         </button>
         <button type="button" class="entry-btn" @click="emit('open-skills')">
-          <span class="entry-icon">⚡</span>
+          <span class="entry-icon"><Icon name="bolt" :size="20" /></span>
           <span class="entry-label">技能</span>
         </button>
         <button type="button" class="entry-btn" @click="emit('open-scheduled-tasks')">
-          <span class="entry-icon">⏰</span>
+          <span class="entry-icon"><Icon name="alarm" :size="20" /></span>
           <span class="entry-label">定时任务</span>
         </button>
         <button type="button" class="entry-btn" @click="emit('open-device')">
-          <span class="entry-icon">📱</span>
+          <span class="entry-icon"><Icon name="device" :size="20" /></span>
           <span class="entry-label">设备管理</span>
         </button>
         <button type="button" class="entry-btn" @click="emit('open-model-config')">
-          <span class="entry-icon">🤖</span>
+          <span class="entry-icon"><Icon name="robot" :size="20" /></span>
           <span class="entry-label">模型配置</span>
         </button>
       </div>
 
       <!-- 搜索框 -->
       <div class="sidenav-search">
-        <span class="search-icon">🔍</span>
+        <span class="search-icon"><Icon name="search" :size="18" /></span>
         <input
           v-model="searchQuery"
           type="text"
@@ -305,7 +305,7 @@ defineExpose({ refresh })
               class="list-section-title collapsible"
               @click="pinnedCollapsed = !pinnedCollapsed"
             >
-              <span class="section-arrow">{{ pinnedCollapsed ? '▸' : '▾' }}</span>
+              <span class="section-arrow"><Icon :name="pinnedCollapsed ? 'chevron-right' : 'chevron-down'" :size="14" /></span>
               <span>置顶 ({{ pinnedConversations.length }})</span>
             </div>
             <template v-if="!pinnedCollapsed">

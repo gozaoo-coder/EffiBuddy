@@ -14,7 +14,7 @@
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { animate } from 'animejs'
-import { BindSheet } from './basic'
+import { BindSheet, Icon } from './basic'
 import type { ToolCallRecord } from '../types'
 
 const props = defineProps<{
@@ -89,14 +89,14 @@ function openDetail(idx: number) {
 // 工具图标：根据工具名映射
 function toolIcon(name: string): string {
   const map: Record<string, string> = {
-    search_history: '🔍',
-    get_time: '🕐',
-    read_file: '📄',
-    list_files: '📁',
-    shell: '⚙️',
-    web_fetch: '🌐',
+    search_history: 'search',
+    get_time: 'clock',
+    read_file: 'file',
+    list_files: 'folder',
+    shell: 'settings',
+    web_fetch: 'globe',
   }
-  return map[name] || '🛠'
+  return map[name] || 'tool'
 }
 
 // 参数摘要：取前 40 字符
@@ -131,12 +131,12 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   <div v-if="calls.length > 0" class="tool-group">
     <!-- 组标题：54px -->
     <div class="group-header" @click="toggleGroup">
-      <span class="group-icon">🔧</span>
+      <span class="group-icon"><Icon name="tool" :size="16" /></span>
       <span class="group-title">
         {{ calls.length === 1 ? '使用了工具' : `使用了 ${calls.length} 个工具` }}
       </span>
       <span class="group-progress">{{ doneCount }}/{{ calls.length }}</span>
-      <span class="group-arrow">{{ groupCollapsed ? '▸' : '▾' }}</span>
+      <span class="group-arrow"><Icon :name="groupCollapsed ? 'chevron-right' : 'chevron-down'" :size="12" /></span>
     </div>
 
     <!-- 工具列表：每条 54px -->
@@ -147,7 +147,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
         class="tool-item"
         @click="openDetail(idx)"
       >
-        <span class="tool-icon">{{ toolIcon(c.tool_name) }}</span>
+        <span class="tool-icon"><Icon :name="toolIcon(c.tool_name)" :size="18" /></span>
         <div class="tool-info">
           <div class="tool-name-row">
             <span class="tool-name">{{ c.tool_name }}</span>
@@ -158,7 +158,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
           </div>
           <div class="tool-args">{{ argsSummary(c.arguments) }}</div>
         </div>
-        <span class="tool-arrow">›</span>
+        <span class="tool-arrow"><Icon name="chevron-right" :size="16" /></span>
       </div>
     </div>
 
