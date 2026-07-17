@@ -7,10 +7,12 @@
  * 3. Exit layout animation — 元素离开布局时的退场动画
  *
  * 基于 animejs v4 createLayout / AutoLayout，自动与 Vue 响应式系统协作。
+ * 延迟初始化：在 onMounted 后首次调用 update() 时才创建 Layout 实例，
+ * 确保 DOM 容器已就绪。
  */
 import { createLayout, utils, stagger } from 'animejs'
 import type { AutoLayout } from 'animejs'
-import { onUnmounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
 
 export interface LayoutAnimationOptions {
   /** 容器选择器或元素引用 */
@@ -36,8 +38,8 @@ export interface LayoutAnimationOptions {
 }
 
 export interface LayoutInstance {
-  /** 原始 animejs AutoLayout 实例 */
-  layout: AutoLayout
+  /** 原始 animejs AutoLayout 实例（延迟初始化，首次 update 前为 null） */
+  layout: AutoLayout | null
   /** 更新布局：在回调中修改 DOM，animejs 自动处理动画 */
   update: (fn: (ctx: { root: HTMLElement }) => void) => Promise<void>
   /** 离开中的元素引用 */
@@ -48,6 +50,7 @@ export interface LayoutInstance {
 
 /**
  * 创建一个 animejs Layout 实例，绑定到指定容器。
+ * 延迟初始化：在 onMounted 后首次调用 update() 时才创建实例。
  *
  * @example 基础用法 — CSS display 切换动画
  * ```ts
@@ -69,7 +72,6 @@ export interface LayoutInstance {
  * const layout = useLayoutAnimation({
  *   container: '.msg-list',
  *   enterFrom: { transform: 'translateY(20px) scale(0.95)', opacity: 0 },
- *   enterDuration: 350,
  * })
  *
  * layout.update(({ root }) => {
@@ -111,56 +113,89 @@ export function useLayoutAnimation(options: LayoutAnimationOptions): LayoutInsta
     staggerDelay,
   } = options
 
-  // 构建 animejs createLayout 的配置
-  const layoutConfig: Record<string, any> = {
-    duration,
-    ease,
-  }
+  let layout: AutoLayout | null = null
+  let mounted = false
 
-  if (enterFrom) {
-    layoutConfig.enterFrom = {
-      ...enterFrom,
-      duration: enterDuration ?? duration,
-      ease: enterEase ?? ease,
-    }
-  }
+  function ensureLayout(): AutoLayout {
+    if (!layout) {
+      // 构建 animejs createLayout 的配置
+      const layoutConfig: Record<string, any> = { duration, ease }
 
-  if (leaveTo) {
-    const leaveConfig: Record<string, any> = {
-      ...leaveTo,
-      duration: leaveDuration ?? duration,
-      ease: leaveEase ?? ease,
-    }
-    if (staggerDelay !== undefined) {
-      leaveConfig.delay = stagger(staggerDelay)
-    }
-    layoutConfig.leaveTo = leaveConfig
-  }
+      if (enterFrom) {
+        layoutConfig.enterFrom = {
+          ...enterFrom,
+          duration: enterDuration ?? duration,
+          ease: enterEase ?? ease,
+        }
+      }
 
-  const layout = createLayout(container, layoutConfig as any)
+      if (leaveTo) {
+        const leaveConfig: Record<string, any> = {
+          ...leaveTo,
+          duration: leaveDuration ?? duration,
+          ease: leaveEase ?? ease,
+        }
+        if (staggerDelay !== undefined) {
+          leaveConfig.delay = stagger(staggerDelay)
+        }
+        layoutConfig.leaveTo = leaveConfig
+      }
+
+      layout = createLayout(container, layoutConfig as any)
+    }
+    return layout
+  }
 
   const instance: LayoutInstance = {
-    layout,
-    leaving: layout.leaving as unknown as Array<Element>,
+    get layout() {
+      return layout
+    },
+    get leaving() {
+      return (layout?.leaving as unknown as Array<Element>) ?? []
+    },
     update(fn: (ctx: { root: HTMLElement }) => void): Promise<void> {
-      const timeline = layout.update((self: AutoLayout) => {
+      // 确保 DOM 已挂载 + 容器存在
+      const containerExists =
+        typeof container === 'string'
+          ? !!document.querySelector(container)
+          : document.contains(container)
+
+      if (!mounted && !containerExists) {
+        // 尚未挂载且容器不存在，延迟到下一帧再试
+        return new Promise((resolve) => {
+          requestAnimationFrame(() => {
+            instance.update(fn).then(resolve)
+          })
+        })
+      }
+
+      const l = ensureLayout()
+      const timeline = l.update((self: AutoLayout) => {
         fn({ root: self.root as HTMLElement })
       })
-      // timeline.then() 返回 Promise
+
       if (timeline && typeof (timeline as any).then === 'function') {
         return (timeline as any).then(() => {})
       }
       return Promise.resolve()
     },
     destroy() {
-      // animejs v4 AutoLayout 没有显式 destroy，通过 revert 重置
-      try {
-        layout.revert()
-      } catch {
-        // 忽略清理错误
+      if (layout) {
+        try {
+          layout.revert()
+        } catch {
+          // 忽略清理错误
+        }
+        layout = null
       }
     },
   }
+
+  onMounted(() => {
+    mounted = true
+    // 预初始化 Layout（让 animejs 开始观察 DOM）
+    ensureLayout()
+  })
 
   onUnmounted(() => {
     instance.destroy()
