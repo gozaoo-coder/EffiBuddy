@@ -19,6 +19,9 @@ modules/tauriFront/src-tauri/gen/
 *.swp
 *.swo
 
+# agent工具
+.pi/
+
 # 系统
 .DS_Store
 Thumbs.db

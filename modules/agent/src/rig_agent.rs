@@ -1,50 +1,74 @@
 //! RigAgent：通过 [rig](https://crates.io/crates/rig-core) 调用 OpenAI 兼容接口
 //!
-//! 真正接入 rig 的实现。当 `OPENAI_API_KEY` 环境变量存在时，由
-//! [`crate::ChatAgent`] 的调用方择机构造 `RigAgent` 替换 `MockAgent`。
+//! 同时支持：
+//! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
+//! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
+//! - 工具调用：构造 agent 时注册 `SearchHistoryTool` 和 `GetTimeTool`，
+//!   LLM 可主动调用以检索历史或获取时间
 //!
 //! 设计要点（对齐 user_rules 中的 Rust 性能/并发规则）：
 //! - `openai::Client` 内部已是 `Arc` 共享句柄，`RigAgent` 直接持有而**不**再包
 //!   `Arc<Mutex<...>>`，避免双重锁开销。
-//! - 每次 `chat` 构建一次 `Agent` 是 rig 推荐用法（builder 零成本），不缓存
-//!   带状态的 agent，天然支持并发请求。
-//! - 错误以字符串向上传递，符合 core 的 `CoreError::Agent` 约定。
+//! - 每次 `chat`/`chat_stream` 构建一次 `Agent` 是 rig 推荐用法（builder 零成本），
+//!   不缓存带状态的 agent，天然支持并发请求。
+//! - `history` 通过 `Arc<RwLock<Vec<Message>>>` 共享给工具，读多写少用 RwLock。
+//! - 流式实现：仅过滤 `StreamedAssistantContent::Text` 作为用户可见增量，
+//!   tool call / reasoning 等不直接 emit 给前端（避免噪音）。
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use effisuite_core::{CoreError, Message, Result, Role};
+use futures::stream::BoxStream;
+use futures::StreamExt;
 use rig_core::{
+    agent::MultiTurnStreamItem,
     client::{CompletionClient, ProviderClient},
     completion::Prompt,
     providers::openai,
+    streaming::{StreamedAssistantContent, StreamingPrompt},
 };
+use tokio::sync::RwLock;
 
 use crate::agent::ChatAgent;
+use crate::tools::{GetTimeTool, SearchHistoryTool};
 
 pub struct RigAgent {
     client: openai::Client,
     model_name: String,
     preamble: String,
+    /// 共享历史快照，工具读取此数据做 RAG 检索
+    history: Arc<RwLock<Vec<Message>>>,
+    /// 是否启用工具调用
+    enable_tools: bool,
 }
 
 impl RigAgent {
-    /// 从环境变量 `OPENAI_API_KEY` 构造 OpenAI 客户端。
-    pub fn from_env(model_name: impl Into<String>, preamble: impl Into<String>) -> Result<Self> {
+    /// 从环境变量 `OPENAI_API_KEY` 构造 OpenAI 客户端
+    pub fn from_env(
+        model_name: impl Into<String>,
+        preamble: impl Into<String>,
+        enable_tools: bool,
+    ) -> Result<Self> {
         let client = openai::Client::from_env()
             .map_err(|e| CoreError::Agent(format!("openai client init: {e}")))?;
         Ok(Self {
             client,
             model_name: model_name.into(),
             preamble: preamble.into(),
+            history: Arc::new(RwLock::new(Vec::new())),
+            enable_tools,
         })
     }
 
     /// 指定 API key 构造客户端（用于 OpenAI 兼容服务）
     ///
-    /// rig 0.40 的 `Client::new` 返回 `Result`，需处理错误。
+    /// rig 0.40 的 `Client::new` 返回 `Result`，需处理错误
     pub fn from_key(
         api_key: impl Into<String>,
         model_name: impl Into<String>,
         preamble: impl Into<String>,
+        enable_tools: bool,
     ) -> Result<Self> {
         let client = openai::Client::new(api_key.into())
             .map_err(|e| CoreError::Agent(format!("openai client init: {e}")))?;
@@ -52,26 +76,73 @@ impl RigAgent {
             client,
             model_name: model_name.into(),
             preamble: preamble.into(),
+            history: Arc::new(RwLock::new(Vec::new())),
+            enable_tools,
         })
+    }
+
+    /// 共享 history 句柄，供外部更新（如新消息到达时 push 进去）
+    #[inline]
+    pub fn history_handle(&self) -> Arc<RwLock<Vec<Message>>> {
+        Arc::clone(&self.history)
+    }
+
+    /// 构建一个带工具的 agent（每次调用重新构建，零成本）
+    ///
+    /// 装配工具时，所有工具共享同一份 history Arc，确保 LLM 调用
+    /// search_history 时看到的是最新历史。
+    ///
+    /// 返回类型用关联类型 `<openai::Client as CompletionClient>::CompletionModel`，
+    /// 避免硬编码 Responses vs Completions API 的具体 model 类型。
+    fn build_agent(
+        &self,
+    ) -> rig_core::agent::Agent<<openai::Client as CompletionClient>::CompletionModel> {
+        let builder = self
+            .client
+            .agent(&self.model_name)
+            .preamble(&self.preamble);
+
+        if self.enable_tools {
+            // 注册 RAG 检索工具：每次 build 都重新创建工具实例，但它们共享 history
+            let search = SearchHistoryTool::new(Arc::clone(&self.history));
+            let time = GetTimeTool::new(Arc::clone(&self.history));
+            builder.tool(search).tool(time).build()
+        } else {
+            builder.build()
+        }
+    }
+
+    /// 把传入的 messages 同步到内部 history（便于工具读取最新上下文）
+    async fn sync_history(&self, messages: &[Message]) {
+        let mut h = self.history.write().await;
+        // 简单策略：直接替换为最新快照，避免增量 diff 复杂度
+        // 用 with_capacity 减少扩容
+        if h.capacity() < messages.len() {
+            *h = Vec::with_capacity(messages.len() + 8);
+        }
+        h.clear();
+        h.extend_from_slice(messages);
+    }
+
+    /// 从 messages 取最后一条 user 消息作为本轮 prompt
+    fn extract_prompt<'a>(&self, messages: &'a [Message]) -> &'a str {
+        messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .map(|m| m.content.as_str())
+            .unwrap_or("hello")
     }
 }
 
 #[async_trait]
 impl ChatAgent for RigAgent {
     async fn chat(&self, messages: &[Message]) -> Result<String> {
-        let agent = self
-            .client
-            .agent(&self.model_name)
-            .preamble(&self.preamble)
-            .build();
+        // 先同步历史，让工具能看到本轮上下文
+        self.sync_history(messages).await;
 
-        // 取最后一条用户消息作为本轮 prompt；用迭代器而非索引循环
-        let prompt = messages
-            .iter()
-            .rev()
-            .find(|m| m.role == Role::User)
-            .map(|m| m.content.as_str())
-            .unwrap_or("hello");
+        let agent = self.build_agent();
+        let prompt = self.extract_prompt(messages);
 
         let resp = agent
             .prompt(prompt)
@@ -79,6 +150,49 @@ impl ChatAgent for RigAgent {
             .map_err(|e| CoreError::Agent(format!("rig prompt: {e}")))?;
 
         Ok(resp)
+    }
+
+    fn chat_stream<'a>(
+        &'a self,
+        messages: &'a [Message],
+    ) -> BoxStream<'a, Result<String>> {
+        // 用 async_stream 风格：把 async block 转为 stream
+        let s = async_stream::stream! {
+            // 先同步历史
+            self.sync_history(messages).await;
+
+            let agent = self.build_agent();
+            let prompt = self.extract_prompt(messages).to_string();
+
+            // stream_prompt 返回 StreamingPromptRequest，await 后直接得到流
+            // （StreamingResult = Pin<Box<dyn Stream<Item = Result<MultiTurnStreamItem, StreamingError>>>>
+            //   不是 Result<Stream>，错误会在流的 item 中以 Err 出现）
+            let mut stream = agent.stream_prompt(prompt).await;
+
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
+                        // 文本增量，emit 给前端
+                        if !text.text.is_empty() {
+                            yield Ok(text.text);
+                        }
+                    }
+                    Ok(MultiTurnStreamItem::FinalResponse(_)) => {
+                        // 流结束
+                        return;
+                    }
+                    Ok(_) => {
+                        // tool call / reasoning 等不 emit 给前端
+                        continue;
+                    }
+                    Err(e) => {
+                        yield Err(CoreError::Agent(format!("rig stream item: {e}")));
+                        return;
+                    }
+                }
+            }
+        };
+        Box::pin(s)
     }
 
     #[inline]

@@ -13,7 +13,14 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BusEvent {
-    /// agent 产生的新消息（流式或一次性）
+    /// agent 流式输出的一段增量 token
+    /// conversation_id 标识当前会话，content 为本次增量，done=true 表示该会话本轮结束
+    AgentStreamToken {
+        conversation_id: String,
+        content: String,
+        done: bool,
+    },
+    /// agent 产生的新消息（兼容旧版非流式一次性回复）
     AgentMessage {
         conversation_id: String,
         content: String,

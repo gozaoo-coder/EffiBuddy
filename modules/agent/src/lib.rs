@@ -4,14 +4,17 @@
 //! 通过 `ChatAgent` trait 抽象具体后端，业务层依赖 trait 而非具体实现，
 //! 便于在 mock / OpenAI / Ollama 等后端间无成本切换（零成本抽象 + 类型驱动）。
 //!
-//! 当前最小版本提供：
-//! - [`MockAgent`]：纯本地回显，无网络依赖，用于离线开发与单测
-//! - [`RigAgent`]：通过 rig 调用 OpenAI 兼容接口，需要 `OPENAI_API_KEY`
+//! 当前版本提供：
+//! - [`MockAgent`]：纯本地回显，无网络依赖，用于离线开发与单测，支持流式
+//! - [`RigAgent`]：通过 rig 调用 OpenAI 兼容接口，支持流式输出与工具调用
+//! - [`tools`]：RAG 索引式调用工具集（search_history / get_time）
 
 pub mod agent;
 pub mod mock;
 pub mod rig_agent;
+pub mod tools;
 
 pub use agent::ChatAgent;
 pub use mock::MockAgent;
 pub use rig_agent::RigAgent;
+pub use tools::{GetTimeTool, SearchHistoryTool};
