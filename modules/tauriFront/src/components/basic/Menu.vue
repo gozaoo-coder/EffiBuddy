@@ -13,6 +13,7 @@
  * - 指向型菜单：带箭头指向触发元素
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useAnimeTransition } from '../../composables/useAnimeTransition'
 
 /** 菜单项配置 */
 export interface MenuItemOption {
@@ -119,6 +120,22 @@ const expandedKeys = ref<Set<string>>(new Set())
 const hoverKey = ref<string | null>(null)
 // overlay 模式下子菜单面板定位样式
 const subPanelStyle = ref<Record<string, string>>({})
+
+// 主面板与子菜单面板共用进入/离开动画：淡入 + scale(.95)→1（保持原 CSS 行为）
+const { onEnter: onMenuEnter, onLeave: onMenuLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    transform: ['scale(.95)', 'scale(1)'],
+    duration: 180,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    transform: ['scale(1)', 'scale(.95)'],
+    duration: 150,
+    ease: 'inOut(2)',
+  },
+})
 
 // 解析 placement 为 side + align
 function parsePlacement(p: MenuPlacement): { side: 'top' | 'bottom' | 'left' | 'right'; align: 'start' | 'center' | 'end' } {
@@ -410,7 +427,7 @@ export function useContextMenu(): {
 
 <template>
   <Teleport to="body">
-    <Transition name="menu">
+    <Transition :css="false" @enter="onMenuEnter" @leave="onMenuLeave" appear>
       <div
         v-if="innerVisible"
         ref="panelEl"
@@ -494,7 +511,7 @@ export function useContextMenu(): {
 
         <!-- overlay 模式：层叠子菜单面板 -->
         <Teleport to="body">
-          <Transition name="menu">
+          <Transition :css="false" @enter="onMenuEnter" @leave="onMenuLeave" appear>
             <div
               v-if="subMenuMode === 'overlay' && hoverKey"
               class="menu menu--sub"

@@ -5,6 +5,7 @@
  * 支持 searchable 搜索框、自定义宽度、外部点击关闭、淡入下移动效
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useAnimeTransition } from '../../composables/useAnimeTransition'
 
 export interface DropdownOption {
   label: string
@@ -57,6 +58,22 @@ const triggerEl = ref<HTMLElement | null>(null)
 const panelEl = ref<HTMLElement | null>(null)
 // 浮层定位样式
 const panelStyle = ref<Record<string, string>>({})
+
+// 浮层进入/离开动画：淡入 + 从上方下移 8px 进入（保持原 CSS translateY(-8px) 行为）
+const { onEnter, onLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    transform: ['translateY(-8px)', 'translateY(0px)'],
+    duration: 180,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    transform: ['translateY(0px)', 'translateY(-8px)'],
+    duration: 150,
+    ease: 'inOut(2)',
+  },
+})
 
 // 当前选中项
 const selectedOption = computed(() => {
@@ -204,7 +221,7 @@ function onSearchKeydown(e: KeyboardEvent) {
 
     <!-- 浮层：Teleport 到 body -->
     <Teleport to="body">
-      <Transition name="dropdown">
+      <Transition :css="false" @enter="onEnter" @leave="onLeave" appear>
         <div
           v-if="open"
           ref="panelEl"

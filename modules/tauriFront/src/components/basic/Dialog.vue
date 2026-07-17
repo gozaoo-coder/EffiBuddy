@@ -12,6 +12,8 @@
  * - body 滚动锁
  */
 import { ref, watch, onUnmounted, computed, useSlots } from 'vue'
+import { animate } from 'animejs'
+import { useAnimeTransition } from '../../composables/useAnimeTransition'
 
 const props = withDefaults(
   defineProps<{
@@ -150,11 +152,77 @@ function onClose() {
 }
 
 const hasHeader = computed(() => !!props.title)
+
+// Dialog 进入/离开动画：分别动画化遮罩和对话框
+// - align=center：遮罩 fade + 对话框 scale(.9)→1 + fade
+// - align=bottom：遮罩 fade + 对话框 translateY(100%)→0 + fade
+// 注意：bottom 时目标 transform 应为 translateY(0px) 而非 scale(1)
+function dialogFromTransform() {
+  return props.align === 'bottom' ? 'translateY(100%)' : 'scale(.9)'
+}
+function dialogToTransform() {
+  return props.align === 'bottom' ? 'translateY(0px)' : 'scale(1)'
+}
+
+const { onEnter, onLeave } = useAnimeTransition({
+  enter: (el, done) => {
+    const overlay = el.querySelector('.dialog-overlay')
+    const dialog = el.querySelector('.dialog') as HTMLElement | null
+    if (overlay) {
+      animate(overlay, {
+        opacity: [0, 1],
+        duration: 250,
+        ease: 'outQuad',
+      })
+    }
+    if (dialog) {
+      animate(dialog, {
+        opacity: [0, 1],
+        transform: [dialogFromTransform(), dialogToTransform()],
+        duration: 280,
+        ease: 'out(3)',
+        onComplete: () => {
+          // 清理内联 transform/opacity，避免影响后续布局/定位
+          dialog.style.transform = ''
+          dialog.style.opacity = ''
+          if (overlay) (overlay as HTMLElement).style.opacity = ''
+          done()
+        },
+      })
+    } else {
+      done()
+    }
+  },
+  leave: (el, done) => {
+    const overlay = el.querySelector('.dialog-overlay')
+    const dialog = el.querySelector('.dialog') as HTMLElement | null
+    if (overlay) {
+      animate(overlay, {
+        opacity: [1, 0],
+        duration: 220,
+        ease: 'inOut(2)',
+      })
+    }
+    if (dialog) {
+      animate(dialog, {
+        opacity: [1, 0],
+        transform: [dialogToTransform(), dialogFromTransform()],
+        duration: 220,
+        ease: 'inOut(2)',
+        onComplete: () => {
+          done()
+        },
+      })
+    } else {
+      done()
+    }
+  },
+})
 </script>
 
 <template>
   <Teleport to="body">
-    <Transition name="dialog" appear>
+    <Transition :css="false" @enter="onEnter" @leave="onLeave" appear>
       <div
         v-if="innerVisible"
         class="dialog-root"
