@@ -161,6 +161,46 @@ impl Conversation {
     }
 }
 
+/// 技能：preamble 前缀提示 + 工具子集的命名预设
+///
+/// 字段按大小降序：String/Vec（24B）→ u64（8B）→ bool（1B）。
+/// 后添加字段均使用 `#[serde(default)]` 保证旧 JSON 向后兼容。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Skill {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// 系统提示词前缀，加载技能时注入到 preamble 前
+    #[serde(default)]
+    pub preamble: String,
+    /// 启用的工具名列表（如 ["search_history","read_file","shell"]），空表示全部
+    #[serde(default)]
+    pub tools: Vec<String>,
+    pub created_at: u64,
+    /// 是否内置（agent-reach / browser-act 等预置技能）
+    #[serde(default)]
+    pub builtin: bool,
+}
+
+/// 定时任务：按 cron 表达式定时执行技能
+///
+/// 字段按大小降序：String（24B）→ Option<u64>/u64（8B）→ bool（1B）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTask {
+    pub id: String,
+    pub name: String,
+    pub skill_id: String,
+    /// 5 字段 cron 表达式（分 时 日 月 周）
+    pub cron: String,
+    /// 上次执行时间（Unix 毫秒）
+    #[serde(default)]
+    pub last_run: Option<u64>,
+    pub created_at: u64,
+    /// 是否启用
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +211,40 @@ mod tests {
         let s = serde_json::to_string(&m).unwrap();
         let back: Message = serde_json::from_str(&s).unwrap();
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn skill_roundtrip_serde() {
+        let s = Skill {
+            id: "agent-reach".to_string(),
+            name: "Agent Reach".to_string(),
+            description: "test".to_string(),
+            preamble: "preamble".to_string(),
+            tools: vec!["shell".to_string()],
+            created_at: 42,
+            builtin: true,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        // 模拟旧文件：移除 builtin/tools/preamble 字段后仍能反序列化
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut obj = v.as_object().unwrap().clone();
+        obj.remove("builtin");
+        obj.remove("tools");
+        obj.remove("preamble");
+        let back: Skill = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
+        assert_eq!(back.id, "agent-reach");
+        assert!(!back.builtin);
+        assert!(back.tools.is_empty());
+        assert!(back.preamble.is_empty());
+    }
+
+    #[test]
+    fn scheduled_task_default_fields() {
+        // 仅有必填字段时也能反序列化（enabled/last_run 缺省）
+        let json = r#"{"id":"t1","name":"n","skill_id":"s","cron":"0 * * * *","created_at":1}"#;
+        let t: ScheduledTask = serde_json::from_str(json).unwrap();
+        assert_eq!(t.id, "t1");
+        assert!(!t.enabled);
+        assert!(t.last_run.is_none());
     }
 }

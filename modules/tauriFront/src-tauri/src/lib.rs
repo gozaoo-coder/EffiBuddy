@@ -17,30 +17,40 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use effisuite_agent::{ChatAgent, MockAgent, RigAgent};
 use effisuite_core::{
     AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationMeta,
-    ConversationStore, Device, EventBus, Message, ProviderPreset, Role, SearchHit, ThemeMode,
-    builtin_presets,
+    ConversationStore, Device, EventBus, Message, ProviderPreset, Role, ScheduledTask,
+    ScheduledTaskStore, SearchHit, Skill, SkillStore, ThemeMode, builtin_presets,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
 use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
+mod scheduler;
+
 /// 应用全局状态，由 `tauri::Builder::manage` 注入。
 ///
-/// 字段按大小降序：`Arc<RwLock<...>>` (fat pointer, 2 usize) 在前，
-/// `Arc<P2pManager>` (1 usize) 与 `EventBus` (1 usize) 在后。
+/// 字段按大小降序：`SkillStore`/`ScheduledTaskStore`（PathBuf+Arc，4 usize）在前，
+/// `Arc<RwLock<...>>` / `Arc<...>`（1 usize）居中，
+/// `Option<JoinHandle>`（1 usize）在后。
 pub struct AppState {
+    /// 技能存储（PathBuf+Arc，4 usize）
+    pub skill_store: SkillStore,
+    /// 定时任务存储（PathBuf+Arc，4 usize）
+    pub schedule_store: ScheduledTaskStore,
     /// 可热替换的 agent：RwLock 写少读多，内层 Arc 让 async 命令可跨 await 持有
     pub agent: Arc<RwLock<Arc<dyn ChatAgent>>>,
     pub store: Arc<ConversationStore>,
+    pub config: Arc<RwLock<AgentConfig>>,
     pub p2p: Arc<P2pManager>,
     pub event_bus: EventBus,
-    pub config: Arc<RwLock<AgentConfig>>,
+    /// cron 调度器 task 句柄（setup 中 spawn 后写入；shutdown 时可 abort）。
+    /// 用 `Mutex` 是因为句柄在 setup 阶段才产生，需运行时回填到已 manage 的 state。
+    pub scheduler_handle: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。
 #[inline]
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -63,6 +73,16 @@ fn config_path() -> std::path::PathBuf {
 /// 会话存储目录：`<appdata>/conversations`
 fn conversations_dir() -> std::path::PathBuf {
     appdata_root().join("conversations")
+}
+
+/// 技能存储目录：`<appdata>/skills`
+fn skills_dir() -> std::path::PathBuf {
+    appdata_root().join("skills")
+}
+
+/// 定时任务存储目录：`<appdata>/schedules`
+fn schedules_dir() -> std::path::PathBuf {
+    appdata_root().join("schedules")
 }
 
 /// 加载配置；不存在时返回默认值
@@ -616,6 +636,184 @@ async fn read_file_text(path: String, max_bytes: Option<u64>) -> Result<String, 
 }
 
 // =========================================================
+// 命令：技能（Skill）管理
+// =========================================================
+
+/// 列出全部技能：内置（agent-reach / browser-act）+ 用户自定义
+#[tauri::command]
+async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<Skill>, String> {
+    state.skill_store.list_all().await.map_err(|e| e.to_string())
+}
+
+/// 创建用户技能，返回 id。空 id 自动生成；强制 builtin=false
+#[tauri::command]
+async fn create_skill(
+    state: tauri::State<'_, AppState>,
+    mut skill: Skill,
+) -> Result<String, String> {
+    if skill.id.is_empty() {
+        skill.id = uuid::Uuid::new_v4().to_string();
+    }
+    if skill.created_at == 0 {
+        skill.created_at = now_ms();
+    }
+    skill.builtin = false;
+    let id = skill.id.clone();
+    state
+        .skill_store
+        .save(&skill)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// 更新用户技能（内置技能不可修改）。保留原 created_at，强制 builtin=false
+#[tauri::command]
+async fn update_skill(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    mut skill: Skill,
+) -> Result<(), String> {
+    let existing = state
+        .skill_store
+        .get(&id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("技能 {} 不存在", id))?;
+    if existing.builtin {
+        return Err("内置技能不可修改".to_string());
+    }
+    skill.id = id;
+    skill.builtin = false;
+    skill.created_at = existing.created_at;
+    state
+        .skill_store
+        .save(&skill)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 删除技能；内置技能不可删除
+#[tauri::command]
+async fn delete_skill(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    if state
+        .skill_store
+        .get(&id)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|s| s.builtin)
+        .unwrap_or(false)
+    {
+        return Err("内置技能不可删除".to_string());
+    }
+    state
+        .skill_store
+        .delete(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 在指定会话应用技能：把 preamble 作为系统消息注入会话历史，
+/// 后续 send_message 会把它纳入 agent 上下文。
+#[tauri::command]
+async fn apply_skill(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+    skill_id: String,
+) -> Result<(), String> {
+    let skill = state
+        .skill_store
+        .get(&skill_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("技能 {} 不存在", skill_id))?;
+    if skill.preamble.is_empty() {
+        return Ok(());
+    }
+    let sys_msg = Message::new(
+        uuid::Uuid::new_v4().to_string(),
+        Role::System,
+        skill.preamble,
+        now_ms(),
+    );
+    state
+        .store
+        .append_message(&conversation_id, sys_msg, now_ms())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// =========================================================
+// 命令：定时任务（ScheduledTask）管理
+// =========================================================
+
+#[tauri::command]
+async fn list_scheduled_tasks(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ScheduledTask>, String> {
+    state
+        .schedule_store
+        .list()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 创建定时任务，返回 id。空 id 自动生成
+#[tauri::command]
+async fn create_scheduled_task(
+    state: tauri::State<'_, AppState>,
+    mut task: ScheduledTask,
+) -> Result<String, String> {
+    if task.id.is_empty() {
+        task.id = uuid::Uuid::new_v4().to_string();
+    }
+    if task.created_at == 0 {
+        task.created_at = now_ms();
+    }
+    let id = task.id.clone();
+    state
+        .schedule_store
+        .save(&task)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
+async fn delete_scheduled_task(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state
+        .schedule_store
+        .delete(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 启用/停用定时任务
+#[tauri::command]
+async fn toggle_scheduled_task(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut task = state
+        .schedule_store
+        .get(&id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("定时任务 {} 不存在", id))?;
+    task.enabled = enabled;
+    state
+        .schedule_store
+        .save(&task)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// =========================================================
 // 入口
 // =========================================================
 
@@ -640,18 +838,38 @@ pub fn run() {
             )
         }
     };
+    let skill_store = match SkillStore::new(skills_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "SkillStore 初始化失败，回退到临时目录");
+            SkillStore::new(std::env::temp_dir().join("effisuite-skills"))
+                .expect("临时目录 SkillStore 必须成功")
+        }
+    };
+    let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "ScheduledTaskStore 初始化失败，回退到临时目录");
+            ScheduledTaskStore::new(std::env::temp_dir().join("effisuite-schedules"))
+                .expect("临时目录 ScheduledTaskStore 必须成功")
+        }
+    };
 
     let event_bus = EventBus::new(64);
     let p2p = Arc::new(P2pManager::new(event_bus.clone()));
 
     tracing::info!(backend = %agent.backend(), "EffiSuite 启动");
 
+    let agent_lock = Arc::new(RwLock::new(agent));
     let state = AppState {
-        agent: Arc::new(RwLock::new(agent)),
-        store,
+        skill_store,
+        schedule_store,
+        agent: Arc::clone(&agent_lock),
+        store: Arc::clone(&store),
+        config: Arc::new(RwLock::new(config)),
         p2p,
         event_bus,
-        config: Arc::new(RwLock::new(config)),
+        scheduler_handle: std::sync::Mutex::new(None),
     };
 
     tauri::Builder::default()
@@ -670,6 +888,19 @@ pub fn run() {
                     forward_event(&handle, &event);
                 }
             });
+
+            // 启动 cron 调度器：每分钟检查一次到点任务并触发技能执行。
+            // 句柄回填到 AppState.scheduler_handle，便于 shutdown 时 abort。
+            let state = app.state::<AppState>();
+            let sched_handle = scheduler::spawn_scheduler(
+                app.handle().clone(),
+                state.schedule_store.clone(),
+                state.skill_store.clone(),
+                Arc::clone(&state.agent),
+                Arc::clone(&state.store),
+            );
+            *state.scheduler_handle.lock().unwrap() = Some(sched_handle);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -705,6 +936,17 @@ pub fn run() {
             pick_image,
             capture_photo,
             read_file_text,
+            // 技能
+            list_skills,
+            create_skill,
+            update_skill,
+            delete_skill,
+            apply_skill,
+            // 定时任务
+            list_scheduled_tasks,
+            create_scheduled_task,
+            delete_scheduled_task,
+            toggle_scheduled_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
