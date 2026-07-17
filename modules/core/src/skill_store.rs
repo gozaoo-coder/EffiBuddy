@@ -59,6 +59,7 @@ impl SkillStore {
                 description: "使用 agent-reach 工具访问互联网并搜索内容".to_string(),
                 preamble: "你可以使用 agent-reach 工具访问互联网。执行 `agent-reach doctor` 检查状态，`agent-reach install --channels=all` 安装渠道。用 opencli/twitter/yt-dlp 等命令搜索内容。".to_string(),
                 tools: vec!["shell".to_string(), "web_fetch".to_string()],
+                working_dir: None,
                 created_at: 0,
                 builtin: true,
             },
@@ -68,6 +69,7 @@ impl SkillStore {
                 description: "使用 browser-act 进行浏览器自动化".to_string(),
                 preamble: "你可以使用 browser-act 进行浏览器自动化。执行 `browser-act get-skills core` 获取能力，`browser-act fetch URL` 抓取页面。".to_string(),
                 tools: vec!["shell".to_string(), "web_fetch".to_string()],
+                working_dir: None,
                 created_at: 0,
                 builtin: true,
             },
@@ -172,6 +174,7 @@ mod tests {
             description: "d".to_string(),
             preamble: "p".to_string(),
             tools: vec!["shell".to_string()],
+            working_dir: None,
             created_at: 1,
             builtin: false,
         };

@@ -2,10 +2,16 @@
 //!
 //! 非递归模式只列一层；递归模式限制深度 3 层、总条目 500，
 //! 防止遍历巨大目录树导致上下文爆炸或长时间阻塞。
+//!
+//! 工作区支持：构造时传入 `cwd: Option<PathBuf>`，相对路径会 join 到 cwd。
+
+use std::path::{Path, PathBuf};
 
 use rig_core::tool::Tool;
 use serde::Deserialize;
 use tokio::fs;
+
+use super::resolve_path;
 
 /// 递归最大深度
 const MAX_DEPTH: usize = 3;
@@ -29,12 +35,19 @@ pub struct ListFilesArgs {
 #[error("list_files error: {0}")]
 pub struct ListFilesError(String);
 
-/// 目录列举工具，无状态
-pub struct ListFilesTool;
+/// 目录列举工具
+pub struct ListFilesTool {
+    cwd: Option<PathBuf>,
+}
 
 impl ListFilesTool {
     pub fn new() -> Self {
-        Self
+        Self { cwd: None }
+    }
+
+    /// 指定工作区目录，相对路径将 join 到此目录
+    pub fn with_cwd(cwd: PathBuf) -> Self {
+        Self { cwd: Some(cwd) }
     }
 }
 
@@ -52,10 +65,16 @@ impl Tool for ListFilesTool {
     type Output = String;
 
     fn description(&self) -> String {
-        "列出指定目录下的文件与子目录。非递归只列一层；\
-         递归模式限制深度 3 层、总条目 500 防止爆炸。\
-         返回每条目的名称、大小、类型（file/dir）。"
-            .to_string()
+        let cwd_hint = self
+            .cwd
+            .as_ref()
+            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
+            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
+        format!(
+            "列出指定目录下的文件与子目录。非递归只列一层；\
+             递归模式限制深度 3 层、总条目 500 防止爆炸。\
+             返回每条目的名称、大小、类型（file/dir）。\n{cwd_hint}"
+        )
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -64,7 +83,7 @@ impl Tool for ListFilesTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "目录路径（绝对或相对）"
+                    "description": "目录路径（绝对或相对工作区）"
                 },
                 "recursive": {
                     "type": "boolean",
@@ -78,19 +97,21 @@ impl Tool for ListFilesTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let recursive = args.recursive.unwrap_or(false);
+        let resolved = resolve_path(&args.path, self.cwd.as_deref());
+        let path_display = resolved.display().to_string();
         let mut entries: Vec<String> = Vec::with_capacity(64);
         let mut count: usize = 0;
 
-        collect_entries(&args.path, recursive, 0, &mut entries, &mut count)
+        collect_entries(&resolved, recursive, 0, &mut entries, &mut count)
             .await
-            .map_err(|e| ListFilesError(format!("列举目录失败 [{}]: {e}", args.path)))?;
+            .map_err(|e| ListFilesError(format!("列举目录失败 [{}]: {e}", path_display)))?;
 
         if entries.is_empty() {
-            return Ok(format!("目录为空 [{}]", args.path));
+            return Ok(format!("目录为空 [{}]", path_display));
         }
 
         let mut out = String::with_capacity(entries.len() * 48);
-        out.push_str(&format!("目录 {} 内容（共 {} 条）：\n", args.path, entries.len()));
+        out.push_str(&format!("目录 {} 内容（共 {} 条）：\n", path_display, entries.len()));
         for line in entries.iter() {
             out.push_str(line);
             out.push('\n');
@@ -110,7 +131,7 @@ impl Tool for ListFilesTool {
 /// 用迭代器消费 `read_dir`，按名称 + 大小 + 类型格式化。
 /// 深度超限或条目超限时停止递归。
 async fn collect_entries(
-    path: &str,
+    path: &Path,
     recursive: bool,
     depth: usize,
     out: &mut Vec<String>,
@@ -140,7 +161,7 @@ async fn collect_entries(
         // 递归且未超深度时下钻
         // 用 Box::pin 包装递归调用，避免 async fn 递归导致 Future 大小无限增长
         if recursive && is_dir && depth + 1 < MAX_DEPTH {
-            let sub_path = entry.path().to_string_lossy().into_owned();
+            let sub_path = entry.path();
             Box::pin(collect_entries(&sub_path, recursive, depth + 1, out, count)).await?;
         }
     }

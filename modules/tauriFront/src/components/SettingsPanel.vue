@@ -13,6 +13,7 @@ import {
 } from './basic'
 import { useTheme } from '../composables/useTheme'
 import { useAnimeTransition } from '../composables/useAnimeTransition'
+import PinnedMemoryPanel from './PinnedMemoryPanel.vue'
 import type { ThemeMode, ConversationMeta } from '../types'
 
 const props = defineProps<{ open: boolean }>()
@@ -22,11 +23,12 @@ const { toast } = useToast()
 const { themeMode, resolvedTheme, setTheme } = useTheme()
 
 // 当前选中的分类
-type SettingsTab = 'appearance' | 'data' | 'about'
+type SettingsTab = 'appearance' | 'memory' | 'data' | 'about'
 const activeTab = ref<SettingsTab>('appearance')
 
 const tabs: { key: SettingsTab; icon: string; label: string }[] = [
   { key: 'appearance', icon: 'palette', label: '外观' },
+  { key: 'memory', icon: 'pin', label: '永久记忆' },
   { key: 'data', icon: 'cloud', label: '数据管理' },
   { key: 'about', icon: 'info', label: '关于' },
 ]
@@ -223,6 +225,9 @@ function onClose() {
               <p class="card-hint">调整界面正文字号（12–18px）</p>
             </div>
           </section>
+
+          <!-- 永久记忆页 -->
+          <PinnedMemoryPanel v-else-if="activeTab === 'memory'" key="memory" :open="props.open" />
 
           <!-- 数据管理页 -->
           <section v-else-if="activeTab === 'data'" key="data" class="page">

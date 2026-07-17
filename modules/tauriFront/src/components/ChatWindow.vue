@@ -82,6 +82,11 @@ function ensureMeta(id: string): BubbleMeta {
 // 底部工具/附件 Sheet
 const toolSheetOpen = ref(false)
 
+// 会话级工作区路径：None 表示未设置（回退到技能级或进程默认）
+// 优先级：会话级 > 技能级（apply_skill 写入） > 进程默认 cwd
+const workingDir = ref<string | null>(null)
+const workingDirSheetOpen = ref(false)
+
 let unlistens: UnlistenFn[] = []
 
 // ---------- 工具函数 ----------
@@ -159,6 +164,7 @@ async function loadConversation() {
     messages.value = []
     // 清空 meta
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    workingDir.value = null
     return
   }
   try {
@@ -166,12 +172,53 @@ async function loadConversation() {
     messages.value = conv?.messages ?? []
     // 历史会话不携带 reasoning/tools 元数据，清空
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    // 加载会话级工作区
+    workingDir.value = conv?.working_dir ?? null
     await nextTick()
     scrollBottom()
   } catch (e) {
     console.warn('get_conversation failed', e)
     messages.value = []
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    workingDir.value = null
+  }
+}
+
+// ---------- 会话级工作区管理 ----------
+// 优先级：会话级 > 技能级（apply_skill 写入） > 进程默认 cwd
+async function pickWorkingDir() {
+  const id = activeId.value
+  if (!id) {
+    toast({ content: '请先选择或新建会话', type: 'warn' })
+    return
+  }
+  try {
+    const path = await invoke<string | null>('pick_directory')
+    if (path) {
+      await invoke('set_conversation_working_dir', {
+        conversationId: id,
+        workingDir: path,
+      })
+      workingDir.value = path
+      toast({ content: `已设置工作区：${path}`, type: 'success' })
+    }
+  } catch (e) {
+    toast({ content: `设置工作区失败：${e}`, type: 'error' })
+  }
+}
+
+async function clearWorkingDir() {
+  const id = activeId.value
+  if (!id) return
+  try {
+    await invoke('set_conversation_working_dir', {
+      conversationId: id,
+      workingDir: null,
+    })
+    workingDir.value = null
+    toast({ content: '已清除工作区', type: 'success' })
+  } catch (e) {
+    toast({ content: `清除工作区失败：${e}`, type: 'error' })
   }
 }
 
@@ -639,6 +686,58 @@ onUnmounted(() => {
           <span class="tool-list-status">自动</span>
           <span class="tool-list-arrow"><Icon name="chevron-right" :size="16" /></span>
         </div>
+
+        <!-- 会话级工作区入口：read_file/list_files/shell 以此为基准 -->
+        <div
+          class="tool-list-item"
+          :title="workingDir ? workingDir : '未设置，使用技能级或默认'"
+          @click="workingDirSheetOpen = true"
+        >
+          <span class="tool-list-icon"><Icon name="folder" :size="20" /></span>
+          <div class="tool-list-text">
+            <div class="tool-list-title">工作区</div>
+            <div class="tool-list-desc">
+              {{ workingDir ? workingDir : '未设置，相对路径以默认目录为准' }}
+            </div>
+          </div>
+          <span class="tool-list-status">{{ workingDir ? '已设置' : '默认' }}</span>
+          <span class="tool-list-arrow"><Icon name="chevron-right" :size="16" /></span>
+        </div>
+      </div>
+    </BindSheet>
+
+    <!-- 工作区设置 Sheet：选择目录 / 清除 -->
+    <BindSheet
+      v-model:visible="workingDirSheetOpen"
+      title="会话工作区"
+      side="bottom"
+      :height="'auto'"
+    >
+      <div class="wd-sheet">
+        <div class="wd-current">
+          <div class="wd-current-label">当前工作区</div>
+          <div class="wd-current-path" :class="{ 'is-empty': !workingDir }">
+            {{ workingDir || '未设置（使用技能级或进程默认目录）' }}
+          </div>
+        </div>
+        <div class="wd-actions">
+          <Button variant="primary" block @click="pickWorkingDir">
+            <template #icon><Icon name="folder" :size="18" /></template>
+            选择目录
+          </Button>
+          <Button
+            variant="normal"
+            block
+            :disabled="!workingDir"
+            @click="clearWorkingDir"
+          >
+            清除工作区
+          </Button>
+        </div>
+        <p class="wd-hint">
+          工作区决定 read_file / list_files / shell 的相对路径基准与命令执行目录。
+          优先级：会话级 &gt; 技能级 &gt; 进程默认。
+        </p>
       </div>
     </BindSheet>
   </div>
@@ -826,6 +925,53 @@ onUnmounted(() => {
 
 .tool-list-arrow {
   font-size: 18px;
+  color: var(--muted);
+}
+
+/* 工作区设置 Sheet */
+.wd-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0;
+}
+
+.wd-current {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-alt, rgba(0, 0, 0, 0.03));
+  border: 1px solid var(--border);
+}
+
+.wd-current-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.wd-current-path {
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.wd-current-path.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.wd-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wd-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
   color: var(--muted);
 }
 </style>

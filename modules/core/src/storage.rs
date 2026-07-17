@@ -41,13 +41,11 @@ pub struct SearchHit {
     pub updated_at: u64,
 }
 
-/// 查询分词：按空白与中英文标点切分，转小写
+/// 查询分词：复用 `memory::tokenize`（CJK 单字+bigram 拆分），保证索引侧与查询侧一致
+///
+/// 详见 [`crate::memory::tokenize`] 的说明。
 fn tokenize_query(query: &str) -> Vec<String> {
-    query
-        .split(|c: char| c.is_whitespace() || "，。、；：！？,.:;!?".contains(c))
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect()
+    crate::tokenize(query)
 }
 
 /// 计算消息对关键词的命中数
@@ -182,6 +180,21 @@ impl ConversationStore {
             )))?;
         conv.pinned = pinned;
         conv.pinned_at = if pinned { Some(now) } else { None };
+        self.save(&conv).await?;
+        Ok(())
+    }
+
+    /// 设置会话级工作区路径。传入 None 清除工作区（回退到技能级或进程默认）。
+    pub async fn set_working_dir(&self, id: &str, working_dir: Option<String>) -> Result<()> {
+        let _guard = self._lock.write().await;
+        let mut conv = self
+            .load(id)
+            .await?
+            .ok_or_else(|| CoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "conversation not found",
+            )))?;
+        conv.working_dir = working_dir;
         self.save(&conv).await?;
         Ok(())
     }

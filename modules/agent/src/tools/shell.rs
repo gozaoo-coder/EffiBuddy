@@ -8,6 +8,10 @@
 //! 跨平台：Windows 用 `cmd /c`，Unix 用 `sh -c`。
 //! 捕获 stdout + stderr，截断到 8 KiB 返回，避免上下文爆炸。
 //! 默认超时 30s，用 tokio::time::timeout 防止挂死。
+//!
+//! 工作区支持：构造时传入 `cwd: Option<PathBuf>`，命令的子进程工作目录设为此目录。
+
+use std::path::PathBuf;
 
 use rig_core::tool::Tool;
 use serde::Deserialize;
@@ -35,12 +39,19 @@ pub struct ShellArgs {
 #[error("shell error: {0}")]
 pub struct ShellError(String);
 
-/// Shell 命令执行工具，无状态
-pub struct ShellTool;
+/// Shell 命令执行工具
+pub struct ShellTool {
+    cwd: Option<PathBuf>,
+}
 
 impl ShellTool {
     pub fn new() -> Self {
-        Self
+        Self { cwd: None }
+    }
+
+    /// 指定工作区目录，子进程 cwd 设为此目录
+    pub fn with_cwd(cwd: PathBuf) -> Self {
+        Self { cwd: Some(cwd) }
     }
 }
 
@@ -58,13 +69,19 @@ impl Tool for ShellTool {
     type Output = String;
 
     fn description(&self) -> String {
-        "在本地执行 shell 命令并返回 stdout+stderr。跨平台：Windows 用 cmd /c，Unix 用 sh -c。\
-         默认超时 30 秒，输出截断到 8 KiB。\
-         可用于调用已安装的 CLI 工具，例如：\n\
-         - agent-reach: `agent-reach doctor`、`agent-reach install --env=auto --safe`、`opencli twitter search \"query\"`\n\
-         - browser-act: `browser-act browser list`、`browser-act fetch \"url\"`\n\
-         注意：这是本地命令执行，请谨慎调用可能修改系统的命令。"
-            .to_string()
+        let cwd_hint = self
+            .cwd
+            .as_ref()
+            .map(|p| format!("当前工作区：{}（命令在此目录执行）", p.display()))
+            .unwrap_or_else(|| "未设置工作区，命令在进程工作目录执行".to_string());
+        format!(
+            "在本地执行 shell 命令并返回 stdout+stderr。跨平台：Windows 用 cmd /c，Unix 用 sh -c。\
+             默认超时 30 秒，输出截断到 8 KiB。\
+             可用于调用已安装的 CLI 工具，例如：\n\
+             - agent-reach: `agent-reach doctor`、`agent-reach install --env=auto --safe`、`opencli twitter search \"query\"`\n\
+             - browser-act: `browser-act browser list`、`browser-act fetch \"url\"`\n\
+             注意：这是本地命令执行，请谨慎调用可能修改系统的命令。\n{cwd_hint}"
+        )
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -98,6 +115,11 @@ impl Tool for ShellTool {
             c.arg("-c").arg(&args.command);
             c
         };
+
+        // 设置工作区目录（若配置）
+        if let Some(cwd) = &self.cwd {
+            cmd.current_dir(cwd);
+        }
 
         // 不继承父进程的 stdin，避免阻塞
         cmd.stdin(std::process::Stdio::null())

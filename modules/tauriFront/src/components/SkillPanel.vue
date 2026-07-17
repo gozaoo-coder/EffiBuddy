@@ -153,6 +153,7 @@ const draft = ref({
   description: '',
   preamble: '',
   tools: [] as string[],
+  working_dir: '' as string,
 })
 
 function newId(): string {
@@ -164,7 +165,7 @@ function newId(): string {
 
 function openCreate() {
   editingId.value = null
-  draft.value = { name: '', description: '', preamble: '', tools: [] }
+  draft.value = { name: '', description: '', preamble: '', tools: [], working_dir: '' }
   dialogOpen.value = true
 }
 
@@ -175,8 +176,19 @@ function startEdit(s: Skill) {
     description: s.description,
     preamble: s.preamble,
     tools: [...s.tools],
+    working_dir: s.working_dir ?? '',
   }
   dialogOpen.value = true
+}
+
+// 调起系统目录选择对话框，填充工作区路径
+async function pickWorkingDir() {
+  try {
+    const path = await invoke<string | null>('pick_directory')
+    if (path) draft.value.working_dir = path
+  } catch (e) {
+    toast({ content: `选择目录失败：${e}`, type: 'error' })
+  }
 }
 
 function toggleTool(key: string, selected: boolean) {
@@ -196,12 +208,14 @@ async function confirmSave() {
     return
   }
   try {
+    const wd = draft.value.working_dir.trim()
     const skill: Skill = {
       id: editingId.value ?? newId(),
       name,
       description: draft.value.description.trim(),
       preamble: draft.value.preamble,
       tools: [...draft.value.tools],
+      working_dir: wd ? wd : null,
       created_at: 0,
       builtin: false,
     }
@@ -394,6 +408,26 @@ function onClose() {
             class="field-input field-textarea"
             placeholder="作为系统消息注入会话，定义 agent 行为约束"
           ></textarea>
+        </div>
+        <div class="field">
+          <label class="field-label">工作区目录（可选）</label>
+          <div class="working-dir-row">
+            <input
+              v-model="draft.working_dir"
+              type="text"
+              class="field-input"
+              placeholder="留空使用默认；read_file/list_files/shell 以此为基准"
+            />
+            <button
+              type="button"
+              class="pick-dir-btn"
+              title="选择目录"
+              @click="pickWorkingDir"
+            >
+              <Icon name="folder" :size="16" />
+            </button>
+          </div>
+          <p class="field-hint">应用技能时若会话未设置工作区，将自动写入此路径</p>
         </div>
         <div class="field">
           <label class="field-label">启用工具</label>
@@ -718,6 +752,44 @@ function onClose() {
   resize: vertical;
   line-height: 1.5;
   font-family: inherit;
+}
+
+.working-dir-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.working-dir-row .field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pick-dir-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-alt, transparent);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pick-dir-btn:hover {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.04));
+  border-color: var(--accent, #4a7eff);
+}
+
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-soft, rgba(0, 0, 0, 0.55));
 }
 
 .tools-grid {

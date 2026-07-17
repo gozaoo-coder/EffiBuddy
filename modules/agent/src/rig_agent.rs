@@ -26,10 +26,11 @@
 //!   `AgentStreamItem`（Text/Reasoning/ToolCallStart/ToolResult），
 //!   让前端能分别渲染推理框、工具调用提示框与正文。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use effisuite_core::{CoreError, MemoryIndex, Message, Result, Role};
+use effisuite_core::{CoreError, MemoryIndex, Message, PinnedMemoryStore, Result, Role};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use rig_core::{
@@ -44,8 +45,8 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent};
 use crate::tools::{
-    GetTimeTool, ListFilesTool, ReadFileTool, SearchHistoryTool, SearchMemoryTool, ShellTool,
-    WebFetchTool,
+    DeletePinnedMemoryTool, GetTimeTool, ListFilesTool, ListPinnedMemoriesTool, PinMemoryTool,
+    ReadFileTool, SearchHistoryTool, SearchMemoryTool, ShellTool, WebFetchTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -68,22 +69,32 @@ pub struct RigAgent {
     /// 跨会话历史记忆索引（RAG 记忆增强核心）
     /// None 时退化为旧行为（包含全部当前对话历史）
     memory: Option<Arc<MemoryIndex>>,
+    /// 永久记忆存储（用户主动要求"记住"的内容）
+    /// None 时关闭永久记忆能力；Some 时每轮 prompt 都注入 `[永久记忆]` 段
+    pinned_memory: Option<Arc<PinnedMemoryStore>>,
     /// 当前会话 id 句柄，由 Tauri 命令层在每次 send_message 前更新；
     /// search_memory 工具与自动注入都据此排除当前会话
     current_conversation_id: Arc<RwLock<Option<String>>>,
+    /// 当前工作区路径句柄，由 Tauri 命令层在每次 send_message 前更新。
+    /// read_file / list_files / shell 据此解析相对路径与设置子进程 cwd。
+    /// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
+    working_dir: Arc<RwLock<Option<PathBuf>>>,
 }
 
 impl RigAgent {
     /// 从环境变量 `OPENAI_API_KEY` 构造 OpenAI 客户端
     ///
     /// `memory` 与 `current_conversation_id` 用于 RAG 记忆增强；传 None / 默认句柄
-    /// 则关闭记忆增强能力（行为同旧版）。
+    /// 则关闭记忆增强能力（行为同旧版）。`pinned_memory` 用于永久记忆注入。
+    /// `working_dir` 共享句柄用于工作区路径注入，传新的空句柄则默认不限制。
     pub fn from_env(
         model_name: impl Into<String>,
         preamble: impl Into<String>,
         enable_tools: bool,
         memory: Option<Arc<MemoryIndex>>,
+        pinned_memory: Option<Arc<PinnedMemoryStore>>,
         current_conversation_id: Arc<RwLock<Option<String>>>,
+        working_dir: Arc<RwLock<Option<PathBuf>>>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -94,7 +105,9 @@ impl RigAgent {
             history: Arc::new(RwLock::new(Vec::new())),
             enable_tools,
             memory,
+            pinned_memory,
             current_conversation_id,
+            working_dir,
         })
     }
 
@@ -104,6 +117,8 @@ impl RigAgent {
     /// - `base_url`：可覆盖默认 `https://api.openai.com/v1`，留空则用默认
     /// - 走 Chat Completions API（`openai::CompletionsClient`）
     /// - `memory` 注入后启用 RAG 记忆增强（自动上文 + search_memory 工具）
+    /// - `pinned_memory` 注入后启用永久记忆（每轮注入 `[永久记忆]` 段 + pin_memory 工具）
+    /// - `working_dir` 共享句柄用于工作区路径注入
     pub fn from_key(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
@@ -111,7 +126,9 @@ impl RigAgent {
         preamble: impl Into<String>,
         enable_tools: bool,
         memory: Option<Arc<MemoryIndex>>,
+        pinned_memory: Option<Arc<PinnedMemoryStore>>,
         current_conversation_id: Arc<RwLock<Option<String>>>,
+        working_dir: Arc<RwLock<Option<PathBuf>>>,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -129,8 +146,17 @@ impl RigAgent {
             history: Arc::new(RwLock::new(Vec::new())),
             enable_tools,
             memory,
+            pinned_memory,
             current_conversation_id,
+            working_dir,
         })
+    }
+
+    /// 共享 working_dir 句柄，供 Tauri 命令层在每次 send_message 前更新。
+    /// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
+    #[inline]
+    pub fn working_dir_handle(&self) -> Arc<RwLock<Option<PathBuf>>> {
+        Arc::clone(&self.working_dir)
     }
 
     /// 共享 history 句柄，供外部更新（如新消息到达时 push 进去）
@@ -143,11 +169,13 @@ impl RigAgent {
     ///
     /// 装配工具时，所有工具共享同一份 history Arc 与 current_conversation_id Arc，
     /// 确保 LLM 调用 search_history / search_memory 时看到的是最新上下文。
+    /// `cwd` 快照在调用前从 `working_dir` RwLock 读取，注入到文件/shell 工具。
     ///
     /// 返回类型用关联类型 `<openai::CompletionsClient as CompletionClient>::CompletionModel`，
     /// 即 `GenericCompletionModel<OpenAICompletionsExt>`，统一所有 OpenAI 兼容 provider。
     fn build_agent(
         &self,
+        cwd: Option<PathBuf>,
     ) -> rig_core::agent::Agent<<openai::CompletionsClient as CompletionClient>::CompletionModel>
     {
         let builder = self
@@ -159,10 +187,20 @@ impl RigAgent {
             // 注册会话内检索工具：每次 build 都重新创建工具实例，但它们共享 history
             let search = SearchHistoryTool::new(Arc::clone(&self.history));
             let time = GetTimeTool::new(Arc::clone(&self.history));
-            // 无状态本地能力工具：读文件、列目录、执行 shell（agent-reach/browser-act）、抓网页
-            let read_file = ReadFileTool::new();
-            let list_files = ListFilesTool::new();
-            let shell = ShellTool::new();
+            // 本地能力工具：读文件、列目录、执行 shell（agent-reach/browser-act）、抓网页
+            // 注入工作区 cwd（若有），相对路径以此为准
+            let read_file = match &cwd {
+                Some(p) => ReadFileTool::with_cwd(p.clone()),
+                None => ReadFileTool::new(),
+            };
+            let list_files = match &cwd {
+                Some(p) => ListFilesTool::with_cwd(p.clone()),
+                None => ListFilesTool::new(),
+            };
+            let shell = match &cwd {
+                Some(p) => ShellTool::with_cwd(p.clone()),
+                None => ShellTool::new(),
+            };
             let web_fetch = WebFetchTool::new();
 
             let mut b = builder
@@ -180,6 +218,18 @@ impl RigAgent {
                     Arc::clone(&self.current_conversation_id),
                 );
                 b = b.tool(search_memory);
+            }
+
+            // 永久记忆工具：仅在 PinnedMemoryStore 可用时注册
+            // 让 LLM 能在用户说"请记住..."时主动调用 pin_memory 落盘
+            if let Some(pinned) = &self.pinned_memory {
+                let pin = PinMemoryTool::new(
+                    Arc::clone(pinned),
+                    Arc::clone(&self.current_conversation_id),
+                );
+                let list_pinned = ListPinnedMemoriesTool::new(Arc::clone(pinned));
+                let delete_pinned = DeletePinnedMemoryTool::new(Arc::clone(pinned));
+                b = b.tool(pin).tool(list_pinned).tool(delete_pinned);
             }
 
             b.default_max_turns(usize::MAX).build()
@@ -202,8 +252,12 @@ impl RigAgent {
 
     /// 构建包含完整对话历史的上下文 prompt
     ///
-    /// 启用 RAG 记忆增强时的格式：
+    /// 启用 RAG 记忆增强 + 永久记忆时的格式：
     /// ```text
+    /// [永久记忆]（用户要求永久记住的内容，请始终遵守/参考）
+    /// 1. [preference] 用户偏好深色主题
+    /// 2. 我的工作邮箱是 hr@effisuite.com
+    ///
     /// [相关历史记忆]（来自其他对话，供参考）
     /// 1. [会话abc123] [用户] 我们之前聊过 Rust 的异步编程
     /// 2. [会话def456] [助手] tokio 使用 work-stealing 调度器...
@@ -216,8 +270,10 @@ impl RigAgent {
     /// 用户: 能再详细解释一下 work-stealing 吗？
     /// ```
     ///
-    /// 未启用记忆增强或无相关记忆时退化为旧行为：包含全部当前对话历史。
-    /// 长消息会被截断到 800 字符，避免 token 爆炸。
+    /// - `[永久记忆]` 段：每轮**始终**注入（不依赖检索），来自 PinnedMemoryStore
+    /// - `[相关历史记忆]` 段：按当前问题做 RAG 检索后注入
+    /// - 未启用记忆增强或无相关记忆时退化为旧行为：包含全部当前对话历史
+    /// - 长消息会被截断到 800 字符，避免 token 爆炸
     async fn build_contextual_prompt(&self, messages: &[Message]) -> String {
         if messages.is_empty() {
             return "hello".to_string();
@@ -230,7 +286,14 @@ impl RigAgent {
             .unwrap_or(messages.len() - 1);
         let current_msg = &messages[last_user_idx];
 
-        // 1. 若启用记忆增强，先检索跨会话相关历史
+        // 0. 永久记忆段：始终注入（不依赖检索相关性）
+        let pinned_section = if let Some(pinned) = &self.pinned_memory {
+            pinned.format_for_context().await
+        } else {
+            String::new()
+        };
+
+        // 1. 若启用记忆增强，检索跨会话相关历史
         let memory_section = if let Some(memory) = &self.memory {
             // 跳过过短查询（如单字符）避免无意义检索
             let query = current_msg.content.trim();
@@ -259,16 +322,28 @@ impl RigAgent {
             &messages[..last_user_idx]
         };
 
-        // 3. 若无历史且无记忆，直接返回当前问题
-        if history_msgs.is_empty() && memory_section.is_empty() {
+        // 3. 若无永久记忆、无历史且无 RAG 记忆，直接返回当前问题
+        if pinned_section.is_empty()
+            && history_msgs.is_empty()
+            && memory_section.is_empty()
+        {
             return current_msg.content.clone();
         }
 
         // 4. 拼装 prompt
-        // 预估容量：记忆段 + 历史段 + 当前问题
+        // 预估容量：永久记忆段 + RAG 记忆段 + 历史段 + 当前问题
         let mut prompt = String::with_capacity(
-            memory_section.len() + history_msgs.len() * 128 + current_msg.content.len() + 64,
+            pinned_section.len()
+                + memory_section.len()
+                + history_msgs.len() * 128
+                + current_msg.content.len()
+                + 64,
         );
+
+        if !pinned_section.is_empty() {
+            prompt.push_str(&pinned_section);
+            prompt.push('\n');
+        }
 
         if !memory_section.is_empty() {
             prompt.push_str(&memory_section);
@@ -372,8 +447,10 @@ impl ChatAgent for RigAgent {
     async fn chat(&self, messages: &[Message]) -> Result<String> {
         // 先同步历史，让工具能看到本轮上下文
         self.sync_history(messages).await;
+        // 读取当前工作区快照注入到文件/shell 工具
+        let cwd = self.working_dir.read().await.clone();
 
-        let agent = self.build_agent();
+        let agent = self.build_agent(cwd);
         // 使用完整对话历史上下文，而非仅取最后一条用户消息
         let prompt = self.build_contextual_prompt(messages).await;
 
@@ -392,8 +469,10 @@ impl ChatAgent for RigAgent {
         let s = async_stream::stream! {
             // 先同步历史
             self.sync_history(messages).await;
+            // 读取当前工作区快照注入到文件/shell 工具
+            let cwd = self.working_dir.read().await.clone();
 
-            let agent = self.build_agent();
+            let agent = self.build_agent(cwd);
             // 使用完整对话历史上下文，而非仅取最后一条用户消息
             let prompt = self.build_contextual_prompt(messages).await;
 

@@ -4,14 +4,14 @@
 //! LLM 可主动调用此工具检索相关历史消息，作为回答上下文。
 //!
 //! 索引算法：简单词频（TF）匹配
-//! - 把 query 按空白与标点分词，得到关键词集合
+//! - 把 query 复用 `effisuite_core::tokenize`（CJK 单字+bigram 拆分），得到关键词集合
 //! - 对每条历史消息计算关键词命中数（不区分大小写）
 //! - 按命中数降序取前 N 条返回
 //!
 //! 避免引入向量数据库依赖，零外部成本即可获得基础 RAG 能力。
 //! 后续可替换为基于嵌入向量的检索而不改 trait。
 
-use effisuite_core::{Message, Role};
+use effisuite_core::{Message, Role, tokenize};
 use rig_core::tool::Tool;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -127,15 +127,6 @@ impl Tool for SearchHistoryTool {
     }
 }
 
-/// 简单分词：按空白与常见标点切分，转小写
-fn tokenize(query: &str) -> Vec<String> {
-    query
-        .split(|c: char| c.is_whitespace() || "，。、,.;:!?".contains(c))
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect()
-}
-
 /// 计算单条消息的关键词命中数（不区分大小写）
 fn score_message(msg: &Message, keywords: &[String]) -> usize {
     if msg.content.is_empty() {
@@ -150,17 +141,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tokenize_handles_chinese_punctuation() {
-        let tokens = tokenize("你好，世界!rust 编程");
-        assert_eq!(tokens, vec!["你好", "世界", "rust", "编程"]);
-    }
-
-    #[test]
     fn score_counts_keyword_hits() {
         let msg = Message::new("m1", Role::User, "Rust 是一门系统编程语言，rust 好", 0);
         let keywords = vec!["rust".to_string(), "python".to_string()];
         let score = score_message(&msg, &keywords);
         assert_eq!(score, 1, "应只计 1 个独立关键词命中（contains 不计次数）");
+    }
+
+    #[test]
+    fn tokenize_cjk_short_query_scores_hit() {
+        // 回归：中文短查询经 tokenize 后应能命中长文本
+        let msg = Message::new("m1", Role::User, "我们讨论过异步编程的优缺点", 0);
+        let keywords = tokenize("异步");
+        assert!(keywords.contains(&"异步".to_string()));
+        assert!(score_message(&msg, &keywords) > 0);
     }
 
     #[tokio::test]

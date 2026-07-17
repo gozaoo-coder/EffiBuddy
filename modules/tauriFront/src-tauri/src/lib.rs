@@ -18,8 +18,8 @@ use effisuite_agent::{AgentStreamItem, ChatAgent, MockAgent, OpenAIEmbeddingProv
 use effisuite_core::{
     AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationMeta,
     ConversationStore, Device, EventBus, MemoryHit, MemoryIndex, MemoryStats, Message,
-    ProviderPreset, Role, ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode, Skill,
-    SkillStore, ThemeMode, builtin_presets,
+    PinnedMemory, PinnedMemorySource, PinnedMemoryStore, ProviderPreset, Role, ScheduledTask,
+    ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore, ThemeMode, builtin_presets,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
@@ -46,8 +46,13 @@ pub struct AppState {
     pub event_bus: EventBus,
     /// 跨会话历史记忆索引（RAG 记忆增强核心），与 agent 共享同一份 Arc
     pub memory: Arc<MemoryIndex>,
+    /// 永久记忆存储（用户主动要求"记住"的内容），与 agent 共享同一份 Arc
+    pub pinned_memory: Arc<PinnedMemoryStore>,
     /// 当前活跃会话 id，由 send_message 命令更新；agent 据此排除当前会话
     pub current_conversation_id: Arc<RwLock<Option<String>>>,
+    /// 当前工作区路径，由 send_message 命令更新；agent 据此解析相对路径与设置 shell cwd。
+    /// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
+    pub working_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
     /// cron 调度器 task 句柄（setup 中 spawn 后写入；shutdown 时可 abort）。
     /// 用 `Mutex` 是因为句柄在 setup 阶段才产生，需运行时回填到已 manage 的 state。
     pub scheduler_handle: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -95,6 +100,11 @@ fn embeddings_cache_path() -> std::path::PathBuf {
     appdata_root().join("memory_embeddings.json")
 }
 
+/// 永久记忆存储文件：`<appdata>/pinned_memories.json`
+fn pinned_memories_path() -> std::path::PathBuf {
+    appdata_root().join("pinned_memories.json")
+}
+
 /// 加载配置；不存在时返回默认值
 fn load_config_or_default() -> AgentConfig {
     let path = config_path();
@@ -118,11 +128,15 @@ fn save_config(config: &AgentConfig) -> std::result::Result<(), String> {
 /// 根据 config 构造对应的 ChatAgent
 ///
 /// `memory` 与 `current_conversation_id` 注入到 RigAgent 以启用 RAG 记忆增强；
-/// MockAgent 后端忽略这两个参数。
+/// `pinned_memory` 注入以启用永久记忆能力（每轮注入 `[永久记忆]` 段 + pin_memory 工具）。
+/// `working_dir` 注入以启用工作区路径解析（read_file/list_files/shell 据此锚定相对路径）。
+/// MockAgent 后端忽略这些参数。
 fn build_agent(
     config: &AgentConfig,
     memory: Arc<MemoryIndex>,
+    pinned_memory: Arc<PinnedMemoryStore>,
     current_conversation_id: Arc<RwLock<Option<String>>>,
+    working_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -133,7 +147,9 @@ fn build_agent(
                 &config.preamble,
                 config.enable_tools,
                 Some(memory),
+                Some(pinned_memory),
                 current_conversation_id,
+                working_dir,
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -274,11 +290,13 @@ async fn set_config(
     // 根据新配置刷新 embedding provider（启用/禁用向量检索路）
     apply_embedding_provider(&config, &state.memory).await;
 
-    // 构造新 agent：注入 memory 与 current_conversation_id 以启用 RAG 记忆增强
+    // 构造新 agent：注入 memory / pinned_memory / current_conversation_id
     let new_agent = build_agent(
         &config,
         Arc::clone(&state.memory),
+        Arc::clone(&state.pinned_memory),
         Arc::clone(&state.current_conversation_id),
+        Arc::clone(&state.working_dir),
     );
 
     // 替换 state 中的 agent 和 config
@@ -377,7 +395,9 @@ async fn set_active_model(
     let new_agent = build_agent(
         &config,
         Arc::clone(&state.memory),
+        Arc::clone(&state.pinned_memory),
         Arc::clone(&state.current_conversation_id),
+        Arc::clone(&state.working_dir),
     );
     {
         let mut agent_lock = state.agent.write().await;
@@ -521,6 +541,99 @@ fn parse_search_mode(s: Option<&str>) -> SearchMode {
 }
 
 // =========================================================
+// 命令：永久记忆（Pinned Memory）管理
+// =========================================================
+//
+// 与 `search_memory`（RAG 按相关性检索）不同，永久记忆是用户主动要求
+// "始终记住"的内容：一旦加入，每轮 prompt 都会注入到 `[永久记忆]` 段。
+//
+// 用户可通过两条路径管理：
+// 1. 对话中明确说"请记住..."→ LLM 调用 pin_memory 工具（见 agent 模块）
+// 2. UI 面板手动新增/编辑/删除 → 前端调用下列命令
+
+/// 列出全部永久记忆（按 created_at 降序，新的在前）
+#[tauri::command]
+async fn list_pinned_memories(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<PinnedMemory>, String> {
+    Ok(state.pinned_memory.list().await)
+}
+
+/// 新增一条永久记忆（来源固定为 Manual），返回新 id
+#[tauri::command]
+async fn add_pinned_memory(
+    state: tauri::State<'_, AppState>,
+    content: String,
+    category: Option<String>,
+) -> Result<String, String> {
+    let content = content.trim().to_string();
+    if content.is_empty() {
+        return Err("content 不能为空".to_string());
+    }
+    if content.chars().count() > 2000 {
+        return Err("content 过长（>2000 字符），请精简后再添加".to_string());
+    }
+    state
+        .pinned_memory
+        .add_simple(
+            content,
+            category,
+            PinnedMemorySource::Manual,
+            None,
+            now_ms(),
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 更新指定 id 的永久记忆内容与/或分类。
+/// `category` 为 `null` 表示不变；为空字符串表示清空分类（前端约定）。
+#[tauri::command]
+async fn update_pinned_memory(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    content: Option<String>,
+    category: Option<String>,
+) -> Result<(), String> {
+    // 区分"未提供 category"（None = 不变）与"清空 category"（Some("") = 清空）
+    let category_opt = match category {
+        None => None,
+        Some(s) if s.is_empty() => Some(None),
+        Some(s) => Some(Some(s)),
+    };
+    state
+        .pinned_memory
+        .update(&id, content, category_opt)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 删除指定 id 的永久记忆
+#[tauri::command]
+async fn delete_pinned_memory(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state
+        .pinned_memory
+        .delete(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 清空所有永久记忆（危险操作，前端应有二次确认）
+#[tauri::command]
+async fn clear_pinned_memories(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .pinned_memory
+        .clear()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// =========================================================
 // 命令：聊天（流式 + 非流式）
 // =========================================================
 
@@ -536,9 +649,20 @@ async fn send_message(
     let bus = state.event_bus.clone();
     let memory = Arc::clone(&state.memory);
     let cur_conv = Arc::clone(&state.current_conversation_id);
+    let working_dir_handle = Arc::clone(&state.working_dir);
 
     // 标记当前会话：agent 据此排除当前会话，避免与已注入上下文重复
     *cur_conv.write().await = Some(conversation_id.clone());
+
+    // 同步会话级工作区到 agent 句柄：read_file/list_files/shell 据此解析相对路径
+    // 优先级：会话级 working_dir > 技能级（apply_skill 已写入会话） > None
+    let conv_wd = store
+        .load(&conversation_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .and_then(|c| c.working_dir)
+        .map(std::path::PathBuf::from);
+    *working_dir_handle.write().await = conv_wd;
 
     // 先把用户消息持久化到 store，同时取回完整历史
     let user_msg = Message::new(
@@ -597,6 +721,7 @@ async fn send_message_stream(
     let store = state.store.clone();
     let memory = Arc::clone(&state.memory);
     let cur_conv = Arc::clone(&state.current_conversation_id);
+    let working_dir_handle = Arc::clone(&state.working_dir);
     let handle = app_handle.clone();
 
     // 标记当前会话：agent 据此排除当前会话
@@ -616,6 +741,14 @@ async fn send_message_stream(
         .map_err(|e| e.to_string())?;
     // 增量更新 memory index
     memory.add(&conversation_id, user_msg_for_memory).await;
+
+    // 同步会话级工作区到 agent 句柄：read_file/list_files/shell 据此解析相对路径
+    // 优先级：会话级 working_dir > 技能级（apply_skill 已写入会话） > None
+    let conv_wd = conv
+        .working_dir
+        .clone()
+        .map(std::path::PathBuf::from);
+    *working_dir_handle.write().await = conv_wd;
 
     let history = conv.history().to_vec();
     let conv_id = conversation_id.clone();
@@ -945,6 +1078,9 @@ async fn delete_skill(state: tauri::State<'_, AppState>, id: String) -> Result<(
 
 /// 在指定会话应用技能：把 preamble 作为系统消息注入会话历史，
 /// 后续 send_message 会把它纳入 agent 上下文。
+///
+/// 工作区注入：若技能配置了 working_dir，且会话级 working_dir 未设置，
+/// 则把技能的 working_dir 写入会话级（会话级优先级更高，可被用户后续覆盖）。
 #[tauri::command]
 async fn apply_skill(
     state: tauri::State<'_, AppState>,
@@ -957,6 +1093,23 @@ async fn apply_skill(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("技能 {} 不存在", skill_id))?;
+
+    // 工作区注入：技能级 working_dir 在会话级未设置时写入会话
+    if let Some(skill_wd) = skill.working_dir.clone() {
+        let conv = state.store.load(&conversation_id).await.map_err(|e| e.to_string())?;
+        let need_set = conv
+            .as_ref()
+            .map(|c| c.working_dir.is_none())
+            .unwrap_or(true);
+        if need_set {
+            state
+                .store
+                .set_working_dir(&conversation_id, Some(skill_wd))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     if skill.preamble.is_empty() {
         return Ok(());
     }
@@ -972,6 +1125,53 @@ async fn apply_skill(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 设置/清除会话级工作区路径。
+///
+/// 传入 Some(path) 设置工作区，传入 None 清除（回退到技能级或进程默认）。
+/// 设置后，该会话后续 send_message 时 read_file/list_files/shell 以此目录为基准。
+/// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
+#[tauri::command]
+async fn set_conversation_working_dir(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+    working_dir: Option<String>,
+) -> Result<(), String> {
+    state
+        .store
+        .set_working_dir(&conversation_id, working_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 获取会话级工作区路径（None 表示未设置，将回退到技能级或进程默认）。
+#[tauri::command]
+async fn get_conversation_working_dir(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<String>, String> {
+    let conv = state
+        .store
+        .load(&conversation_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(conv.and_then(|c| c.working_dir))
+}
+
+/// 调起系统目录选择对话框，返回所选目录的绝对路径。
+///
+/// 供前端设置技能/会话工作区时使用，避免用户手输路径出错。
+#[tauri::command]
+async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .set_title("选择工作区目录")
+        .blocking_pick_folder();
+    Ok(path.map(|p| p.to_string()))
 }
 
 // =========================================================
@@ -1059,12 +1259,28 @@ pub fn run() {
     // 初始化跨会话记忆索引与当前会话 id 句柄（RAG 记忆增强核心）
     let memory: Arc<MemoryIndex> = Arc::new(MemoryIndex::new());
     let current_conversation_id: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+    // 工作区句柄：send_message 时根据会话级/技能级 working_dir 更新
+    let working_dir: Arc<RwLock<Option<std::path::PathBuf>>> = Arc::new(RwLock::new(None));
 
-    // 构造 agent：注入 memory 与 current_conversation_id
+    // 初始化永久记忆存储（用户主动要求"记住"的内容）
+    let pinned_memory: Arc<PinnedMemoryStore> = match PinnedMemoryStore::new(pinned_memories_path()) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            tracing::error!(error = %e, "PinnedMemoryStore 初始化失败，回退到临时目录");
+            Arc::new(
+                PinnedMemoryStore::new(std::env::temp_dir().join("effisuite-pinned-memories.json"))
+                    .expect("临时目录 PinnedMemoryStore 必须成功"),
+            )
+        }
+    };
+
+    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir
     let agent: Arc<dyn ChatAgent> = build_agent(
         &config,
         Arc::clone(&memory),
+        Arc::clone(&pinned_memory),
         Arc::clone(&current_conversation_id),
+        Arc::clone(&working_dir),
     );
 
     // 初始化存储
@@ -1112,7 +1328,9 @@ pub fn run() {
         p2p,
         event_bus,
         memory: Arc::clone(&memory),
+        pinned_memory: Arc::clone(&pinned_memory),
         current_conversation_id: Arc::clone(&current_conversation_id),
+        working_dir: Arc::clone(&working_dir),
         scheduler_handle: std::sync::Mutex::new(None),
     };
 
@@ -1183,6 +1401,12 @@ pub fn run() {
             // RAG 记忆增强检索
             search_memory,
             get_memory_stats,
+            // 永久记忆管理
+            list_pinned_memories,
+            add_pinned_memory,
+            update_pinned_memory,
+            delete_pinned_memory,
+            clear_pinned_memories,
             // chat
             send_message,
             send_message_stream,
@@ -1195,12 +1419,15 @@ pub fn run() {
             pick_image,
             capture_photo,
             read_file_text,
+            pick_directory,
             // 技能
             list_skills,
             create_skill,
             update_skill,
             delete_skill,
             apply_skill,
+            set_conversation_working_dir,
+            get_conversation_working_dir,
             // 定时任务
             list_scheduled_tasks,
             create_scheduled_task,

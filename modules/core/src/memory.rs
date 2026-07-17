@@ -517,16 +517,92 @@ fn push_entry(state: &mut IndexState, entry: MemoryEntry) {
     state.entries.push(entry);
 }
 
-/// 分词：按空白与中英文标点切分，转小写
+/// 分词：按空白与中英文标点切分，对 CJK 字符做**单字 + bigram（二元字组）**拆分，转小写
 ///
-/// 与 `search_history`/`storage` 中的分词保持一致，
-/// 确保跨模块检索行为统一。
-fn tokenize(content: &str) -> Vec<String> {
-    content
-        .split(|c: char| c.is_whitespace() || "，。、；：！？,.:;!?\"'`()[]{}【】《》".contains(c))
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase())
-        .collect()
+/// 这是 `MemoryIndex` 的唯一分词实现，`search_history`/`storage` 等模块通过
+/// `effisuite_core::tokenize` 复用，保证索引侧与查询侧行为一致。
+///
+/// # 为什么对 CJK 做单字 + bigram？
+///
+/// - 纯整串作 token 会导致 BM25 倒排表只能精确命中整串：索引 "我们讨论过异步编程"
+///   生成单个 token，查询 "异步" 时倒排表中没有 "异步" 这个 key，召回率为 0。
+/// - 纯单字精度低、噪声大（如 "的"/"是" 命中大量文档，IDF 失效）。
+/// - bigram 是无词典中文检索的经典折中：召回与精度兼顾，零依赖，跨平台稳定。
+///
+/// # 示例
+///
+/// - `"异步编程"` → `["异步", "步编", "编程", "异", "步", "编", "程"]`
+/// - `"Rust 编程"` → `["rust", "编程", "编", "程"]`
+pub fn tokenize(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(content.len() / 2 + 4);
+    let mut ascii_buf = String::new();
+    let mut cjk_buf: Vec<char> = Vec::new();
+
+    for c in content.chars() {
+        let is_sep = c.is_whitespace()
+            || "，。、；：！？,.:;!?\"'`()[]{}【】《》".contains(c);
+        if is_sep {
+            flush_ascii(&mut ascii_buf, &mut out);
+            flush_cjk(&mut cjk_buf, &mut out);
+        } else if is_cjk(c) {
+            flush_ascii(&mut ascii_buf, &mut out);
+            cjk_buf.push(c);
+        } else {
+            flush_cjk(&mut cjk_buf, &mut out);
+            ascii_buf.push(c);
+        }
+    }
+    flush_ascii(&mut ascii_buf, &mut out);
+    flush_cjk(&mut cjk_buf, &mut out);
+    out
+}
+
+/// 判定字符是否为 CJK（中日韩）表意文字或假名
+///
+/// 覆盖 CJK 统一表意文字主区、扩展 A/B、平假名、片假名。
+/// 仅对 CJK 做单字拆分；ASCII 与其他文字按整词切分。
+#[inline]
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'      // CJK 统一表意文字（主区）
+        | '\u{3400}'..='\u{4DBF}'    // CJK 扩展 A
+        | '\u{20000}'..='\u{2A6DF}'  // CJK 扩展 B
+        | '\u{3040}'..='\u{309F}'    // 平假名
+        | '\u{30A0}'..='\u{30FF}'    // 片假名
+    )
+}
+
+/// flush ASCII / 非分词缓冲区为一个整词 token，转小写
+#[inline]
+fn flush_ascii(buf: &mut String, out: &mut Vec<String>) {
+    if !buf.is_empty() {
+        out.push(buf.to_lowercase());
+        buf.clear();
+    }
+}
+
+/// flush CJK 缓冲区：先输出 bigram（相邻二字组合），再输出单字
+///
+/// bigram 优先于单字写入顺序无语义影响（BM25 按 token 汇总分数）。
+/// 单字 + bigram 同时索引：查询 "异步" 会命中 bigram "异步"（高 IDF），
+/// 也会命中 "异"/"步" 单字（低 IDF），分数对称。
+#[inline]
+fn flush_cjk(cjk: &mut Vec<char>, out: &mut Vec<String>) {
+    if cjk.is_empty() {
+        return;
+    }
+    // bigram（相邻二字组合）
+    for w in cjk.windows(2) {
+        let mut s = String::with_capacity(8);
+        s.push(w[0]);
+        s.push(w[1]);
+        out.push(s);
+    }
+    // 单字
+    for c in cjk.iter() {
+        out.push(c.to_string());
+    }
+    cjk.clear();
 }
 
 /// BM25 检索：仅对含查询词的文档打分
@@ -723,10 +799,59 @@ mod tests {
     #[test]
     fn tokenize_handles_mixed_punctuation() {
         let tokens = tokenize("Rust 是一门系统编程语言，rust good!");
+        // ASCII 整词
         assert!(tokens.contains(&"rust".to_string()));
-        // 中文按空格/标点分词，"是一门系统编程语言" 是单个 token
-        assert!(tokens.contains(&"是一门系统编程语言".to_string()));
         assert!(tokens.contains(&"good".to_string()));
+        // CJK 被拆为单字 + bigram，不再保留整串 token
+        assert!(!tokens.contains(&"是一门系统编程语言".to_string()));
+        // bigram: "是一" / "一门" / "门系" / ...
+        assert!(tokens.contains(&"是一".to_string()));
+        assert!(tokens.contains(&"一门".to_string()));
+        // 单字
+        assert!(tokens.contains(&"是".to_string()));
+        assert!(tokens.contains(&"门".to_string()));
+    }
+
+    #[test]
+    fn tokenize_cjk_single_char() {
+        // 单字 CJK:仅产生单字 token,bigram 为空
+        let tokens = tokenize("异");
+        assert_eq!(tokens, vec!["异".to_string()]);
+    }
+
+    #[test]
+    fn tokenize_cjk_bigram_and_unigram() {
+        // "异步编程" → bigram [异步, 步编, 编程] + 单字 [异, 步, 编, 程]
+        let tokens = tokenize("异步编程");
+        assert!(tokens.contains(&"异步".to_string()));
+        assert!(tokens.contains(&"步编".to_string()));
+        assert!(tokens.contains(&"编程".to_string()));
+        assert!(tokens.contains(&"异".to_string()));
+        assert!(tokens.contains(&"步".to_string()));
+        assert!(tokens.contains(&"编".to_string()));
+        assert!(tokens.contains(&"程".to_string()));
+    }
+
+    #[tokio::test]
+    async fn cjk_short_query_hits_cross_conversation() {
+        // 回归测试:中文短查询应能命中跨会话的长文本(此前 BM25 路召回为 0)
+        let idx = MemoryIndex::new();
+        idx.add(
+            "conv_a",
+            msg("m1", Role::User, "我们讨论过异步编程的优缺点", 1),
+        )
+        .await;
+        idx.add(
+            "conv_b",
+            msg("m2", Role::User, "今天天气真不错适合出门", 2),
+        )
+        .await;
+
+        // 在 conv_b 中查询 "异步",应命中 conv_a 的消息
+        let hits = idx.search_lexical("异步", 5, Some("conv_b")).await;
+        assert_eq!(hits.len(), 1, "短查询应能跨会话命中");
+        assert_eq!(hits[0].conversation_id, "conv_a");
+        assert!(hits[0].snippet.contains("异步"));
     }
 
     #[tokio::test]

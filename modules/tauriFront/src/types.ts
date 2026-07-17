@@ -55,6 +55,12 @@ export interface Conversation {
   messages: Message[]
   device_id: string | null
   created_at: number
+  title?: string | null
+  pinned?: boolean
+  pinned_at?: number | null
+  updated_at?: number
+  /** 会话级工作区路径，覆盖技能级 working_dir */
+  working_dir?: string | null
 }
 
 export interface ConversationMeta {
@@ -202,6 +208,8 @@ export interface Skill {
   description: string
   preamble: string
   tools: string[]
+  /** 技能级工作区路径，apply_skill 时注入会话（会话级未设置时） */
+  working_dir?: string | null
   created_at: number
   builtin: boolean
 }
@@ -223,4 +231,22 @@ export interface ScheduledTaskResult {
   conversation_id: string
   content: string
   success: boolean
+}
+
+// =========================================================
+// 永久记忆（与 core::{PinnedMemory, PinnedMemorySource} 对齐）
+// =========================================================
+
+// PinnedMemorySource: #[serde(rename_all = "snake_case")]
+export type PinnedMemorySource = 'manual' | 'user_request' | 'assistant'
+
+export interface PinnedMemory {
+  id: string
+  content: string
+  // 可选分类标签，如 "preference" / "fact" / "instruction"
+  category?: string | null
+  created_at: number
+  source: PinnedMemorySource
+  // 来源会话 id（若通过对话触发），用于审计回溯
+  source_conversation_id?: string | null
 }

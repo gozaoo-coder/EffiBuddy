@@ -106,7 +106,7 @@ impl Device {
 
 /// 一段对话上下文
 ///
-/// 新增字段（title/pinned/pinned_at/updated_at）均使用 `#[serde(default)]`
+/// 新增字段（title/pinned/pinned_at/updated_at/working_dir）均使用 `#[serde(default)]`
 /// 保证旧版 JSON 文件可无感反序列化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
@@ -126,6 +126,10 @@ pub struct Conversation {
     /// 最后更新时间戳（最后一条消息的时间），用于"最近活跃"排序
     #[serde(default)]
     pub updated_at: u64,
+    /// 会话级工作区路径。设置后覆盖技能级 working_dir，
+    /// read_file / list_files / shell 的相对路径以此目录为基准。
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 impl Conversation {
@@ -139,6 +143,7 @@ impl Conversation {
             pinned: false,
             pinned_at: None,
             updated_at: created_at,
+            working_dir: None,
         }
     }
 
@@ -176,6 +181,11 @@ pub struct Skill {
     /// 启用的工具名列表（如 ["search_history","read_file","shell"]），空表示全部
     #[serde(default)]
     pub tools: Vec<String>,
+    /// 技能级工作区路径。apply_skill 时注入到会话上下文，
+    /// read_file / list_files / shell 的相对路径以此目录为基准。
+    /// 会话级 Conversation.working_dir 优先级更高，会覆盖此值。
+    #[serde(default)]
+    pub working_dir: Option<String>,
     pub created_at: u64,
     /// 是否内置（agent-reach / browser-act 等预置技能）
     #[serde(default)]
@@ -221,21 +231,24 @@ mod tests {
             description: "test".to_string(),
             preamble: "preamble".to_string(),
             tools: vec!["shell".to_string()],
+            working_dir: None,
             created_at: 42,
             builtin: true,
         };
         let json = serde_json::to_string(&s).unwrap();
-        // 模拟旧文件：移除 builtin/tools/preamble 字段后仍能反序列化
+        // 模拟旧文件：移除 builtin/tools/preamble/working_dir 字段后仍能反序列化
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut obj = v.as_object().unwrap().clone();
         obj.remove("builtin");
         obj.remove("tools");
         obj.remove("preamble");
+        obj.remove("working_dir");
         let back: Skill = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
         assert_eq!(back.id, "agent-reach");
         assert!(!back.builtin);
         assert!(back.tools.is_empty());
         assert!(back.preamble.is_empty());
+        assert!(back.working_dir.is_none());
     }
 
     #[test]
