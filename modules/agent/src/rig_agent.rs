@@ -138,7 +138,7 @@ impl RigAgent {
                 .tool(list_files)
                 .tool(shell)
                 .tool(web_fetch)
-                .default_max_turns(10)
+                .default_max_turns(usize::MAX)
                 .build()
         } else {
             builder.build()
