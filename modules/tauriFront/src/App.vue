@@ -5,11 +5,13 @@ import ChatWindow from './components/ChatWindow.vue'
 import DevicePanel from './components/DevicePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
+import { IconButton, ToastHost, SnackbarHost, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
 
 const agentBackend = ref('')
 const panelOpen = ref(false)
 const settingsOpen = ref(false)
+const { toast } = useToast()
 
 async function refreshBackend() {
   try {
@@ -40,6 +42,7 @@ function openSettings() {
 
 function onSettingsSaved(backend: string) {
   agentBackend.value = backend
+  toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
 </script>
 
@@ -52,10 +55,15 @@ function onSettingsSaved(backend: string) {
       </div>
       <div class="header-actions">
         <ThemeSwitcher />
-        <button class="header-btn" @click="openSettings">设置</button>
-        <button class="panel-toggle" :class="{ active: panelOpen }" @click="togglePanel">
-          设备
-        </button>
+        <IconButton icon="⚙" size="sm" container title="设置" @click="openSettings" />
+        <IconButton
+          :icon="panelOpen ? '✕' : '📱'"
+          size="sm"
+          container
+          :variant="panelOpen ? 'primary' : 'normal'"
+          :title="panelOpen ? '关闭设备面板' : '打开设备面板'"
+          @click="togglePanel"
+        />
       </div>
     </header>
 
@@ -75,5 +83,9 @@ function onSettingsSaved(backend: string) {
       @close="settingsOpen = false"
       @saved="onSettingsSaved"
     />
+
+    <!-- 全局反馈宿主：Toast / Snackbar -->
+    <ToastHost />
+    <SnackbarHost />
   </div>
 </template>

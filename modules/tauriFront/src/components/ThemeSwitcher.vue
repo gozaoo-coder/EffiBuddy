@@ -1,30 +1,30 @@
 <script setup lang="ts">
+/**
+ * 主题切换器：基于 SegmentedButton 组件实现
+ * 三档：亮色 ☀ / 暗色 ☾ / 系统 ⌂
+ */
 import { useTheme } from '../composables/useTheme'
+import { SegmentedButton, type SegmentedOption } from './basic'
 import type { ThemeMode } from '../types'
 
 const { themeMode, setTheme } = useTheme()
 
-const options: { value: ThemeMode; label: string; icon: string }[] = [
-  { value: 'light', label: '亮色', icon: '☀' },
-  { value: 'dark', label: '暗色', icon: '☾' },
-  { value: 'system', label: '系统', icon: '⌂' },
+const options: SegmentedOption[] = [
+  { label: '亮色', value: 'light', icon: '☀' },
+  { label: '暗色', value: 'dark', icon: '☾' },
+  { label: '跟随系统', value: 'system', icon: '⌂' },
 ]
+
+function onChange(_v: string | number, opt: SegmentedOption) {
+  setTheme(opt.value as ThemeMode)
+}
 </script>
 
 <template>
-  <div class="theme-switcher" role="radiogroup" aria-label="主题模式">
-    <button
-      v-for="opt in options"
-      :key="opt.value"
-      class="ts-btn"
-      :class="{ active: themeMode === opt.value }"
-      :aria-checked="themeMode === opt.value"
-      role="radio"
-      :title="opt.label"
-      @click="setTheme(opt.value)"
-    >
-      <span class="ts-icon">{{ opt.icon }}</span>
-      <span class="ts-label">{{ opt.label }}</span>
-    </button>
-  </div>
+  <SegmentedButton
+    :model-value="themeMode"
+    :options="options"
+    size="sm"
+    @change="onChange"
+  />
 </template>

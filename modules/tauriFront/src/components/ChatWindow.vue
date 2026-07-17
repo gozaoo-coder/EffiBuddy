@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
+import { Button, IconButton, Dialog, useToast } from './basic'
 import type {
   Message,
   Conversation,
@@ -16,6 +17,7 @@ import type {
 // 主题：用于把 is-dark 传给 MarkdownRender，确保代码块/深色样式正确
 const { resolvedTheme } = useTheme()
 const isDark = computed(() => resolvedTheme.value === 'dark')
+const { toast } = useToast()
 
 // ---------- 状态 ----------
 const conversations = ref<ConversationMeta[]>([])
@@ -25,6 +27,10 @@ const input = ref('')
 const sending = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充的气泡 id
+
+// 删除确认对话框
+const deleteDialogVisible = ref(false)
+const pendingDeleteId = ref<string | null>(null)
 
 let unlistens: UnlistenFn[] = []
 
@@ -86,14 +92,20 @@ async function newConversation() {
     await loadConversations()
     await selectConversation(id)
   } catch (e) {
-    console.warn('create_conversation failed', e)
+    toast({ content: `新建会话失败：${e}`, type: 'error' })
   }
 }
 
-async function deleteCurrent() {
+// 用 Dialog 替代 confirm()：先打开对话框，确认后真正删除
+function askDeleteCurrent() {
   if (!currentId.value || sending.value) return
-  const id = currentId.value
-  if (!confirm('确定删除该会话？此操作不可撤销。')) return
+  pendingDeleteId.value = currentId.value
+  deleteDialogVisible.value = true
+}
+
+async function confirmDelete() {
+  const id = pendingDeleteId.value
+  if (!id) return
   try {
     await invoke('delete_conversation', { id })
     if (currentId.value === id) {
@@ -101,8 +113,11 @@ async function deleteCurrent() {
       messages.value = []
     }
     await loadConversations()
+    toast({ content: '会话已删除', type: 'success' })
   } catch (e) {
-    console.warn('delete_conversation failed', e)
+    toast({ content: `删除会话失败：${e}`, type: 'error' })
+  } finally {
+    pendingDeleteId.value = null
   }
 }
 
@@ -196,6 +211,7 @@ async function send() {
       content: `请求失败：${e}`,
       timestamp: Date.now(),
     })
+    toast({ content: `请求失败：${e}`, type: 'error' })
   }
 }
 
@@ -248,6 +264,7 @@ onMounted(async () => {
         content: `流式错误：${p.error}`,
         timestamp: Date.now(),
       })
+      toast({ content: `流式错误：${p.error}`, type: 'error' })
       streamingBubbleId.value = null
       sending.value = false
     }),
@@ -265,8 +282,11 @@ onUnmounted(() => {
     <!-- 左侧：会话列表 -->
     <aside class="conv-sidebar">
       <div class="conv-head">
-        <span>会话</span>
-        <button class="new-btn" :disabled="sending" @click="newConversation">+ 新建</button>
+        <span class="conv-head-title">会话</span>
+        <Button variant="primary" size="sm" :disabled="sending" @click="newConversation">
+          <template #icon>＋</template>
+          新建
+        </Button>
       </div>
       <div class="conv-list">
         <div v-if="conversations.length === 0" class="empty-hint">
@@ -288,14 +308,20 @@ onUnmounted(() => {
     <!-- 右侧：聊天主区 -->
     <section class="chat-main">
       <div class="chat-title">
-        <span v-if="currentMeta">对话 · {{ currentMeta.id.slice(0, 8) }}… · {{ currentMeta.message_count }} 条</span>
-        <span v-else>未选择会话</span>
-        <button
+        <span v-if="currentMeta" class="chat-title-text">
+          对话 · {{ currentMeta.id.slice(0, 8) }}… · {{ currentMeta.message_count }} 条
+        </span>
+        <span v-else class="chat-title-text muted">未选择会话</span>
+        <IconButton
           v-if="currentId"
-          class="del-btn"
+          icon="🗑"
+          size="sm"
+          container
+          variant="danger"
           :disabled="sending"
-          @click="deleteCurrent"
-        >删除</button>
+          title="删除当前会话"
+          @click="askDeleteCurrent"
+        />
       </div>
 
       <div ref="scroller" class="msg-list">
@@ -328,14 +354,96 @@ onUnmounted(() => {
       <div class="composer">
         <textarea
           v-model="input"
+          class="composer-input"
           :placeholder="sending ? '生成中…' : '输入消息，Enter 发送，Shift+Enter 换行'"
           :disabled="sending || !currentId"
           @keydown="onKeydown"
         ></textarea>
-        <button :disabled="sending || !input.trim() || !currentId" @click="send">
+        <Button
+          variant="primary"
+          :loading="sending"
+          :disabled="!input.trim() || !currentId"
+          @click="send"
+        >
           {{ sending ? '生成中' : '发送' }}
-        </button>
+        </Button>
       </div>
     </section>
+
+    <!-- 删除会话确认对话框 -->
+    <Dialog
+      v-model:visible="deleteDialogVisible"
+      title="删除会话"
+      danger
+      confirm-text="删除"
+      cancel-text="取消"
+      :close-on-click-overlay="false"
+      @confirm="confirmDelete"
+    >
+      <div class="dialog-delete-content">
+        确定删除该会话？此操作不可撤销。
+        <div v-if="pendingDeleteId" class="dialog-delete-id">
+          ID：{{ pendingDeleteId.slice(0, 8) }}…
+        </div>
+      </div>
+    </Dialog>
   </div>
 </template>
+
+<style scoped>
+/* ChatWindow 局部样式：补充基础组件未覆盖的部分 */
+.conv-head-title {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.chat-title-text {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chat-title-text.muted {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.composer-input {
+  flex: 1;
+  resize: none;
+  min-height: 42px;
+  max-height: 120px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.composer-input:focus {
+  border-color: var(--primary);
+}
+
+.composer-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dialog-delete-content {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  padding: 4px 0;
+}
+
+.dialog-delete-id {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+</style>

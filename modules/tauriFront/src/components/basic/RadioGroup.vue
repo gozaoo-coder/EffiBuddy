@@ -1,11 +1,10 @@
-<script setup lang="ts">
+<script lang="ts">
 /**
  * RadioGroup 单选组组件
  * 通过 provide/inject 统一管理子 Radio 的 modelValue
  * Radio 子组件通过 inject(radioGroupKey) 自动接入组上下文
  * slot 放多个 Radio 子组件
  */
-import { provide, toRef } from 'vue'
 import type { InjectionKey, Ref } from 'vue'
 
 /** RadioGroup 注入给子 Radio 的上下文类型 */
@@ -22,6 +21,10 @@ export interface RadioGroupContext {
 
 /** provide/inject 的 key（Symbol，避免冲突） */
 export const radioGroupKey: InjectionKey<RadioGroupContext> = Symbol('radioGroup')
+</script>
+
+<script setup lang="ts">
+import { provide, toRef } from 'vue'
 
 const props = withDefaults(
   defineProps<{

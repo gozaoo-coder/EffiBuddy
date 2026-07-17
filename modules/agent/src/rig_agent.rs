@@ -144,15 +144,81 @@ impl RigAgent {
         h.extend_from_slice(messages);
     }
 
-    /// 从 messages 取最后一条 user 消息作为本轮 prompt
-    fn extract_prompt<'a>(&self, messages: &'a [Message]) -> &'a str {
-        messages
+    /// 构建包含完整对话历史的上下文 prompt
+    ///
+    /// 将历史消息格式化为对话脚本，让 LLM 能看到所有之前的交流，
+    /// 而非仅看到最后一条用户消息。这是解决 agent "一问三不知" 的关键。
+    ///
+    /// 格式：
+    /// ```text
+    /// [对话历史]
+    /// 用户: 我们之前聊过 Rust 的异步编程
+    /// 助手: 是的，Rust 的 async/await 基于 Future trait...
+    /// 用户: 那 tokio 是怎么调度这些 future 的？
+    /// 助手: tokio 使用 work-stealing 调度器...
+    ///
+    /// [当前问题]
+    /// 用户: 能再详细解释一下 work-stealing 吗？
+    /// ```
+    ///
+    /// 长消息会被截断到 800 字符，避免 token 爆炸。
+    /// 仅有一条消息时不加历史头，直接返回。
+    fn build_contextual_prompt(&self, messages: &[Message]) -> String {
+        if messages.is_empty() {
+            return "hello".to_string();
+        }
+
+        // 找到最后一条用户消息的位置
+        let last_user_idx = messages
             .iter()
-            .rev()
-            .find(|m| m.role == Role::User)
-            .map(|m| m.content.as_str())
-            .unwrap_or("hello")
+            .rposition(|m| m.role == Role::User)
+            .unwrap_or(messages.len() - 1);
+
+        // 如果只有一条消息（或只有一条用户消息），直接返回
+        let history_msgs = &messages[..last_user_idx];
+        let current_msg = &messages[last_user_idx];
+
+        if history_msgs.is_empty() {
+            return current_msg.content.clone();
+        }
+
+        // 构建完整上下文 prompt
+        // 预估容量：每条消息 ~128 字节，减少扩容
+        let mut prompt = String::with_capacity(messages.len() * 128);
+        prompt.push_str("[对话历史]\n");
+
+        for m in history_msgs {
+            let role_label = match m.role {
+                Role::User => "用户",
+                Role::Assistant => "助手",
+                Role::System => "系统",
+            };
+            let content = truncate_for_context(&m.content, 800);
+            prompt.push_str(role_label);
+            prompt.push_str(": ");
+            prompt.push_str(&content);
+            prompt.push('\n');
+        }
+
+        prompt.push_str("\n[当前问题]\n用户: ");
+        prompt.push_str(&current_msg.content);
+        prompt
     }
+}
+
+/// 截断过长消息以控制上下文 token 数
+///
+/// 在字符边界处截断，避免截断多字节 UTF-8 字符导致 panic。
+/// 截断后追加 "…" 提示内容被省略。
+fn truncate_for_context(content: &str, max_chars: usize) -> String {
+    if content.len() <= max_chars {
+        return content.to_string();
+    }
+    let boundary = content.ceil_char_boundary(max_chars);
+    let mut s = String::with_capacity(boundary + 3);
+    s.push_str(&content[..boundary]);
+    s.push('…');
+    s
 }
 
 #[async_trait]
@@ -162,10 +228,11 @@ impl ChatAgent for RigAgent {
         self.sync_history(messages).await;
 
         let agent = self.build_agent();
-        let prompt = self.extract_prompt(messages);
+        // 使用完整对话历史上下文，而非仅取最后一条用户消息
+        let prompt = self.build_contextual_prompt(messages);
 
         let resp = agent
-            .prompt(prompt)
+            .prompt(&prompt)
             .await
             .map_err(|e| CoreError::Agent(format!("rig prompt: {e}")))?;
 
@@ -176,17 +243,15 @@ impl ChatAgent for RigAgent {
         &'a self,
         messages: &'a [Message],
     ) -> BoxStream<'a, Result<String>> {
-        // 用 async_stream 风格：把 async block 转为 stream
         let s = async_stream::stream! {
             // 先同步历史
             self.sync_history(messages).await;
 
             let agent = self.build_agent();
-            let prompt = self.extract_prompt(messages).to_string();
+            // 使用完整对话历史上下文，而非仅取最后一条用户消息
+            let prompt = self.build_contextual_prompt(messages);
 
             // stream_prompt 返回 StreamingPromptRequest，await 后直接得到流
-            // （StreamingResult = Pin<Box<dyn Stream<Item = Result<MultiTurnStreamItem, StreamingError>>>>
-            //   不是 Result<Stream>，错误会在流的 item 中以 Err 出现）
             let mut stream = agent.stream_prompt(prompt).await;
 
             while let Some(item) = stream.next().await {

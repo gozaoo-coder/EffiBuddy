@@ -18,6 +18,7 @@ export { default as IconButton } from './IconButton.vue'
 
 // 下拉
 export { default as Dropdown } from './Dropdown.vue'
+export type { DropdownOption, DropdownSize } from './Dropdown.vue'
 
 // 选择类
 export { default as Switch } from './Switch.vue'
@@ -25,6 +26,7 @@ export { default as Radio } from './Radio.vue'
 export { default as RadioGroup } from './RadioGroup.vue'
 export { default as Slider } from './Slider.vue'
 export { default as SegmentedButton } from './SegmentedButton.vue'
+export type { SegmentedOption, SegmentedSize } from './SegmentedButton.vue'
 export { default as Picker } from './Picker.vue'
 export { default as Chips } from './Chips.vue'
 
