@@ -138,76 +138,6 @@ button:disabled {
   opacity: 0.55;
 }
 
-/* ============================================================
- * animejs v4 Layout 动画系统
- * CSS display property animation + enter/exit layout transitions
- * ============================================================ */
-
-/* 布局容器：标记为 animejs Layout 的观察目标 */
-.layout-container {
-  /* 容器本身不做动画限制，由 animejs 管理子元素 */
-}
-
-/* 布局子项：基础动画准备 */
-.layout-item {
-  will-change: transform, opacity;
-}
-
-/* 隐藏辅助类（用于 exit layout animation） */
-.is-hidden {
-  display: none !important;
-}
-
-/* ---------- CSS Display 切换动画 ---------- */
-/* Flex 行布局 */
-.layout-flex-row {
-  display: flex;
-  flex-direction: row;
-}
-
-/* Flex 列布局 */
-.layout-flex-col {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Flex 行反向 */
-.layout-flex-row-reverse {
-  display: flex;
-  flex-direction: row-reverse;
-}
-
-/* Grid 2 列 */
-.layout-grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-}
-
-.layout-grid-2 > :first-child {
-  grid-column: span 2;
-}
-
-/* Grid 3 列 */
-.layout-grid-3 {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-}
-
-/* Grid 首项跨全宽 */
-.layout-grid-1 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-}
-
-.layout-grid-1 > :last-child:nth-child(odd) {
-  grid-column: span 2;
-}
-
-/* None 隐藏所有子项 */
-.layout-none .layout-item {
-  display: none;
-}
-
 /* ---------- App shell ---------- */
 .app-shell {
   display: flex;
@@ -1265,6 +1195,11 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+/* anime.js Layout 离开动画标记：display:none 触发 leaveTo 过渡 */
+.toast.is-hidden {
+  display: none;
+}
+
 /* 顶部 toast 动效：从上方滑入 */
 .toast-top-enter-active,
 .toast-top-leave-active {
@@ -1367,6 +1302,11 @@ button:disabled {
 .snackbar-close:hover {
   color: var(--text);
   background: var(--card);
+}
+
+/* anime.js Layout 离开动画标记：display:none 触发 leaveTo 过渡 */
+.snackbar.is-hidden {
+  display: none;
 }
 
 /* snackbar 动效：从底部滑入 */
@@ -3539,4 +3479,91 @@ button:disabled {
 .bindsheet-right-enter-from .bindsheet-panel,
 .bindsheet-right-leave-to .bindsheet-panel {
   transform: translateX(100%);
+}
+
+/* ============================================================
+ * anime.js v4 Layout —— CSS display 属性动画工具类
+ *
+ * 这些 class 用于在 createLayout 容器上切换布局模式：
+ *   layout.update(({ root }) => root.classList.toggle('layout-grid-1'))
+ * anime.js 会自动对 flex↔grid↔none 等不可动画的 display 属性
+ * 进行位置/尺寸插值，实现流畅的布局过渡。
+ * ============================================================ */
+
+/* 布局容器：作为 createLayout 的 root，子元素参与布局动画 */
+.layout-container {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-2);
+}
+
+/* flex-row：横向排列（默认） */
+.layout-container.layout-flex-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+/* flex-col：纵向排列 */
+.layout-container.layout-flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+/* flex-row-reverse：反向横向 */
+.layout-container.layout-flex-row-reverse {
+  display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+}
+
+/* grid-1：两列网格，最后一项奇数时跨两列 */
+.layout-container.layout-grid-1 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+.layout-container.layout-grid-1 > :last-child:nth-child(odd) {
+  grid-column: span 2;
+}
+
+/* grid-2：两列网格，第一项跨两列 */
+.layout-container.layout-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+.layout-container.layout-grid-2 > :first-child {
+  grid-column: span 2;
+}
+
+/* grid-3：三列网格 */
+.layout-container.layout-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+/* none：所有子元素隐藏（用于 exit 动画的 display:none 中间态） */
+.layout-container.layout-none > .layout-item {
+  display: none;
+}
+
+/* 临时隐藏类：配合 anime.js Layout 的 leaveTo，先 display:none 再移除 */
+.layout-item.is-hidden {
+  display: none !important;
+}
+
+/* ============================================================
+ * anime.js v4 动效 tokens（与 anime.js 配合使用的统一时长/缓动）
+ * 注意：anime.js v4 接受字符串缓动名 'outQuad' / 'out(3)' / 'inOut(2)'
+ * ============================================================ */
+:root {
+  /* anime.js 常用时长（ms，anime.js duration 单位为 ms） */
+  --anime-duration-fast: 180;
+  --anime-duration-base: 280;
+  --anime-duration-slow: 420;
+  /* stagger 步进 */
+  --anime-stagger-step: 60;
 }
