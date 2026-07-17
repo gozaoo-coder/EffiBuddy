@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
+import { useListLayout } from '../composables/useLayoutAnimation'
 import { Button, IconButton, Dialog, useToast } from './basic'
 import type {
   Message,
@@ -18,6 +19,29 @@ import type {
 const { resolvedTheme } = useTheme()
 const isDark = computed(() => resolvedTheme.value === 'dark')
 const { toast } = useToast()
+
+// ---------- animejs v4 Layout 动画 ----------
+// 消息列表：入场动画
+const msgListLayout = useListLayout({
+  container: '.msg-list',
+  enterFrom: {
+    transform: 'translateY(20px) scale(0.95)',
+    opacity: 0,
+    duration: 380,
+    ease: 'out(3)',
+  },
+})
+
+// 会话列表：入场动画
+const convListLayout = useListLayout({
+  container: '.conv-list',
+  enterFrom: {
+    transform: 'translateX(-16px)',
+    opacity: 0,
+    duration: 300,
+    ease: 'out(2)',
+  },
+})
 
 // ---------- 状态 ----------
 const conversations = ref<ConversationMeta[]>([])
@@ -125,11 +149,17 @@ async function confirmDelete() {
 async function addMessage(msg: Message) {
   messages.value.push(msg)
   await nextTick()
+  // 使用 animejs animate 做气泡入场动画（与 Layout 协同）
   animate('.msg-bubble:last-child', {
     opacity: [0, 1],
-    translateY: [10, 0],
+    translateY: [16, 0],
+    scale: [0.95, 1],
     duration: 400,
     easing: 'easeOutQuad',
+  })
+  // 同时触发 Layout 刷新
+  msgListLayout.update(({ root }) => {
+    void root.offsetHeight
   })
   scrollBottom()
 }
@@ -445,5 +475,11 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--muted);
   font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+/* ---------- animejs Layout 动画辅助 ---------- */
+/* 隐藏的元素（用于退出动画） */
+.is-hidden {
+  display: none !important;
 }
 </style>

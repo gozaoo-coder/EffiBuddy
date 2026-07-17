@@ -138,6 +138,76 @@ button:disabled {
   opacity: 0.55;
 }
 
+/* ============================================================
+ * animejs v4 Layout 动画系统
+ * CSS display property animation + enter/exit layout transitions
+ * ============================================================ */
+
+/* 布局容器：标记为 animejs Layout 的观察目标 */
+.layout-container {
+  /* 容器本身不做动画限制，由 animejs 管理子元素 */
+}
+
+/* 布局子项：基础动画准备 */
+.layout-item {
+  will-change: transform, opacity;
+}
+
+/* 隐藏辅助类（用于 exit layout animation） */
+.is-hidden {
+  display: none !important;
+}
+
+/* ---------- CSS Display 切换动画 ---------- */
+/* Flex 行布局 */
+.layout-flex-row {
+  display: flex;
+  flex-direction: row;
+}
+
+/* Flex 列布局 */
+.layout-flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Flex 行反向 */
+.layout-flex-row-reverse {
+  display: flex;
+  flex-direction: row-reverse;
+}
+
+/* Grid 2 列 */
+.layout-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.layout-grid-2 > :first-child {
+  grid-column: span 2;
+}
+
+/* Grid 3 列 */
+.layout-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Grid 首项跨全宽 */
+.layout-grid-1 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.layout-grid-1 > :last-child:nth-child(odd) {
+  grid-column: span 2;
+}
+
+/* None 隐藏所有子项 */
+.layout-none .layout-item {
+  display: none;
+}
+
 /* ---------- App shell ---------- */
 .app-shell {
   display: flex;
