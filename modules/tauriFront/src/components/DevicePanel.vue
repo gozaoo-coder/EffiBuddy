@@ -21,8 +21,13 @@ function mergeDevices(incoming: Device[]) {
 }
 
 // 设备列表出现时的错峰入场动画。
+// anime.js v4 在目标选择器匹配不到任何元素时会抛出
+// "No target found"，因此需在动画前检查 DOM 是否就绪。
 async function animateList() {
+  if (devices.value.length === 0) return
   await nextTick()
+  const targets = document.querySelectorAll('.device-item')
+  if (targets.length === 0) return
   animate('.device-item', {
     opacity: [0, 1],
     translateY: [12, 0],

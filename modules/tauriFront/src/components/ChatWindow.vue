@@ -3,6 +3,8 @@ import { ref, nextTick, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
+import MarkdownRender from 'markstream-vue'
+import { useTheme } from '../composables/useTheme'
 import type {
   Message,
   Conversation,
@@ -10,6 +12,10 @@ import type {
   StreamTokenPayload,
   StreamErrorPayload,
 } from '../types'
+
+// 主题：用于把 is-dark 传给 MarkdownRender，确保代码块/深色样式正确
+const { resolvedTheme } = useTheme()
+const isDark = computed(() => resolvedTheme.value === 'dark')
 
 // ---------- 状态 ----------
 const conversations = ref<ConversationMeta[]>([])
@@ -301,7 +307,22 @@ onUnmounted(() => {
           :key="m.id"
           class="msg-bubble"
           :class="[`role-${m.role}`, { streaming: m.id === streamingBubbleId }]"
-        >{{ m.content }}<span v-if="m.id === streamingBubbleId" class="cursor">▍</span></div>
+        >
+          <template v-if="m.role === 'assistant'">
+            <MarkdownRender
+              mode="chat"
+              :content="m.content"
+              :final="m.id !== streamingBubbleId"
+              :is-dark="isDark"
+              :fade="false"
+              smooth-streaming="auto"
+              :code-block-props="{
+                theme: { light: 'vitesse-light', dark: 'vitesse-dark' },
+              }"
+            />
+          </template>
+          <template v-else>{{ m.content }}</template>
+        </div>
       </div>
 
       <div class="composer">

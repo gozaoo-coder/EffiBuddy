@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "EffiSuite",
         "width": 1024,
         "height": 720,

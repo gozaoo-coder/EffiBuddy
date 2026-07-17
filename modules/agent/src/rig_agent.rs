@@ -122,7 +122,11 @@ impl RigAgent {
             // 注册 RAG 检索工具：每次 build 都重新创建工具实例，但它们共享 history
             let search = SearchHistoryTool::new(Arc::clone(&self.history));
             let time = GetTimeTool::new(Arc::clone(&self.history));
-            builder.tool(search).tool(time).build()
+            builder
+                .tool(search)
+                .tool(time)
+                .default_max_turns(10)
+                .build()
         } else {
             builder.build()
         }
