@@ -15,5 +15,5 @@ pub use config::{
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
-pub use models::{Conversation, Device, DeviceStatus, Message, Role};
-pub use storage::ConversationStore;
+pub use models::{Attachment, AttachmentKind, Conversation, Device, DeviceStatus, Message, Role};
+pub use storage::{ConversationMeta, ConversationStore, SearchHit};

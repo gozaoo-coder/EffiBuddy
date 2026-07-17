@@ -11,9 +11,50 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{Conversation, CoreError, Message, Result};
+
+/// 会话元信息（轻量，不含消息体），用于侧栏列表展示
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMeta {
+    pub id: String,
+    pub title: Option<String>,
+    pub pinned: bool,
+    pub pinned_at: Option<u64>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub message_count: usize,
+}
+
+/// 搜索命中结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub conversation_id: String,
+    pub conversation_title: String,
+    pub message_id: String,
+    pub snippet: String,
+    pub score: usize,
+    pub timestamp: u64,
+    pub pinned: bool,
+    pub updated_at: u64,
+}
+
+/// 查询分词：按空白与中英文标点切分，转小写
+fn tokenize_query(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| c.is_whitespace() || "，。、；：！？,.:;!?".contains(c))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+/// 计算消息对关键词的命中数
+fn score_message(content: &str, keywords: &[String]) -> usize {
+    let lower = content.to_lowercase();
+    keywords.iter().filter(|kw| lower.contains(kw.as_str())).count()
+}
 
 /// 聊天记录存储，线程安全可廉价 clone（内部 RwLock + Arc 等价）
 #[derive(Clone)]
@@ -54,9 +95,10 @@ impl ConversationStore {
         Ok(Some(conv))
     }
 
-    /// 列出所有 conversation 元信息（不含消息体），按 created_at 降序
-    /// 返回 (id, created_at, message_count) 三元组
-    pub async fn list(&self) -> Result<Vec<(String, u64, usize)>> {
+    /// 列出所有 conversation 元信息（不含消息体）。
+    /// 排序规则：置顶在前（组内按 pinned_at 降序），未置顶按 updated_at 降序。
+    /// 返回 ConversationMeta 结构体。
+    pub async fn list_meta(&self) -> Result<Vec<ConversationMeta>> {
         let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
         let mut out = Vec::with_capacity(16);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
@@ -64,25 +106,154 @@ impl ConversationStore {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            // 读取并解析，提取元信息
             let bytes = match tokio::fs::read(&path).await {
                 Ok(b) => b,
-                Err(_) => continue, // 跳过无法读取的文件
+                Err(_) => continue,
             };
             let conv: Conversation = match serde_json::from_slice(&bytes) {
                 Ok(c) => c,
-                Err(_) => continue, // 跳过损坏文件
+                Err(_) => continue,
             };
             let id = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            out.push((id, conv.created_at, conv.messages.len()));
+            out.push(ConversationMeta {
+                id,
+                title: conv.title.clone(),
+                pinned: conv.pinned,
+                pinned_at: conv.pinned_at,
+                created_at: conv.created_at,
+                updated_at: conv.updated_at,
+                message_count: conv.messages.len(),
+            });
         }
-        // 按创建时间降序（最新在前）
-        out.sort_by(|a, b| b.1.cmp(&a.1));
+        // 排序：置顶在前 → 组内按 pinned_at/created_at 降序 → 未置顶按 updated_at 降序
+        out.sort_by(|a, b| {
+            match (a.pinned, b.pinned) {
+                (true, true) => {
+                    let ap = a.pinned_at.unwrap_or(a.created_at);
+                    let bp = b.pinned_at.unwrap_or(b.created_at);
+                    bp.cmp(&ap)
+                }
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => b.updated_at.cmp(&a.updated_at),
+            }
+        });
         Ok(out)
+    }
+
+    /// 兼容旧调用：返回 (id, created_at, message_count) 三元组
+    pub async fn list(&self) -> Result<Vec<(String, u64, usize)>> {
+        Ok(self
+            .list_meta()
+            .await?
+            .into_iter()
+            .map(|m| (m.id, m.created_at, m.message_count))
+            .collect())
+    }
+
+    /// 重命名会话
+    pub async fn rename(&self, id: &str, title: String) -> Result<()> {
+        let _guard = self._lock.write().await;
+        let mut conv = self
+            .load(id)
+            .await?
+            .ok_or_else(|| CoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "conversation not found",
+            )))?;
+        conv.title = Some(title);
+        self.save(&conv).await?;
+        Ok(())
+    }
+
+    /// 设置/取消置顶
+    pub async fn set_pinned(&self, id: &str, pinned: bool, now: u64) -> Result<()> {
+        let _guard = self._lock.write().await;
+        let mut conv = self
+            .load(id)
+            .await?
+            .ok_or_else(|| CoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "conversation not found",
+            )))?;
+        conv.pinned = pinned;
+        conv.pinned_at = if pinned { Some(now) } else { None };
+        self.save(&conv).await?;
+        Ok(())
+    }
+
+    /// 跨会话搜索消息内容。
+    /// 遍历所有会话文件，对每条消息做关键词匹配，返回命中结果。
+    /// 简单实现：按空白与标点分词后 contains 匹配。
+    pub async fn search(&self, query: &str) -> Result<Vec<SearchHit>> {
+        let keywords: Vec<String> = tokenize_query(query);
+        if keywords.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
+        let mut hits = Vec::with_capacity(16);
+        while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = match tokio::fs::read(&path).await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let conv: Conversation = match serde_json::from_slice(&bytes) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let conv_id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let conv_title = conv
+                .title
+                .clone()
+                .unwrap_or_else(|| conv.messages.first().map(|m| m.content.chars().take(20).collect()).unwrap_or_default());
+            for msg in &conv.messages {
+                let score = score_message(&msg.content, &keywords);
+                if score > 0 {
+                    let snippet: String = msg.content.chars().take(80).collect();
+                    hits.push(SearchHit {
+                        conversation_id: conv_id.clone(),
+                        conversation_title: conv_title.clone(),
+                        message_id: msg.id.clone(),
+                        snippet,
+                        score,
+                        timestamp: msg.timestamp,
+                        pinned: conv.pinned,
+                        updated_at: conv.updated_at,
+                    });
+                }
+            }
+            // 也匹配会话标题
+            if let Some(title) = &conv.title {
+                let score = score_message(title, &keywords) * 2; // 标题命中加权
+                if score > 0 {
+                    hits.push(SearchHit {
+                        conversation_id: conv_id.clone(),
+                        conversation_title: conv_title.clone(),
+                        message_id: String::new(),
+                        snippet: title.clone(),
+                        score,
+                        timestamp: conv.updated_at,
+                        pinned: conv.pinned,
+                        updated_at: conv.updated_at,
+                    });
+                }
+            }
+        }
+        // 按分数降序，再按时间降序
+        hits.sort_by(|a, b| b.score.cmp(&a.score).then(b.updated_at.cmp(&a.updated_at)));
+        Ok(hits)
     }
 
     /// 保存（或覆盖）整个 conversation

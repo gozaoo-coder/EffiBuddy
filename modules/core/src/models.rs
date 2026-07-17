@@ -15,6 +15,29 @@ pub enum Role {
     Assistant,
 }
 
+/// 附件类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    Image,
+    File,
+    Audio,
+}
+
+/// 消息附件（图片/文件/音频）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    pub kind: AttachmentKind,
+    /// 附件存储路径（相对 attachments 目录的文件名）
+    pub path: String,
+    /// 原始文件名
+    pub name: String,
+    pub mime_type: String,
+    /// 字节大小
+    pub size: u64,
+}
+
 /// 设备状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,13 +54,17 @@ pub enum DeviceStatus {
 
 /// 单条聊天消息
 ///
-/// 字段按大小降序排列：String(24) > u64(8) > enum(1)。
+/// 字段按大小降序排列：String(24) > Vec(24) > u64(8) > enum(1)。
+/// attachments 使用 #[serde(default)] 保证旧 JSON 向后兼容。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
     pub content: String,
     pub timestamp: u64,
     pub role: Role,
+    /// 附件列表，旧文件无此字段时反序列化为空 Vec
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 impl Message {
@@ -49,6 +76,7 @@ impl Message {
             content: content.into(),
             timestamp,
             role,
+            attachments: Vec::new(),
         }
     }
 
@@ -77,12 +105,27 @@ impl Device {
 }
 
 /// 一段对话上下文
+///
+/// 新增字段（title/pinned/pinned_at/updated_at）均使用 `#[serde(default)]`
+/// 保证旧版 JSON 文件可无感反序列化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
     pub messages: Vec<Message>,
     pub device_id: Option<String>,
     pub created_at: u64,
+    /// 用户自定义标题（改名），None 时前端用首条消息摘要
+    #[serde(default)]
+    pub title: Option<String>,
+    /// 是否置顶
+    #[serde(default)]
+    pub pinned: bool,
+    /// 置顶时间戳，用于置顶组内排序
+    #[serde(default)]
+    pub pinned_at: Option<u64>,
+    /// 最后更新时间戳（最后一条消息的时间），用于"最近活跃"排序
+    #[serde(default)]
+    pub updated_at: u64,
 }
 
 impl Conversation {
@@ -92,13 +135,21 @@ impl Conversation {
             messages: Vec::new(),
             device_id: None,
             created_at,
+            title: None,
+            pinned: false,
+            pinned_at: None,
+            updated_at: created_at,
         }
     }
 
     /// 追加消息；若历史为空则预分配，避免反复扩容。
+    /// 自动更新 updated_at 为新消息的时间戳。
     pub fn push(&mut self, msg: Message) {
         if self.messages.is_empty() {
             self.messages = Vec::with_capacity(16);
+        }
+        if msg.timestamp > self.updated_at {
+            self.updated_at = msg.timestamp;
         }
         self.messages.push(msg);
     }
