@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
+import { useAnimeTransition } from '../../composables/useAnimeTransition'
 
 export type PopupPlacement = 'top' | 'bottom' | 'left' | 'right'
 export type PopupAlign = 'start' | 'center' | 'end'
@@ -121,10 +122,10 @@ function onPopupLeave() {
   }
 }
 
-// 计算定位
-async function updatePosition() {
+// 计算定位（同步：调用方需确保 popupEl 已挂载）
+// 移除原 async + await nextTick()，因为 beforeEnter / scroll 回调触发时元素已在 DOM 中。
+function updatePosition() {
   if (!innerVisible.value || !triggerEl.value || !popupEl.value) return
-  await nextTick()
   const trig = triggerEl.value.getBoundingClientRect()
   const pop = popupEl.value.getBoundingClientRect()
   const margin = 8
@@ -186,11 +187,29 @@ async function updatePosition() {
   arrowStyle.value = arrow
 }
 
-// 监听 visible 变化计算定位
-watch(innerVisible, (v) => {
-  if (v) {
-    nextTick(() => updatePosition())
-  }
+// anime.js v4 Transition：替换原 <Transition name="popup"> 的 CSS 过渡
+// beforeEnter 在动画开始前同步计算定位，避免动画中的 scale 影响 getBoundingClientRect
+// enter/leave 用 transform + opacity，动画完成后由 useAnimeTransition 清理内联 transform
+const { onBeforeEnter, onEnter, onBeforeLeave, onLeave } = useAnimeTransition({
+  beforeEnter: (el) => {
+    const htmlEl = el as HTMLElement
+    // 预置透明，避免插入到 animate 首帧之间的可见闪烁
+    htmlEl.style.opacity = '0'
+    // 在动画开始前确定定位（此时 transform 尚未被 animate 写入）
+    updatePosition()
+  },
+  enter: {
+    opacity: [0, 1],
+    transform: ['scale(.92)', 'scale(1)'],
+    duration: 180,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    transform: ['scale(1)', 'scale(.92)'],
+    duration: 150,
+    ease: 'out(3)',
+  },
 })
 
 // 窗口滚动/缩放时重新定位
@@ -268,7 +287,7 @@ const hasHeader = computed(() => props.title || props.icon || props.showClose)
   </span>
 
   <Teleport to="body">
-    <Transition name="popup">
+    <Transition :css="false" @before-enter="onBeforeEnter" @enter="onEnter" @before-leave="onBeforeLeave" @leave="onLeave">
       <div
         v-if="innerVisible"
         ref="popupEl"

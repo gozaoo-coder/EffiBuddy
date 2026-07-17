@@ -1,5 +1,9 @@
 import { reactive, readonly } from 'vue'
 
+// 动画时长（ms），与 ToastHost/SnackbarHost 中 useLayout 的 duration 保持一致，
+// 留 40ms 缓冲以确保动画完成后才从数据源移除元素。
+const LEAVE_ANIM_DURATION = 320
+
 // ============= Toast（即时反馈）=============
 export type ToastType = 'info' | 'success' | 'warn' | 'error'
 export type ToastPosition = 'top' | 'bottom'
@@ -19,18 +23,31 @@ interface ToastItem extends Required<Omit<ToastOptions, 'duration'>> {
   id: number
   duration: number
   timer: number | null
+  /** 是否正在执行离开动画，true 时元素会被加上 is-hidden（display:none），动画完成后才从数据源移除 */
+  hiding: boolean
 }
 
 const toastState = reactive<{ items: ToastItem[] }>({ items: [] })
 let toastSeq = 0
 
-function dismissToast(id: number) {
+function removeToast(id: number) {
   const idx = toastState.items.findIndex((t) => t.id === id)
   if (idx >= 0) {
-    const item = toastState.items[idx]
-    if (item.timer) window.clearTimeout(item.timer)
     toastState.items.splice(idx, 1)
   }
+}
+
+function dismissToast(id: number) {
+  const item = toastState.items.find((t) => t.id === id)
+  if (!item || item.hiding) return
+  if (item.timer) {
+    window.clearTimeout(item.timer)
+    item.timer = null
+  }
+  // 标记为正在离开，触发 anime.js Layout 的 leaveTo 动画
+  item.hiding = true
+  // 动画完成后再真正从数据源移除，避免 Vue v-for 立即卸载元素导致动画丢失
+  window.setTimeout(() => removeToast(id), LEAVE_ANIM_DURATION)
 }
 
 function showToast(opts: ToastOptions): number {
@@ -43,12 +60,13 @@ function showToast(opts: ToastOptions): number {
     position: opts.position ?? 'top',
     duration,
     timer: null,
+    hiding: false,
   }
   if (duration > 0) {
     item.timer = window.setTimeout(() => dismissToast(id), duration)
   }
-  // 同位置最多保留 3 条，老的先移除
-  const samePos = toastState.items.filter((t) => t.position === item.position)
+  // 同位置最多保留 3 条可见 toast，老的先动画移除（排除已在隐藏流程中的）
+  const samePos = toastState.items.filter((t) => t.position === item.position && !t.hiding)
   while (samePos.length >= 3) {
     const old = samePos.shift()!
     dismissToast(old.id)
@@ -91,18 +109,29 @@ interface SnackbarItem {
   mode: 'timed' | 'persistent'
   duration: number
   timer: number | null
+  /** 是否正在执行离开动画 */
+  hiding: boolean
 }
 
 const snackbarState = reactive<{ items: SnackbarItem[] }>({ items: [] })
 let snackbarSeq = 0
 
-function dismissSnackbar(id: number) {
+function removeSnackbar(id: number) {
   const idx = snackbarState.items.findIndex((s) => s.id === id)
   if (idx >= 0) {
-    const item = snackbarState.items[idx]
-    if (item.timer) window.clearTimeout(item.timer)
     snackbarState.items.splice(idx, 1)
   }
+}
+
+function dismissSnackbar(id: number) {
+  const item = snackbarState.items.find((s) => s.id === id)
+  if (!item || item.hiding) return
+  if (item.timer) {
+    window.clearTimeout(item.timer)
+    item.timer = null
+  }
+  item.hiding = true
+  window.setTimeout(() => removeSnackbar(id), LEAVE_ANIM_DURATION)
 }
 
 function showSnackbar(opts: SnackbarOptions): number {
@@ -122,15 +151,15 @@ function showSnackbar(opts: SnackbarOptions): number {
     mode,
     duration,
     timer: null,
+    hiding: false,
   }
   if (duration > 0) {
     item.timer = window.setTimeout(() => dismissSnackbar(id), duration)
   }
-  // 同一时间最多显示 1 条 snackbar，新的替换旧的
-  while (snackbarState.items.length >= 1) {
-    const old = snackbarState.items.shift()!
-    if (old.timer) window.clearTimeout(old.timer)
-  }
+  // 同一时间最多显示 1 条可见 snackbar，旧的动画移除（已在隐藏流程中的保留至动画结束）
+  snackbarState.items.forEach((s) => {
+    if (!s.hiding) dismissSnackbar(s.id)
+  })
   snackbarState.items.push(item)
   return id
 }
@@ -143,7 +172,7 @@ if (typeof window !== 'undefined') {
     () => {
       if (scrollTimer) window.clearTimeout(scrollTimer)
       scrollTimer = window.setTimeout(() => {
-        const timed = snackbarState.items.filter((s) => s.mode === 'timed')
+        const timed = snackbarState.items.filter((s) => s.mode === 'timed' && !s.hiding)
         timed.forEach((s) => dismissSnackbar(s.id))
       }, 50)
     },
