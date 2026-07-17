@@ -13,22 +13,26 @@ import {
 } from './basic'
 import { useTheme } from '../composables/useTheme'
 import { useAnimeTransition } from '../composables/useAnimeTransition'
-import PinnedMemoryPanel from './PinnedMemoryPanel.vue'
+import ContextManagerPanel from './ContextManagerPanel.vue'
 import type { ThemeMode, ConversationMeta } from '../types'
 
-const props = defineProps<{ open: boolean }>()
+const props = defineProps<{
+  open: boolean
+  /** 当前会话 id，透传给 ContextManagerPanel 用于上下文预览 */
+  conversationId: string | null
+}>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { toast } = useToast()
 const { themeMode, resolvedTheme, setTheme } = useTheme()
 
 // 当前选中的分类
-type SettingsTab = 'appearance' | 'memory' | 'data' | 'about'
+type SettingsTab = 'appearance' | 'context' | 'data' | 'about'
 const activeTab = ref<SettingsTab>('appearance')
 
 const tabs: { key: SettingsTab; icon: string; label: string }[] = [
   { key: 'appearance', icon: 'palette', label: '外观' },
-  { key: 'memory', icon: 'pin', label: '永久记忆' },
+  { key: 'context', icon: 'pin', label: '上下文管理' },
   { key: 'data', icon: 'cloud', label: '数据管理' },
   { key: 'about', icon: 'info', label: '关于' },
 ]
@@ -226,8 +230,13 @@ function onClose() {
             </div>
           </section>
 
-          <!-- 永久记忆页 -->
-          <PinnedMemoryPanel v-else-if="activeTab === 'memory'" key="memory" :open="props.open" />
+          <!-- 上下文管理页：永久记忆 + 系统提示词 + 当前对话上下文预览 -->
+          <ContextManagerPanel
+            v-else-if="activeTab === 'context'"
+            key="context"
+            :open="props.open"
+            :conversation-id="props.conversationId"
+          />
 
           <!-- 数据管理页 -->
           <section v-else-if="activeTab === 'data'" key="data" class="page">

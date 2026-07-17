@@ -1,4 +1,21 @@
 <script setup lang="ts">
+/**
+ * ModelConfigPanel 可用模型配置面板
+ *
+ * 视图切换方案（替代旧版 Step1/2/3 三段式）：
+ * - 顶部 SegmentedButton 在两个视图间切换：
+ *   - list：我的模型（按 kind 分组展示已保存模型）
+ *   - form：添加新模型 / 编辑现有模型（紧凑单页表单）
+ * - list 视图右上角"添加"按钮 → 跳到 form 视图（新建模式）
+ * - list 视图卡片菜单"编辑" → 跳到 form 视图（编辑模式，载入 draft）
+ * - form 视图顶部"返回列表"链接 → 回到 list 视图
+ *
+ * 设计原则：
+ * - 列表优先：默认进入"我的模型"列表，新建/编辑是显式动作
+ * - 按 kind 分组：对话模型与图像生成模型分别展示，并显示各自激活态
+ * - 表单不分步骤：所有字段在一个滚动页内，preamble 等次要字段折叠
+ * - 切换视图使用淡入动画，避免突变
+ */
 import { ref, watch, onMounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -9,8 +26,10 @@ import {
   Switch,
   Dropdown,
   Menu,
+  SegmentedButton,
   type DropdownOption,
   type MenuItemOption,
+  type SegmentedOption,
   useToast,
   useSnackbar,
 } from './basic'
@@ -28,6 +47,31 @@ const config = ref<AgentConfig | null>(null)
 // 内置 provider 预设
 const presets = ref<ProviderPreset[]>([])
 
+// ---------- 顶层视图切换：list / form ----------
+type View = 'list' | 'form'
+const view = ref<View>('list')
+
+const viewOptions: SegmentedOption[] = [
+  { label: '我的模型', value: 'list' },
+  { label: '添加新模型', value: 'form' },
+]
+
+// 视图切换淡入动画
+const { onEnter, onLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    translateY: [10, 0],
+    duration: 280,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    translateY: [0, -8],
+    duration: 180,
+    ease: 'inOut(2)',
+  },
+})
+
 // 当前编辑的 draft
 const draft = ref({
   backend: 'openai' as BackendKind,
@@ -43,6 +87,15 @@ const draft = ref({
   image_size: '' as string,
   image_quality: '' as string,
 })
+// 当前编辑的模型 id（非空表示编辑模式）
+const editingId = ref<string | null>(null)
+// 保存为模型时的标签
+const saveLabel = ref('')
+const saving = ref(false)
+
+// API Key 显隐 / Preamble 折叠
+const showApiKey = ref(false)
+const preambleExpanded = ref(false)
 
 // 模型类型选项
 const kindOptions: { value: ModelKind; label: string; icon: string; desc: string }[] = [
@@ -55,20 +108,7 @@ const imageSizePresets = ['1024x1024', '1792x1024', '1024x1792', '512x512', '256
 const imageQualityPresets = ['standard', 'hd']
 
 const isImageGen = computed(() => draft.value.kind === 'image_gen')
-
-// 是否已选择 provider（控制 Step 2 展开）
-const providerSelected = computed(() => !!draft.value.provider_id)
-// 当前编辑的模型 id（非空表示编辑模式）
-const editingId = ref<string | null>(null)
-
-// 保存为模型时的标签
-const saveLabel = ref('')
-const saving = ref(false)
-
-// API Key 显隐
-const showApiKey = ref(false)
-// Preamble 折叠
-const preambleExpanded = ref(false)
+const isEditing = computed(() => !!editingId.value)
 
 // ---------- provider 视觉映射 ----------
 interface ProviderVisual {
@@ -120,29 +160,9 @@ async function loadAll() {
     ])
     config.value = c
     presets.value = p
-    syncDraftFromConfig(c)
   } catch (e) {
     toast({ content: `加载配置失败：${e}`, type: 'error' })
   }
-}
-
-function syncDraftFromConfig(c: AgentConfig) {
-  draft.value = {
-    backend: c.backend,
-    provider_id: c.provider_id || '',
-    api_key: c.api_key,
-    base_url: c.base_url,
-    model_name: c.model_name,
-    preamble: c.preamble,
-    enable_tools: c.enable_tools,
-    kind: 'chat' as ModelKind,
-    image_size: '',
-    image_quality: '',
-  }
-  editingId.value = null
-  saveLabel.value = ''
-  showApiKey.value = false
-  preambleExpanded.value = false
 }
 
 watch(
@@ -152,9 +172,10 @@ watch(
       invoke<AgentConfig>('get_config')
         .then((c) => {
           config.value = c
-          syncDraftFromConfig(c)
         })
         .catch((e) => toast({ content: `加载失败：${e}`, type: 'error' }))
+      // 每次打开默认进入 list 视图，避免上一次编辑残留
+      if (!isEditing.value) view.value = 'list'
     }
   },
 )
@@ -163,7 +184,38 @@ function findPreset(id: string): ProviderPreset | undefined {
   return presets.value.find((p) => p.id === id)
 }
 
-// ---------- Step 1: 选择 provider ----------
+// ---------- 进入 form 视图 ----------
+function switchToCreate() {
+  resetDraft()
+  view.value = 'form'
+}
+
+function switchToList() {
+  view.value = 'list'
+  // 离开 form 时若是新建未保存，清掉 draft；编辑态保留以便再次进入
+  if (!isEditing.value) resetDraft()
+}
+
+function resetDraft() {
+  draft.value = {
+    backend: 'openai',
+    provider_id: '',
+    api_key: '',
+    base_url: '',
+    model_name: '',
+    preamble: '你是 EffiSuite 的 AI 助手，简洁友好地回答用户问题。',
+    enable_tools: true,
+    kind: 'chat',
+    image_size: '',
+    image_quality: '',
+  }
+  editingId.value = null
+  saveLabel.value = ''
+  showApiKey.value = false
+  preambleExpanded.value = false
+}
+
+// ---------- provider 选择 ----------
 function selectPreset(p: ProviderPreset) {
   draft.value.provider_id = p.id
   if (p.id !== 'custom') {
@@ -174,36 +226,11 @@ function selectPreset(p: ProviderPreset) {
   editingId.value = null
 }
 
-function resetSelection() {
-  draft.value.provider_id = ''
-  draft.value.api_key = ''
-  draft.value.base_url = ''
-  draft.value.model_name = ''
-  editingId.value = null
-  saveLabel.value = ''
-}
-
-// ---------- Step 2 ↔ Step 1 切换动画 ----------
-const { onEnter: onStepEnter, onLeave: onStepLeave } = useAnimeTransition({
-  enter: {
-    opacity: [0, 1],
-    translateY: [16, 0],
-    duration: 340,
-    ease: 'out(3)',
-  },
-  leave: {
-    opacity: [1, 0],
-    translateY: [0, -8],
-    duration: 200,
-    ease: 'inOut(2)',
-  },
-})
-
 function onModelNameDropdownChange(v: string | number, _opt: DropdownOption) {
   draft.value.model_name = String(v)
 }
 
-// ---------- Step 3: 保存为可用模型 ----------
+// ---------- 保存为可用模型 ----------
 function newId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID()
@@ -237,22 +264,25 @@ async function saveAsModel() {
       enable_tools: draft.value.enable_tools,
       kind: draft.value.kind,
       // 图像生成专用字段：仅 kind=image_gen 时有值，否则传 null 让后端忽略
-      image_size: draft.value.kind === 'image_gen' && draft.value.image_size.trim()
-        ? draft.value.image_size.trim()
-        : null,
-      image_quality: draft.value.kind === 'image_gen' && draft.value.image_quality.trim()
-        ? draft.value.image_quality.trim()
-        : null,
+      image_size:
+        draft.value.kind === 'image_gen' && draft.value.image_size.trim()
+          ? draft.value.image_size.trim()
+          : null,
+      image_quality:
+        draft.value.kind === 'image_gen' && draft.value.image_quality.trim()
+          ? draft.value.image_quality.trim()
+          : null,
       created_at: Date.now(),
     }
     await invoke('save_model', { model })
-    saveLabel.value = ''
-    editingId.value = null
     toast({
       content: wasEditing ? `已更新模型「${label}」` : `已保存模型「${label}」`,
       type: 'success',
     })
     config.value = await invoke<AgentConfig>('get_config')
+    // 保存成功后回到列表视图
+    resetDraft()
+    view.value = 'list'
   } catch (e) {
     toast({ content: `保存模型失败：${e}`, type: 'error' })
   } finally {
@@ -260,7 +290,7 @@ async function saveAsModel() {
   }
 }
 
-// 编辑已有模型：载入 draft
+// 编辑已有模型：载入 draft 并跳到 form 视图
 function editModel(m: AvailableModel) {
   draft.value = {
     backend: 'openai',
@@ -277,7 +307,8 @@ function editModel(m: AvailableModel) {
   editingId.value = m.id
   saveLabel.value = m.label
   preambleExpanded.value = true
-  toast({ content: `正在编辑「${m.label}」`, type: 'info' })
+  showApiKey.value = false
+  view.value = 'form'
 }
 
 // ---------- 激活模型 ----------
@@ -295,7 +326,6 @@ async function activateModel(id: string) {
     } else {
       await invoke('set_active_model', { id })
       config.value = await invoke<AgentConfig>('get_config')
-      if (config.value) syncDraftFromConfig(config.value)
       toast({ content: '已切换对话模型并热替换 agent', type: 'success' })
     }
     emit('saved', 'rig-openai-compat')
@@ -349,10 +379,18 @@ function openModelMenu(m: AvailableModel, e: MouseEvent) {
 
 const menuItems = computed<MenuItemOption[]>(() => {
   const m = menuModel.value
-  const isActive = !!m && config.value?.active_model_id === m.id
+  const isActive =
+    !!m &&
+    (config.value?.active_model_id === m.id || config.value?.active_image_gen_model_id === m.id)
   return [
     { key: 'edit', label: '编辑', icon: 'edit' },
-    { key: 'default', label: isActive ? '当前默认' : '设为默认', icon: 'star', divided: true, disabled: isActive },
+    {
+      key: 'default',
+      label: isActive ? '当前已激活' : '设为激活',
+      icon: 'star',
+      divided: true,
+      disabled: isActive,
+    },
     { key: 'delete', label: '删除', icon: 'delete', danger: true, divided: true },
   ]
 })
@@ -365,10 +403,25 @@ function onMenuSelect(item: MenuItemOption) {
   else if (item.key === 'delete') deleteModel(m.id, m.label)
 }
 
-// ---------- 空状态与统计 ----------
+// ---------- 列表分组与统计 ----------
 const hasModels = computed(() => !!config.value && config.value.models.length > 0)
-const activeModel = computed(() =>
-  config.value?.models.find((m) => m.id === config.value?.active_model_id) ?? null,
+
+// 按 kind 分组：chat / image_gen
+const chatModels = computed<AvailableModel[]>(
+  () => config.value?.models.filter((m) => (m.kind ?? 'chat') === 'chat') ?? [],
+)
+const imageModels = computed<AvailableModel[]>(
+  () => config.value?.models.filter((m) => m.kind === 'image_gen') ?? [],
+)
+
+const activeChatModel = computed(
+  () =>
+    config.value?.models.find((m) => m.id === config.value?.active_model_id) ?? null,
+)
+const activeImageModel = computed(
+  () =>
+    config.value?.models.find((m) => m.id === config.value?.active_image_gen_model_id) ??
+    null,
 )
 
 function onClose() {
@@ -380,89 +433,183 @@ function onClose() {
   <BindSheet
     :visible="props.open"
     side="right"
-    width="560px"
+    width="620px"
     title="可用模型配置"
     @close="onClose"
   >
     <div class="mcp-body">
-      <!-- 顶部欢迎语 -->
-      <header class="mcp-hero">
-        <div class="hero-mark">🤖</div>
-        <div class="hero-text">
-          <h2 class="hero-title">配置你的 AI 模型</h2>
-          <p class="hero-sub">选择服务商，填入凭据，即可保存为可切换的可用模型</p>
-        </div>
-      </header>
+      <!-- 顶部 SegmentedButton 视图切换 -->
+      <div class="view-switch">
+        <SegmentedButton
+          v-model="view"
+          :options="viewOptions"
+          size="md"
+          block
+        />
+      </div>
 
-      <!-- Step 1: Provider 选择 -->
-      <section class="step">
-        <div class="step-head">
-          <span class="step-index">1</span>
-          <span class="step-title">选择服务商</span>
-          <button
-            v-if="providerSelected"
-            type="button"
-            class="step-reset"
-            @click="resetSelection"
-          >
-            重新选择
-          </button>
-        </div>
-
-        <div class="provider-grid">
-          <button
-            v-for="p in presets"
-            :key="p.id"
-            type="button"
-            class="provider-card"
-            :class="{ selected: draft.provider_id === p.id }"
-            @click="selectPreset(p)"
-          >
-            <span
-              class="provider-glyph"
-              :style="{ background: visualOf(p.id).accent }"
-            ><Icon :name="visualOf(p.id).glyph" :size="20" /></span>
-            <span class="provider-info">
-              <span class="provider-name">{{ p.name }}</span>
-              <span class="provider-desc">{{ visualOf(p.id).desc }}</span>
-            </span>
-            <span v-if="draft.provider_id === p.id" class="provider-check">✓</span>
-          </button>
-          <!-- 若 presets 不含 custom，补充自定义卡片 -->
-          <button
-            v-if="!presets.some((p) => p.id === 'custom')"
-            type="button"
-            class="provider-card"
-            :class="{ selected: draft.provider_id === 'custom' }"
-            @click="selectPreset({ id: 'custom', name: '自定义', default_base_url: '', default_model: '', env_var: '', docs_url: '', openai_compat: true } as ProviderPreset)"
-          >
-            <span class="provider-glyph" :style="{ background: visualOf('custom').accent }"><Icon :name="visualOf('custom').glyph" :size="20" /></span>
-            <span class="provider-info">
-              <span class="provider-name">自定义</span>
-              <span class="provider-desc">{{ visualOf('custom').desc }}</span>
-            </span>
-            <span v-if="draft.provider_id === 'custom'" class="provider-check">✓</span>
-          </button>
-        </div>
-
-        <div v-if="findPreset(draft.provider_id)?.docs_url" class="provider-hint">
-          <a :href="findPreset(draft.provider_id)!.docs_url" target="_blank" rel="noopener">
-            📖 文档：{{ findPreset(draft.provider_id)!.docs_url }}
-          </a>
-          <span v-if="findPreset(draft.provider_id)!.env_var" class="env-tag">
-            推荐环境变量 {{ findPreset(draft.provider_id)!.env_var }}
-          </span>
-        </div>
-      </section>
-
-      <!-- Step 2: 模型信息填写（选中 provider 后展开） -->
-      <Transition :css="false" @enter="onStepEnter" @leave="onStepLeave">
-        <section v-if="providerSelected" class="step step--form">
-          <div class="step-head">
-            <span class="step-index">2</span>
-            <span class="step-title">填写模型信息</span>
-            <span v-if="editingId" class="editing-tag">编辑中</span>
+      <Transition :css="false" @enter="onEnter" @leave="onLeave" mode="out-in">
+        <!-- ========== 视图 1：我的模型（按 kind 分组） ========== -->
+        <section v-if="view === 'list'" key="list" class="view-page">
+          <!-- 顶部操作条 -->
+          <div class="list-toolbar">
+            <div class="list-summary">
+              <span class="summary-chip">
+                <Icon name="chat" :size="14" />
+                对话 {{ chatModels.length }}
+              </span>
+              <span class="summary-chip summary-chip--image">
+                <Icon name="image" :size="14" />
+                图像 {{ imageModels.length }}
+              </span>
+            </div>
+            <Button variant="primary" size="sm" @click="switchToCreate">
+              <Icon name="plus" :size="14" />
+              添加模型
+            </Button>
           </div>
+
+          <!-- 空状态 -->
+          <div v-if="!hasModels" class="empty-state">
+            <div class="empty-illust">✦</div>
+            <p class="empty-text">还没有可用模型</p>
+            <p class="empty-hint">点击右上角"添加模型"，配置你的第一个 AI 模型</p>
+            <Button variant="primary" size="md" class="empty-action" @click="switchToCreate">
+              <Icon name="plus" :size="14" />
+              立即添加
+            </Button>
+          </div>
+
+          <!-- 列表分组 -->
+          <template v-else>
+            <!-- 对话模型组 -->
+            <div class="kind-group">
+              <header class="kind-group-head">
+                <span class="kind-group-title">
+                  <Icon name="chat" :size="16" />
+                  对话模型
+                  <span class="kind-group-count">{{ chatModels.length }}</span>
+                </span>
+                <span v-if="activeChatModel" class="kind-group-active">
+                  当前激活：{{ activeChatModel.label }}
+                </span>
+                <span v-else class="kind-group-active kind-group-active--none">
+                  未激活
+                </span>
+              </header>
+
+              <div v-if="chatModels.length > 0" class="model-list">
+                <div
+                  v-for="m in chatModels"
+                  :key="m.id"
+                  class="model-card"
+                  :class="{ active: config!.active_model_id === m.id }"
+                >
+                  <div class="model-card-main" @click="activateModel(m.id)">
+                    <span
+                      class="model-card-glyph"
+                      :style="{ background: visualOf(m.provider_id).accent }"
+                    >
+                      <Icon :name="visualOf(m.provider_id).glyph" :size="20" />
+                    </span>
+                    <div class="model-card-info">
+                      <div class="model-card-top">
+                        <span class="model-card-label">{{ m.label }}</span>
+                        <span
+                          v-if="config!.active_model_id === m.id"
+                          class="active-pill"
+                        >已激活</span>
+                      </div>
+                      <div class="model-card-meta">
+                        {{ m.provider_id }} · {{ m.model_name }}
+                      </div>
+                    </div>
+                  </div>
+                  <IconButton
+                    class="model-card-menu"
+                    title="更多操作"
+                    @click="(e) => openModelMenu(m, e)"
+                  >
+                    <Icon name="more" :size="20" />
+                  </IconButton>
+                </div>
+              </div>
+              <p v-else class="group-empty">暂无对话模型，点击"添加模型"创建</p>
+            </div>
+
+            <!-- 图像生成模型组 -->
+            <div class="kind-group">
+              <header class="kind-group-head">
+                <span class="kind-group-title">
+                  <Icon name="image" :size="16" />
+                  图像生成模型
+                  <span class="kind-group-count">{{ imageModels.length }}</span>
+                </span>
+                <span v-if="activeImageModel" class="kind-group-active kind-group-active--image">
+                  当前激活：{{ activeImageModel.label }}
+                </span>
+                <span v-else class="kind-group-active kind-group-active--none">
+                  未激活
+                </span>
+              </header>
+
+              <div v-if="imageModels.length > 0" class="model-list">
+                <div
+                  v-for="m in imageModels"
+                  :key="m.id"
+                  class="model-card"
+                  :class="{ active: config!.active_image_gen_model_id === m.id }"
+                >
+                  <div class="model-card-main" @click="activateModel(m.id)">
+                    <span
+                      class="model-card-glyph model-card-glyph--image"
+                      :style="{ background: visualOf(m.provider_id).accent }"
+                    >
+                      <Icon name="image" :size="20" />
+                    </span>
+                    <div class="model-card-info">
+                      <div class="model-card-top">
+                        <span class="model-card-label">{{ m.label }}</span>
+                        <span class="kind-pill kind-pill--image">图像</span>
+                        <span
+                          v-if="config!.active_image_gen_model_id === m.id"
+                          class="active-pill active-pill--image"
+                        >已激活</span>
+                      </div>
+                      <div class="model-card-meta">
+                        {{ m.provider_id }} · {{ m.model_name }}
+                        <span v-if="m.image_size" class="meta-sep">·</span>
+                        <span v-if="m.image_size">{{ m.image_size }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <IconButton
+                    class="model-card-menu"
+                    title="更多操作"
+                    @click="(e) => openModelMenu(m, e)"
+                  >
+                    <Icon name="more" :size="20" />
+                  </IconButton>
+                </div>
+              </div>
+              <p v-else class="group-empty">暂无图像生成模型，对话中调用 image_gen 工具需要先配置</p>
+            </div>
+          </template>
+        </section>
+
+        <!-- ========== 视图 2：添加/编辑模型表单 ========== -->
+        <section v-else key="form" class="view-page">
+          <!-- 表单顶部：返回 + 标题 -->
+          <header class="form-head">
+            <button type="button" class="back-link" @click="switchToList">
+              <Icon name="chevron-right" :size="14" class="back-icon" />
+              返回列表
+            </button>
+            <h3 class="form-title">
+              {{ isEditing ? `编辑：${saveLabel || '未命名模型'}` : '添加新模型' }}
+            </h3>
+            <span v-if="isEditing" class="editing-tag">编辑中</span>
+          </header>
 
           <!-- 模型类型选择 -->
           <div class="field">
@@ -486,6 +633,53 @@ function onClose() {
             </div>
           </div>
 
+          <!-- 服务商选择 -->
+          <div class="field">
+            <label class="field-label">服务商</label>
+            <div class="provider-grid">
+              <button
+                v-for="p in presets"
+                :key="p.id"
+                type="button"
+                class="provider-card"
+                :class="{ selected: draft.provider_id === p.id }"
+                @click="selectPreset(p)"
+              >
+                <span
+                  class="provider-glyph"
+                  :style="{ background: visualOf(p.id).accent }"
+                ><Icon :name="visualOf(p.id).glyph" :size="18" /></span>
+                <span class="provider-info">
+                  <span class="provider-name">{{ p.name }}</span>
+                </span>
+                <span v-if="draft.provider_id === p.id" class="provider-check">✓</span>
+              </button>
+              <button
+                v-if="!presets.some((p) => p.id === 'custom')"
+                type="button"
+                class="provider-card"
+                :class="{ selected: draft.provider_id === 'custom' }"
+                @click="selectPreset({ id: 'custom', name: '自定义', default_base_url: '', default_model: '', env_var: '', docs_url: '', openai_compat: true } as ProviderPreset)"
+              >
+                <span class="provider-glyph" :style="{ background: visualOf('custom').accent }">
+                  <Icon :name="visualOf('custom').glyph" :size="18" />
+                </span>
+                <span class="provider-info">
+                  <span class="provider-name">自定义</span>
+                </span>
+                <span v-if="draft.provider_id === 'custom'" class="provider-check">✓</span>
+              </button>
+            </div>
+            <p v-if="findPreset(draft.provider_id)?.docs_url" class="provider-hint">
+              <a :href="findPreset(draft.provider_id)!.docs_url" target="_blank" rel="noopener">
+                📖 文档：{{ findPreset(draft.provider_id)!.docs_url }}
+              </a>
+              <span v-if="findPreset(draft.provider_id)!.env_var" class="env-tag">
+                推荐 {{ findPreset(draft.provider_id)!.env_var }}
+              </span>
+            </p>
+          </div>
+
           <!-- API Key -->
           <div class="field">
             <label class="field-label">API Key</label>
@@ -507,70 +701,81 @@ function onClose() {
             </div>
           </div>
 
-          <!-- Base URL -->
-          <div class="field">
-            <label class="field-label">
-              Base URL
-              <span v-if="draft.provider_id === 'custom'" class="hint-tag">自定义</span>
-            </label>
-            <input
-              v-model="draft.base_url"
-              type="text"
-              placeholder="https://api.openai.com/v1"
-              class="field-input"
-            />
-          </div>
-
-          <!-- Model Name -->
-          <div class="field">
-            <label class="field-label">模型名</label>
-            <Dropdown
-              v-if="hasModelRecommendations && !isImageGen"
-              :model-value="draft.model_name"
-              :options="modelDropdownOptions"
-              :searchable="true"
-              placeholder="选择或搜索推荐模型..."
-              size="md"
-              @change="onModelNameDropdownChange"
-            />
-            <input
-              v-else
-              v-model="draft.model_name"
-              type="text"
-              :placeholder="isImageGen ? 'dall-e-3 / flux-pro / sd3' : 'gpt-4o-mini'"
-              class="field-input"
-            />
-          </div>
-
-          <!-- 图像生成专用字段：尺寸与质量（仅 kind=image_gen 时显示） -->
-          <template v-if="isImageGen">
+          <!-- Base URL + Model Name（两列紧凑布局） -->
+          <div class="field-row-2col">
             <div class="field">
-              <label class="field-label">默认尺寸</label>
+              <label class="field-label">
+                Base URL
+                <span v-if="draft.provider_id === 'custom'" class="hint-tag">自定义</span>
+              </label>
               <input
-                v-model="draft.image_size"
+                v-model="draft.base_url"
                 type="text"
-                placeholder="1024x1024（留空用模型默认）"
+                placeholder="https://api.openai.com/v1"
                 class="field-input"
-                list="image-size-list"
               />
-              <datalist id="image-size-list">
-                <option v-for="s in imageSizePresets" :key="s" :value="s" />
-              </datalist>
             </div>
             <div class="field">
-              <label class="field-label">默认质量</label>
-              <input
-                v-model="draft.image_quality"
-                type="text"
-                placeholder="standard / hd（留空用模型默认）"
-                class="field-input"
-                list="image-quality-list"
+              <label class="field-label">模型名</label>
+              <Dropdown
+                v-if="hasModelRecommendations && !isImageGen"
+                :model-value="draft.model_name"
+                :options="modelDropdownOptions"
+                :searchable="true"
+                placeholder="选择或搜索推荐模型..."
+                size="md"
+                @change="onModelNameDropdownChange"
               />
-              <datalist id="image-quality-list">
-                <option v-for="q in imageQualityPresets" :key="q" :value="q" />
-              </datalist>
+              <input
+                v-else
+                v-model="draft.model_name"
+                type="text"
+                :placeholder="isImageGen ? 'dall-e-3 / flux-pro / sd3' : 'gpt-4o-mini'"
+                class="field-input"
+              />
+            </div>
+          </div>
+
+          <!-- 图像生成专用字段：尺寸与质量 -->
+          <template v-if="isImageGen">
+            <div class="field-row-2col">
+              <div class="field">
+                <label class="field-label">默认尺寸</label>
+                <input
+                  v-model="draft.image_size"
+                  type="text"
+                  placeholder="1024x1024（留空用默认）"
+                  class="field-input"
+                  list="image-size-list"
+                />
+                <datalist id="image-size-list">
+                  <option v-for="s in imageSizePresets" :key="s" :value="s" />
+                </datalist>
+              </div>
+              <div class="field">
+                <label class="field-label">默认质量</label>
+                <input
+                  v-model="draft.image_quality"
+                  type="text"
+                  placeholder="standard / hd"
+                  class="field-input"
+                  list="image-quality-list"
+                />
+                <datalist id="image-quality-list">
+                  <option v-for="q in imageQualityPresets" :key="q" :value="q" />
+                </datalist>
+              </div>
             </div>
           </template>
+
+          <!-- 启用工具（仅对话模型有意义） -->
+          <div v-if="!isImageGen" class="field field-row">
+            <div class="field-row-text">
+              <label class="field-label">启用工具调用</label>
+              <span class="field-row-hint">RAG 历史检索 / 时间查询 / 图像生成</span>
+            </div>
+            <Switch v-model="draft.enable_tools" size="md" />
+          </div>
 
           <!-- System Preamble（折叠） -->
           <div class="field">
@@ -581,7 +786,9 @@ function onClose() {
               @click="preambleExpanded = !preambleExpanded"
             >
               <span class="collapsible-label">系统提示词（preamble）</span>
-              <span class="collapsible-arrow"><Icon :name="preambleExpanded ? 'chevron-down' : 'chevron-right'" :size="14" /></span>
+              <span class="collapsible-arrow">
+                <Icon :name="preambleExpanded ? 'chevron-down' : 'chevron-right'" :size="14" />
+              </span>
             </button>
             <textarea
               v-if="preambleExpanded"
@@ -592,104 +799,23 @@ function onClose() {
             ></textarea>
           </div>
 
-          <!-- Enable Tools（仅对话模型有意义） -->
-          <div v-if="!isImageGen" class="field field-row">
-            <div class="field-row-text">
-              <label class="field-label">启用工具调用</label>
-              <span class="field-row-hint">RAG 历史检索 / 时间查询 / 图像生成</span>
+          <!-- 保存区 -->
+          <div class="save-block">
+            <label class="field-label">模型标签</label>
+            <div class="save-row">
+              <input
+                v-model="saveLabel"
+                type="text"
+                :placeholder="isEditing ? '修改标签名' : '例如：我的 GPT-4o 工作号'"
+                class="field-input"
+              />
+              <Button variant="primary" :loading="saving" @click="saveAsModel">
+                {{ isEditing ? '更新并返回' : '保存并返回' }}
+              </Button>
             </div>
-            <Switch v-model="draft.enable_tools" size="md" />
           </div>
         </section>
       </Transition>
-
-      <!-- Step 3: 保存为可用模型 -->
-      <section v-if="providerSelected" class="step">
-        <div class="step-head">
-          <span class="step-index">3</span>
-          <span class="step-title">保存与激活</span>
-        </div>
-
-        <div class="save-block">
-          <label class="field-label">模型标签</label>
-          <div class="save-row">
-            <input
-              v-model="saveLabel"
-              type="text"
-              :placeholder="editingId ? '修改标签名' : '例如：我的 GPT-4o 工作号'"
-              class="field-input"
-            />
-            <Button variant="primary" :loading="saving" @click="saveAsModel">
-              {{ editingId ? '更新' : '保存' }}
-            </Button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 已保存模型列表 -->
-      <section class="step">
-        <div class="step-head">
-          <span class="step-title list-title">已保存模型</span>
-          <span v-if="hasModels" class="count-badge">{{ config!.models.length }}</span>
-        </div>
-
-        <!-- 空状态引导 -->
-        <div v-if="!hasModels" class="empty-state">
-          <div class="empty-illust">✦</div>
-          <p class="empty-text">还没有可用模型</p>
-          <p class="empty-hint">在上方选择服务商并填写信息，配置你的第一个模型吧</p>
-        </div>
-
-        <!-- 模型卡片列表 -->
-        <div v-else class="model-list">
-          <div
-            v-for="m in config!.models"
-            :key="m.id"
-            class="model-card"
-            :class="{
-              active: config!.active_model_id === m.id || config!.active_image_gen_model_id === m.id,
-            }"
-          >
-            <div class="model-card-main" @click="activateModel(m.id)">
-              <span
-                class="model-card-glyph"
-                :style="{ background: visualOf(m.provider_id).accent }"
-              ><Icon :name="(m.kind ?? 'chat') === 'image_gen' ? 'image' : visualOf(m.provider_id).glyph" :size="20" /></span>
-              <div class="model-card-info">
-                <div class="model-card-top">
-                  <span class="model-card-label">{{ m.label }}</span>
-                  <span
-                    v-if="m.kind === 'image_gen'"
-                    class="kind-pill kind-pill--image"
-                  >图像</span>
-                  <span
-                    v-else
-                    class="kind-pill kind-pill--chat"
-                  >对话</span>
-                  <span
-                    v-if="config!.active_model_id === m.id"
-                    class="active-pill"
-                  >对话已激活</span>
-                  <span
-                    v-else-if="config!.active_image_gen_model_id === m.id"
-                    class="active-pill active-pill--image"
-                  >图像已激活</span>
-                </div>
-                <div class="model-card-meta">
-                  {{ m.provider_id }} · {{ m.model_name }}
-                </div>
-              </div>
-            </div>
-            <IconButton
-              class="model-card-menu"
-              title="更多操作"
-              @click="(e) => openModelMenu(m, e)"
-            >
-              <Icon name="more-horizontal" :size="20" />
-            </IconButton>
-          </div>
-        </div>
-      </section>
     </div>
 
     <!-- 模型卡片操作菜单 -->
@@ -709,370 +835,55 @@ function onClose() {
   padding: 20px 24px 32px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   overflow-y: auto;
 }
 
-/* ---------- 顶部欢迎语 ---------- */
-.mcp-hero {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
-  background: linear-gradient(135deg, rgba(74, 126, 255, 0.14), rgba(74, 126, 255, 0.02));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+/* ---------- 顶部视图切换 ---------- */
+.view-switch {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding: 4px 0 8px;
 }
 
-.hero-mark {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius);
-  background: var(--card-2);
-  font-size: 22px;
-  flex-shrink: 0;
-}
-
-.hero-text {
-  min-width: 0;
-}
-
-.hero-title {
-  margin: 0;
-  font-size: var(--fs-md);
-  font-weight: 600;
-  color: var(--text);
-}
-
-.hero-sub {
-  margin: 4px 0 0;
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-/* ---------- 通用步骤 ---------- */
-.step {
+.view-page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
-.step--form {
-  padding: 18px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.step-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.step-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #fff;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.step-title {
-  font-size: var(--fs-base);
-  font-weight: 600;
-  color: var(--text);
-}
-
-.list-title {
-  margin-left: 0;
-}
-
-.step-reset {
-  margin-left: auto;
-  padding: 2px 10px;
-  font-family: inherit;
-  font-size: var(--fs-xs);
-  color: var(--primary);
-  background: transparent;
-  border: 1px solid var(--primary);
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-standard);
-}
-
-.step-reset:hover {
-  background: var(--primary);
-  color: #fff;
-}
-
-.editing-tag {
-  margin-left: auto;
-  padding: 2px 8px;
-  font-size: var(--fs-xs);
-  color: var(--warn);
-  background: rgba(240, 192, 74, 0.14);
-  border: 1px solid rgba(240, 192, 74, 0.4);
-  border-radius: var(--radius-full);
-}
-
-.count-badge {
-  margin-left: auto;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-  background: var(--card-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-}
-
-/* ---------- Provider 卡片网格 ---------- */
-.provider-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.provider-card {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  cursor: pointer;
-  text-align: left;
-  outline: none;
-  transition: transform var(--duration-base) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard),
-    background var(--duration-fast) var(--ease-standard),
-    box-shadow var(--duration-fast) var(--ease-standard);
-}
-
-.provider-card:hover {
-  border-color: var(--primary);
-  background: var(--card-2);
-}
-
-.provider-card.selected {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary);
-  transform: scale(1.01);
-}
-
-.provider-glyph {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  color: #fff;
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.provider-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.provider-name {
-  font-size: var(--fs-base);
-  font-weight: 600;
-  color: var(--text);
-}
-
-.provider-desc {
-  font-size: var(--fs-xs);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.provider-check {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.provider-hint {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-
-.provider-hint a {
-  color: var(--primary);
-  text-decoration: none;
-}
-
-.provider-hint a:hover {
-  text-decoration: underline;
-}
-
-.env-tag {
-  padding: 1px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  font-family: 'SFMono-Regular', Consolas, monospace;
-}
-
-/* ---------- 表单字段 ---------- */
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.field-label {
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  color: var(--text);
-}
-
-.field-input {
-  width: 100%;
-  height: var(--h-control-md);
-  padding: 0 12px;
-  font-family: inherit;
-  font-size: var(--fs-base);
-  color: var(--text);
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  transition: border-color var(--duration-fast) var(--ease-standard);
-}
-
-.field-input:focus {
-  border-color: var(--primary);
-}
-
-.field-textarea {
-  height: auto;
-  min-height: 84px;
-  padding: 10px 12px;
-  resize: vertical;
-  line-height: 1.5;
-  font-family: inherit;
-}
-
-.input-with-action {
-  display: flex;
-  gap: 8px;
-}
-
-.input-with-action .field-input {
-  flex: 1;
-}
-
-.hint-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: var(--fs-xs);
-  color: var(--warn);
-  background: rgba(240, 192, 74, 0.12);
-  border-radius: var(--radius-xs);
-}
-
-/* 折叠头 */
-.collapsible-head {
+/* ---------- 列表视图 ---------- */
+.list-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
-  height: var(--h-control-md);
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-2);
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-  transition: border-color var(--duration-fast) var(--ease-standard);
-}
-
-.collapsible-head:hover,
-.collapsible-head.expanded {
-  border-color: var(--primary);
-}
-
-.collapsible-arrow {
-  color: var(--muted);
-  font-size: var(--fs-sm);
-}
-
-/* 工具开关行 */
-.field-row {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
 }
 
-.field-row-text {
+.list-summary {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
 
-.field-row-hint {
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
   font-size: var(--fs-xs);
-  color: var(--muted);
+  color: var(--primary);
+  background: rgba(74, 126, 255, 0.10);
+  border: 1px solid rgba(74, 126, 255, 0.25);
+  border-radius: var(--radius-full);
+  font-weight: 500;
 }
 
-/* ---------- 保存区 ---------- */
-.save-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.save-row {
-  display: flex;
-  gap: 8px;
-}
-
-.save-row .field-input {
-  flex: 1;
+.summary-chip--image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.10);
+  border-color: rgba(168, 85, 247, 0.25);
 }
 
 /* ---------- 空状态 ---------- */
@@ -1109,18 +920,85 @@ function onClose() {
 }
 
 .empty-hint {
-  margin: 0;
+  margin: 0 0 8px;
   font-size: var(--fs-sm);
   color: var(--muted);
   line-height: 1.5;
   max-width: 320px;
 }
 
-/* ---------- 模型卡片列表 ---------- */
-.model-list {
+.empty-action {
+  margin-top: 4px;
+}
+
+/* ---------- kind 分组 ---------- */
+.kind-group {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.kind-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.kind-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.kind-group-count {
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+.kind-group-active {
+  font-size: var(--fs-xs);
+  color: var(--primary);
+  background: rgba(74, 126, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+
+.kind-group-active--image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.08);
+}
+
+.kind-group-active--none {
+  color: var(--muted);
+  background: var(--card-2);
+}
+
+.group-empty {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  background: var(--card-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+/* ---------- 模型卡片 ---------- */
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .model-card {
@@ -1196,6 +1074,10 @@ function onClose() {
   border-radius: var(--radius-full);
 }
 
+.active-pill--image {
+  background: #a855f7 !important;
+}
+
 .model-card-meta {
   font-size: var(--fs-xs);
   color: var(--muted);
@@ -1204,6 +1086,11 @@ function onClose() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.meta-sep {
+  margin: 0 4px;
+  opacity: 0.5;
 }
 
 .model-card-menu {
@@ -1227,6 +1114,245 @@ function onClose() {
 .model-card-menu:hover {
   background: var(--card-2);
   color: var(--text);
+}
+
+/* 模型类型 pill */
+.kind-pill {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-full);
+  font-weight: 500;
+}
+
+.kind-pill--image {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.12);
+}
+
+/* ---------- 表单视图 ---------- */
+.form-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.back-link:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.back-icon {
+  transform: rotate(180deg);
+}
+
+.form-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editing-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  background: rgba(240, 192, 74, 0.14);
+  border: 1px solid rgba(240, 192, 74, 0.4);
+  border-radius: var(--radius-full);
+}
+
+/* ---------- 表单字段 ---------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.field-input {
+  width: 100%;
+  height: var(--h-control-md);
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+  box-sizing: border-box;
+}
+
+.field-input:focus {
+  border-color: var(--primary);
+}
+
+.field-textarea {
+  height: auto;
+  min-height: 84px;
+  padding: 10px 12px;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.field-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.input-with-action {
+  display: flex;
+  gap: 8px;
+}
+
+.input-with-action .field-input {
+  flex: 1;
+}
+
+.hint-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  background: rgba(240, 192, 74, 0.12);
+  border-radius: var(--radius-xs);
+}
+
+/* ---------- provider 卡片网格 ---------- */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.provider-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+  text-align: left;
+  outline: none;
+  transition: transform var(--duration-base) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.provider-card:hover {
+  border-color: var(--primary);
+  background: var(--card-2);
+}
+
+.provider-card.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.provider-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.provider-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.provider-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.provider-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  margin: 0;
+}
+
+.provider-hint a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.provider-hint a:hover {
+  text-decoration: underline;
+}
+
+.env-tag {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-family: 'SFMono-Regular', Consolas, monospace;
 }
 
 /* ---------- 模型类型选择 ---------- */
@@ -1312,26 +1438,86 @@ function onClose() {
   font-weight: 700;
 }
 
-/* 模型卡片类型标签 */
-.kind-pill {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  font-size: var(--fs-xs);
-  border-radius: var(--radius-full);
+/* 折叠头 */
+.collapsible-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: var(--h-control-md);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
   font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+  box-sizing: border-box;
 }
 
-.kind-pill--chat {
-  color: var(--primary);
-  background: rgba(74, 126, 255, 0.12);
+.collapsible-head:hover,
+.collapsible-head.expanded {
+  border-color: var(--primary);
 }
 
-.kind-pill--image {
-  color: #a855f7;
-  background: rgba(168, 85, 247, 0.12);
+.collapsible-arrow {
+  color: var(--muted);
+  font-size: var(--fs-sm);
 }
 
-.active-pill--image {
-  background: #a855f7 !important;
+/* 工具开关行 */
+.field-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.field-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.field-row-hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ---------- 保存区 ---------- */
+.save-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.save-row {
+  display: flex;
+  gap: 8px;
+}
+
+.save-row .field-input {
+  flex: 1;
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 520px) {
+  .field-row-2col {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

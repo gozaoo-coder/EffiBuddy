@@ -12,6 +12,42 @@ use effisuite_core::{Message, Result};
 use futures::stream::BoxStream;
 use serde::Serialize;
 
+/// 上下文注入预览：把 `RigAgent::build_contextual_prompt` 拼装的最终 prompt
+/// 按段拆开返回，供前端"上下文管理"面板分块展示。
+///
+/// 字段按大小降序排列（String 24B → usize 8B → bool 1B），最小化 padding。
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextPreview {
+    /// 当前激活 agent 的系统提示词（preamble），作为 system 消息注入到 rig Agent
+    pub preamble: String,
+    /// `[永久记忆]` 段格式化字符串（含头部说明），空表示无永久记忆
+    pub pinned_section: String,
+    /// `[相关历史记忆]` 段格式化字符串（含头部说明），空表示无 RAG 命中
+    pub memory_section: String,
+    /// `[当前对话最近]` 段格式化字符串（含头部说明），空表示无历史
+    pub history_section: String,
+    /// 当前用户问题文本（最后一条 user 消息）
+    pub current_question: String,
+    /// 拼装后的完整 prompt（与实际发给 LLM 的内容一致）
+    pub full_prompt: String,
+    /// 永久记忆条目数
+    pub pinned_count: usize,
+    /// RAG 命中条目数
+    pub memory_hits_count: usize,
+    /// 当前对话历史保留的消息条数（已应用窗口截断）
+    pub history_keep_count: usize,
+    /// 当前对话总消息条数（包含当前问题）
+    pub history_total_count: usize,
+    /// 自动注入的相关历史记忆条数上限（MEMORY_AUTO_INJECT_LIMIT）
+    pub memory_inject_limit: usize,
+    /// 启用记忆增强时当前对话保留的最近消息条数（RECENT_HISTORY_WITH_MEMORY）
+    pub recent_history_limit: usize,
+    /// 单条历史消息截断字符数（HISTORY_TRUNCATE_CHARS）
+    pub history_truncate_chars: usize,
+    /// 是否启用了 RAG 跨会话记忆增强
+    pub memory_enabled: bool,
+}
+
 /// 流式事件：把模型输出按语义分类透传给前端
 ///
 /// - `Text`：模型回复文本增量（用户可见的最终答案）
@@ -75,4 +111,13 @@ pub trait ChatAgent: Send + Sync {
 
     /// 后端标识（mock / openai / ollama ...）
     fn backend(&self) -> &'static str;
+
+    /// 返回当前对话的上下文注入预览
+    ///
+    /// 默认返回 `None`（如 MockAgent），由具体实现（如 RigAgent）覆盖。
+    /// 用于"上下文管理"面板可视化展示将注入到 LLM 的完整 prompt 结构，
+    /// 不实际触发 LLM 调用，只读取已注入的永久记忆 / RAG 检索 / 当前对话历史。
+    async fn context_preview(&self, _messages: &[Message]) -> Option<ContextPreview> {
+        None
+    }
 }

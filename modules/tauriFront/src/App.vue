@@ -186,6 +186,7 @@ const modelDisplay = computed(() => {
 
     <SettingsPanel
       :open="settingsOpen"
+      :conversation-id="currentConversationId"
       @close="settingsOpen = false"
     />
 

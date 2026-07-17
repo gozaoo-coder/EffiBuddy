@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use effisuite_agent::{
-    AgentStreamItem, ChatAgent, ImageGenConfig, ImageGenTool, MockAgent, OpenAIEmbeddingProvider,
-    RigAgent, DEFAULT_EMBEDDING_MODEL,
+    AgentStreamItem, ChatAgent, ContextPreview, ImageGenConfig, ImageGenTool, MockAgent,
+    OpenAIEmbeddingProvider, RigAgent, DEFAULT_EMBEDDING_MODEL,
 };
 use effisuite_core::{
     AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, Conversation,
@@ -828,6 +828,38 @@ async fn clear_pinned_memories(
         .clear()
         .await
         .map_err(|e| e.to_string())
+}
+
+// =========================================================
+// 命令：上下文注入预览
+// =========================================================
+//
+// 返回当前 agent 在指定会话（或无会话）下将注入到 LLM 的完整 prompt 结构。
+// 仅用于"上下文管理"面板的可视化展示，不触发实际 LLM 调用。
+//
+// `conversation_id` 为 None 时使用空消息列表，仅展示 preamble + 永久记忆。
+
+/// 返回当前 agent 对指定会话的上下文注入预览。
+///
+/// - 加载该会话的完整消息历史
+/// - 调用 `agent.context_preview(&messages)` 拿到结构化预览
+/// - 返回 `Some(ContextPreview)` 或 `None`（MockAgent 后端）
+#[tauri::command]
+async fn get_context_preview(
+    state: tauri::State<'_, AppState>,
+    conversation_id: Option<String>,
+) -> Result<Option<ContextPreview>, String> {
+    let agent = state.agent.read().await.clone();
+    let messages = if let Some(id) = conversation_id.as_deref() {
+        // 加载指定会话的完整消息历史；不存在或加载失败视为空列表
+        match state.store.load(id).await {
+            Ok(Some(conv)) => conv.messages,
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    Ok(agent.context_preview(&messages).await)
 }
 
 // =========================================================
@@ -1709,6 +1741,8 @@ pub fn run() {
             update_pinned_memory,
             delete_pinned_memory,
             clear_pinned_memories,
+            // 上下文注入预览
+            get_context_preview,
             // chat
             send_message,
             send_message_stream,

@@ -16,7 +16,7 @@ pub mod mock;
 pub mod rig_agent;
 pub mod tools;
 
-pub use agent::{AgentStreamItem, ChatAgent};
+pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
 pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::RigAgent;

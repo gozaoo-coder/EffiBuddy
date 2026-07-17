@@ -281,3 +281,42 @@ export interface PinnedMemory {
   // 来源会话 id（若通过对话触发），用于审计回溯
   source_conversation_id?: string | null
 }
+
+// =========================================================
+// 上下文注入预览（与 agent::ContextPreview 对齐）
+// =========================================================
+//
+// 由后端 `get_context_preview` 命令返回，结构化展示当前 agent 对指定会话
+// 将注入到 LLM 的完整 prompt 拼装结果，便于在"上下文管理"面板可视化展示。
+//
+// 字段对应 rig_agent.rs 中 ContextPreview 结构（snake_case 序列化）。
+export interface ContextPreview {
+  /** 当前激活 agent 的系统提示词（preamble） */
+  preamble: string
+  /** `[永久记忆]` 段格式化字符串（含头部说明），空表示无永久记忆 */
+  pinned_section: string
+  /** `[相关历史记忆]` 段格式化字符串（含头部说明），空表示无 RAG 命中 */
+  memory_section: string
+  /** `[当前对话最近]` 段格式化字符串（含头部说明），空表示无历史 */
+  history_section: string
+  /** 当前用户问题文本（最后一条 user 消息） */
+  current_question: string
+  /** 拼装后的完整 prompt（与实际发给 LLM 的内容一致） */
+  full_prompt: string
+  /** 永久记忆条目数 */
+  pinned_count: number
+  /** RAG 命中条目数 */
+  memory_hits_count: number
+  /** 当前对话历史保留的消息条数（已应用窗口截断） */
+  history_keep_count: number
+  /** 当前对话总消息条数（包含当前问题） */
+  history_total_count: number
+  /** 自动注入的相关历史记忆条数上限 */
+  memory_inject_limit: number
+  /** 启用记忆增强时当前对话保留的最近消息条数 */
+  recent_history_limit: number
+  /** 单条历史消息截断字符数 */
+  history_truncate_chars: number
+  /** 是否启用了 RAG 跨会话记忆增强 */
+  memory_enabled: boolean
+}

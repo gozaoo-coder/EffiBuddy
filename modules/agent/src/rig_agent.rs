@@ -45,7 +45,7 @@ use rig_core::{
 };
 use tokio::sync::RwLock;
 
-use crate::agent::{AgentStreamItem, ChatAgent};
+use crate::agent::{AgentStreamItem, ChatAgent, ContextPreview};
 use crate::tools::{
     DeletePinnedMemoryTool, GetTimeTool, ImageGenConfig, ImageGenTool, ListFilesTool,
     ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchHistoryTool, SearchMemoryTool,
@@ -325,8 +325,90 @@ impl RigAgent {
     /// - 未启用记忆增强或无相关记忆时退化为旧行为：包含全部当前对话历史
     /// - 长消息会被截断到 800 字符，避免 token 爆炸
     async fn build_contextual_prompt(&self, messages: &[Message]) -> String {
+        // 复用 build_context_parts 的拆分逻辑，避免与预览面板出现实现分叉
+        let parts = match self.build_context_parts(messages).await {
+            None => return "hello".to_string(),
+            Some(p) => p,
+        };
+
+        // 若无永久记忆、无历史且无 RAG 记忆，直接返回当前问题（旧行为）
+        if parts.pinned_section.is_empty()
+            && parts.history_section.is_empty()
+            && parts.memory_section.is_empty()
+        {
+            return parts.current_question;
+        }
+
+        parts.assemble_prompt()
+    }
+
+    /// 构建上下文注入预览：返回结构化的各段内容 + 拼装后的完整 prompt
+    ///
+    /// 与 `build_contextual_prompt` 共享 `build_context_parts` 拆分逻辑，
+    /// 确保预览面板展示的内容与实际发给 LLM 的 prompt 完全一致。
+    /// 不实际触发 LLM 调用，只读取已注入的永久记忆 / RAG 检索 / 当前对话历史。
+    pub async fn build_context_preview(&self, messages: &[Message]) -> ContextPreview {
+        let preamble = self.preamble.clone();
+        let memory_enabled = self.memory.is_some();
+
+        match self.build_context_parts(messages).await {
+            None => ContextPreview {
+                preamble,
+                pinned_section: String::new(),
+                memory_section: String::new(),
+                history_section: String::new(),
+                current_question: String::new(),
+                full_prompt: String::new(),
+                pinned_count: 0,
+                memory_hits_count: 0,
+                history_keep_count: 0,
+                history_total_count: 0,
+                memory_inject_limit: MEMORY_AUTO_INJECT_LIMIT,
+                recent_history_limit: RECENT_HISTORY_WITH_MEMORY,
+                history_truncate_chars: HISTORY_TRUNCATE_CHARS,
+                memory_enabled,
+            },
+            Some(parts) => {
+                // 退化为纯当前问题（与 build_contextual_prompt 保持一致）
+                let full_prompt = if parts.pinned_section.is_empty()
+                    && parts.history_section.is_empty()
+                    && parts.memory_section.is_empty()
+                {
+                    parts.current_question.clone()
+                } else {
+                    parts.assemble_prompt()
+                };
+
+                ContextPreview {
+                    preamble,
+                    pinned_section: parts.pinned_section,
+                    memory_section: parts.memory_section,
+                    history_section: parts.history_section,
+                    current_question: parts.current_question,
+                    full_prompt,
+                    pinned_count: parts.pinned_count,
+                    memory_hits_count: parts.memory_hits_count,
+                    history_keep_count: parts.history_keep_count,
+                    history_total_count: messages.len(),
+                    memory_inject_limit: MEMORY_AUTO_INJECT_LIMIT,
+                    recent_history_limit: RECENT_HISTORY_WITH_MEMORY,
+                    history_truncate_chars: HISTORY_TRUNCATE_CHARS,
+                    memory_enabled,
+                }
+            }
+        }
+    }
+
+    /// 拆分 `build_contextual_prompt` 的内部逻辑为可复用结构
+    ///
+    /// 把"获取永久记忆 / RAG 检索 / 截取历史窗口 / 截断单条消息"四步拆开，
+    /// 既给 `build_contextual_prompt` 用，也给 `build_context_preview` 用，
+    /// 避免预览面板与实际 prompt 出现实现分叉。
+    ///
+    /// 返回 `None` 表示 `messages` 为空（与原 `build_contextual_prompt` 的早退分支一致）。
+    async fn build_context_parts(&self, messages: &[Message]) -> Option<ContextParts> {
         if messages.is_empty() {
-            return "hello".to_string();
+            return None;
         }
 
         // 找到最后一条用户消息的位置
@@ -342,26 +424,33 @@ impl RigAgent {
         } else {
             String::new()
         };
+        // 永久记忆条目数：解析格式化后的字符串行数（含头部说明行），减 1 得条目数
+        let pinned_count = if pinned_section.is_empty() {
+            0
+        } else {
+            pinned_section.lines().count().saturating_sub(1)
+        };
 
         // 1. 若启用记忆增强，检索跨会话相关历史
-        let memory_section = if let Some(memory) = &self.memory {
+        let (memory_section, memory_hits_count) = if let Some(memory) = &self.memory {
             // 跳过过短查询（如单字符）避免无意义检索
             let query = current_msg.content.trim();
             if query.len() < 2 {
-                String::new()
+                (String::new(), 0)
             } else {
                 let exclude = self.current_conversation_id.read().await.clone();
                 let hits = memory
                     .search_hybrid(query, MEMORY_AUTO_INJECT_LIMIT, exclude.as_deref())
                     .await;
+                let count = hits.len();
                 if hits.is_empty() {
-                    String::new()
+                    (String::new(), 0)
                 } else {
-                    format_memory_section(&hits)
+                    (format_memory_section(&hits), count)
                 }
             }
         } else {
-            String::new()
+            (String::new(), 0)
         };
 
         // 2. 当前对话历史：启用记忆时只取最近 N 条，否则取全部（旧行为）
@@ -372,36 +461,12 @@ impl RigAgent {
             &messages[..last_user_idx]
         };
 
-        // 3. 若无永久记忆、无历史且无 RAG 记忆，直接返回当前问题
-        if pinned_section.is_empty()
-            && history_msgs.is_empty()
-            && memory_section.is_empty()
-        {
-            return current_msg.content.clone();
-        }
-
-        // 4. 拼装 prompt
-        // 预估容量：永久记忆段 + RAG 记忆段 + 历史段 + 当前问题
-        let mut prompt = String::with_capacity(
-            pinned_section.len()
-                + memory_section.len()
-                + history_msgs.len() * 128
-                + current_msg.content.len()
-                + 64,
-        );
-
-        if !pinned_section.is_empty() {
-            prompt.push_str(&pinned_section);
-            prompt.push('\n');
-        }
-
-        if !memory_section.is_empty() {
-            prompt.push_str(&memory_section);
-            prompt.push('\n');
-        }
-
-        if !history_msgs.is_empty() {
-            prompt.push_str("[当前对话最近]\n");
+        // 3. 格式化历史段（含 `[当前对话最近]` 头部）
+        let history_section = if history_msgs.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::with_capacity(history_msgs.len() * 128 + 32);
+            s.push_str("[当前对话最近]\n");
             for m in history_msgs {
                 let role_label = match m.role {
                     Role::User => "用户",
@@ -409,16 +474,66 @@ impl RigAgent {
                     Role::System => "系统",
                 };
                 let content = truncate_for_context(&m.content, HISTORY_TRUNCATE_CHARS);
-                prompt.push_str(role_label);
-                prompt.push_str(": ");
-                prompt.push_str(&content);
-                prompt.push('\n');
+                s.push_str(role_label);
+                s.push_str(": ");
+                s.push_str(&content);
+                s.push('\n');
             }
+            s
+        };
+
+        Some(ContextParts {
+            pinned_section,
+            pinned_count,
+            memory_section,
+            memory_hits_count,
+            history_section,
+            history_keep_count: history_msgs.len(),
+            current_question: current_msg.content.clone(),
+        })
+    }
+}
+
+/// `build_context_parts` 的中间产物：把各段拼装前的内容拆开保存
+///
+/// 用于 `build_contextual_prompt` 与 `build_context_preview` 共享拆分逻辑。
+struct ContextParts {
+    pinned_section: String,
+    memory_section: String,
+    history_section: String,
+    current_question: String,
+    pinned_count: usize,
+    memory_hits_count: usize,
+    history_keep_count: usize,
+}
+
+impl ContextParts {
+    /// 把各段按 `[永久记忆] → [相关历史记忆] → [当前对话最近] → [当前问题]` 顺序拼装
+    ///
+    /// 与原 `build_contextual_prompt` 第 4 步的拼装逻辑保持一致。
+    fn assemble_prompt(&self) -> String {
+        let mut prompt = String::with_capacity(
+            self.pinned_section.len()
+                + self.memory_section.len()
+                + self.history_section.len()
+                + self.current_question.len()
+                + 64,
+        );
+
+        if !self.pinned_section.is_empty() {
+            prompt.push_str(&self.pinned_section);
             prompt.push('\n');
         }
-
+        if !self.memory_section.is_empty() {
+            prompt.push_str(&self.memory_section);
+            prompt.push('\n');
+        }
+        if !self.history_section.is_empty() {
+            prompt.push_str(&self.history_section);
+            prompt.push('\n');
+        }
         prompt.push_str("[当前问题]\n用户: ");
-        prompt.push_str(&current_msg.content);
+        prompt.push_str(&self.current_question);
         prompt
     }
 }
@@ -606,5 +721,10 @@ impl ChatAgent for RigAgent {
     #[inline]
     fn backend(&self) -> &'static str {
         "rig-openai-compat"
+    }
+
+    /// 委托给 `build_context_preview`，返回结构化上下文预览供前端展示
+    async fn context_preview(&self, messages: &[Message]) -> Option<ContextPreview> {
+        Some(self.build_context_preview(messages).await)
     }
 }
