@@ -45,3 +45,47 @@ export interface PairingRequestPayload {
   kind: 'pairing_request'
   device: Device
 }
+
+// =========================================================
+// 会话 & 配置（与 core::{Conversation, AgentConfig} 对齐）
+// =========================================================
+
+export interface Conversation {
+  id: string
+  messages: Message[]
+  device_id: string | null
+  created_at: number
+}
+
+export interface ConversationMeta {
+  id: string
+  created_at: number
+  message_count: number
+}
+
+export type BackendKind = 'mock' | 'openai'
+
+export interface AgentConfig {
+  backend: BackendKind
+  api_key: string
+  base_url: string
+  model_name: string
+  preamble: string
+  enable_tools: boolean
+}
+
+// =========================================================
+// 流式事件 payload（与 tauriFront/src-tauri/src/lib.rs 中
+// StreamTokenPayload / StreamErrorPayload 对齐）
+// =========================================================
+
+export interface StreamTokenPayload {
+  conversation_id: string
+  content: string
+  done: boolean
+}
+
+export interface StreamErrorPayload {
+  conversation_id: string
+  error: string
+}
