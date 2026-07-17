@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import ChatWindow from './components/ChatWindow.vue'
 import SideNav from './components/SideNav.vue'
 import DevicePanel from './components/DevicePanel.vue'
@@ -10,6 +11,7 @@ import SkillPanel from './components/SkillPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
 import { IconButton, Icon, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
+import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
 // 侧栏抽屉（Kimi 风格左侧抽屉）
@@ -26,6 +28,9 @@ const { toast } = useToast()
 
 // SideNav 实例引用：用于在会话变更时调用 refresh()
 const sideNavRef = ref<{ refresh: () => void } | null>(null)
+
+// 事件取消订阅句柄集合
+let unlistens: UnlistenFn[] = []
 
 async function refreshBackend() {
   try {
@@ -44,6 +49,19 @@ onMounted(async () => {
     // 默认 system
   }
   await refreshBackend()
+
+  // 监听 set_title 工具成功更新标题事件：立即刷新 SideNav 列表
+  // 不必等流结束，LLM 调用 set_title 后前端就能看到新标题
+  unlistens.push(
+    await listen<ConversationTitlePayload>('conversation-title-updated', () => {
+      sideNavRef.value?.refresh()
+    }),
+  )
+})
+
+onUnmounted(() => {
+  unlistens.forEach((fn) => fn?.())
+  unlistens = []
 })
 
 function toggleSideNav() {

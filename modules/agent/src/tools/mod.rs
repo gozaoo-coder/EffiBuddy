@@ -24,6 +24,7 @@ pub mod pin_memory;
 pub mod read_file;
 pub mod search_history;
 pub mod search_memory;
+pub mod set_title;
 pub mod shell;
 pub mod web_fetch;
 
@@ -36,6 +37,7 @@ pub use pin_memory::{
 pub use read_file::ReadFileTool;
 pub use search_history::SearchHistoryTool;
 pub use search_memory::SearchMemoryTool;
+pub use set_title::SetTitleTool;
 pub use shell::ShellTool;
 pub use web_fetch::WebFetchTool;
 

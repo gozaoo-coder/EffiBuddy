@@ -209,6 +209,13 @@ export interface AgentAttachmentPayload {
   attachment: Attachment
 }
 
+// 会话标题更新 payload（conversation-title-updated 事件）
+// set_title 工具成功更新标题后实时 emit，前端立即刷新 SideNav 列表
+export interface ConversationTitlePayload {
+  conversation_id: string
+  title: string
+}
+
 // 单次工具调用记录（前端聚合 ToolCallStart + ToolResult 后的结构）
 export interface ToolCallRecord {
   call_id: string

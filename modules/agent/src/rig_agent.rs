@@ -30,7 +30,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use effisuite_core::{CoreError, MemoryIndex, Message, PinnedMemoryStore, Result, Role};
+use effisuite_core::{
+    ConversationStore, CoreError, MemoryIndex, Message, PinnedMemoryStore, Result, Role,
+};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use rig_core::{
@@ -47,7 +49,7 @@ use crate::agent::{AgentStreamItem, ChatAgent};
 use crate::tools::{
     DeletePinnedMemoryTool, GetTimeTool, ImageGenConfig, ImageGenTool, ListFilesTool,
     ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchHistoryTool, SearchMemoryTool,
-    ShellTool, WebFetchTool,
+    SetTitleTool, ShellTool, WebFetchTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -85,6 +87,8 @@ pub struct RigAgent {
     image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
     /// 附件保存目录（绝对路径），ImageGenTool 把生成图片落盘到此目录。
     attachments_dir: PathBuf,
+    /// 会话存储句柄，SetTitleTool 据此调用 store.rename 持久化标题
+    store: Arc<ConversationStore>,
 }
 
 impl RigAgent {
@@ -95,6 +99,7 @@ impl RigAgent {
     /// `working_dir` 共享句柄用于工作区路径注入，传新的空句柄则默认不限制。
     /// `image_gen_config` 共享句柄供 ImageGenTool 读取，None 则 image_gen 工具不可用。
     /// `attachments_dir` 为图片落盘目录（绝对路径）。
+    /// `store` 共享会话存储句柄，SetTitleTool 据此持久化标题。
     pub fn from_env(
         model_name: impl Into<String>,
         preamble: impl Into<String>,
@@ -105,6 +110,7 @@ impl RigAgent {
         working_dir: Arc<RwLock<Option<PathBuf>>>,
         image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
         attachments_dir: PathBuf,
+        store: Arc<ConversationStore>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -120,6 +126,7 @@ impl RigAgent {
             working_dir,
             image_gen_config,
             attachments_dir,
+            store,
         })
     }
 
@@ -134,6 +141,7 @@ impl RigAgent {
     /// - `image_gen_config` 共享句柄供 ImageGenTool 读取（用户切换到 image_gen 模型时由
     ///   Tauri 命令层更新），None 时 image_gen 工具调用返回错误提示
     /// - `attachments_dir` 为图片落盘目录（绝对路径），ImageGenTool 据此保存生成结果
+    /// - `store` 共享会话存储句柄，SetTitleTool 据此持久化标题
     pub fn from_key(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
@@ -146,6 +154,7 @@ impl RigAgent {
         working_dir: Arc<RwLock<Option<PathBuf>>>,
         image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
         attachments_dir: PathBuf,
+        store: Arc<ConversationStore>,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -168,6 +177,7 @@ impl RigAgent {
             working_dir,
             image_gen_config,
             attachments_dir,
+            store,
         })
     }
 
@@ -234,6 +244,12 @@ impl RigAgent {
                 Arc::clone(&self.image_gen_config),
                 self.attachments_dir.clone(),
             );
+            // 会话标题设置工具：LLM 据此为会话生成/更新标题（≤25 字）
+            // 共享 store 与 current_conversation_id 句柄，调用时直接落盘
+            let set_title = SetTitleTool::new(
+                Arc::clone(&self.store),
+                Arc::clone(&self.current_conversation_id),
+            );
 
             let mut b = builder
                 .tool(search)
@@ -242,7 +258,8 @@ impl RigAgent {
                 .tool(list_files)
                 .tool(shell)
                 .tool(web_fetch)
-                .tool(image_gen);
+                .tool(image_gen)
+                .tool(set_title);
 
             // 跨会话记忆检索工具：仅在 MemoryIndex 可用时注册
             if let Some(memory) = &self.memory {

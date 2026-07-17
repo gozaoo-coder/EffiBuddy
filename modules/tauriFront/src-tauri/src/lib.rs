@@ -157,6 +157,7 @@ fn build_agent(
     working_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
     image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
     attachments_dir: std::path::PathBuf,
+    store: Arc<ConversationStore>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -172,6 +173,7 @@ fn build_agent(
                 working_dir,
                 image_gen_config,
                 attachments_dir,
+                store,
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -319,7 +321,7 @@ async fn set_config(
         *state.image_gen_config.write().await = None;
     }
 
-    // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config
+    // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config / store
     let new_agent = build_agent(
         &config,
         Arc::clone(&state.memory),
@@ -328,6 +330,7 @@ async fn set_config(
         Arc::clone(&state.working_dir),
         Arc::clone(&state.image_gen_config),
         state.attachments_dir.clone(),
+        Arc::clone(&state.store),
     );
 
     // 替换 state 中的 agent 和 config
@@ -589,6 +592,7 @@ async fn set_active_model(
                 Arc::clone(&state.working_dir),
                 Arc::clone(&state.image_gen_config),
                 state.attachments_dir.clone(),
+                Arc::clone(&state.store),
             );
             {
                 let mut agent_lock = state.agent.write().await;
@@ -950,8 +954,11 @@ async fn send_message_stream(
     tauri::async_runtime::spawn(async move {
         let mut stream = agent.chat_stream(&history);
         let mut full = String::with_capacity(256);
-        // 跟踪 call_id → tool_name 映射，用于在 ToolResult 时判断是否为 image_gen
+        // 跟踪 call_id → tool_name 映射，用于在 ToolResult 时判断是否为 image_gen / set_title
         let mut tool_call_names: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        // 跟踪 call_id → arguments 映射，set_title 结果到达时解析 title 字段
+        let mut tool_call_args: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         // 收集 image_gen 工具生成的图片附件，流结束后注入到助手消息
         let mut image_attachments: Vec<Attachment> = Vec::new();
@@ -983,9 +990,11 @@ async fn send_message_stream(
                     );
                 }
                 Ok(AgentStreamItem::ToolCallStart { call_id, tool_name, arguments }) => {
-                    // 记录 call_id → tool_name，供 ToolResult 时判断是否为 image_gen
+                    // 记录 call_id → tool_name，供 ToolResult 时判断是否为 image_gen / set_title
                     tool_call_names.insert(call_id.clone(), tool_name.clone());
                     let args_str = serde_json::to_string(&arguments).unwrap_or_else(|_| "null".to_string());
+                    // 记录 call_id → args_str，供 set_title 结果到达时解析 title 字段
+                    tool_call_args.insert(call_id.clone(), args_str.clone());
                     let _ = handle.emit(
                         "agent-tool-call",
                         &AgentToolCallPayload {
@@ -1010,6 +1019,23 @@ async fn send_message_stream(
                                     },
                                 );
                                 image_attachments.push(att);
+                            }
+                        } else if name == "set_title" && !is_error {
+                            // set_title 工具已自行调用 store.rename 持久化标题。
+                            // 这里从 arguments 解析 title，emit 事件让前端立即刷新 SideNav，
+                            // 不必等流结束。解析失败则静默（流结束的 conversation-changed 仍会刷新）。
+                            if let Some(title) = tool_call_args
+                                .get(&call_id)
+                                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                .and_then(|v| v.get("title").and_then(|t| t.as_str()).map(str::to_string))
+                            {
+                                let _ = handle.emit(
+                                    "conversation-title-updated",
+                                    &ConversationTitlePayload {
+                                        conversation_id: &conv_id,
+                                        title: &title,
+                                    },
+                                );
                             }
                         }
                     }
@@ -1120,6 +1146,16 @@ struct AgentToolResultPayload<'a> {
 struct AgentAttachmentPayload<'a> {
     conversation_id: &'a str,
     attachment: &'a Attachment,
+}
+
+/// 会话标题更新 payload（conversation-title-updated 事件）
+///
+/// 当 set_title 工具成功更新标题后实时 emit，前端立即刷新 SideNav 列表，
+/// 无需等流结束。title 为 SetTitleTool 返回的截断后标题。
+#[derive(Debug, serde::Serialize)]
+struct ConversationTitlePayload<'a> {
+    conversation_id: &'a str,
+    title: &'a str,
 }
 
 /// 解析 image_gen 工具输出为 Attachment。
@@ -1531,18 +1567,7 @@ pub fn run() {
         }
     };
 
-    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir / image_gen_config
-    let agent: Arc<dyn ChatAgent> = build_agent(
-        &config,
-        Arc::clone(&memory),
-        Arc::clone(&pinned_memory),
-        Arc::clone(&current_conversation_id),
-        Arc::clone(&working_dir),
-        Arc::clone(&image_gen_config),
-        attachments_root.clone(),
-    );
-
-    // 初始化存储
+    // 初始化会话存储：SetTitleTool 需要此句柄持久化标题，必须在 build_agent 之前完成
     let store = match ConversationStore::new(conversations_dir()) {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -1553,6 +1578,19 @@ pub fn run() {
             )
         }
     };
+
+    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir / image_gen_config / store
+    let agent: Arc<dyn ChatAgent> = build_agent(
+        &config,
+        Arc::clone(&memory),
+        Arc::clone(&pinned_memory),
+        Arc::clone(&current_conversation_id),
+        Arc::clone(&working_dir),
+        Arc::clone(&image_gen_config),
+        attachments_root.clone(),
+        Arc::clone(&store),
+    );
+
     let skill_store = match SkillStore::new(skills_dir()) {
         Ok(s) => s,
         Err(e) => {
