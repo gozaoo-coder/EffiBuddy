@@ -1,0 +1,435 @@
+<script setup lang="ts">
+/**
+ * ToolCallGroup 工具调用提示组
+ *
+ * 用于展示 LLM 连续调用多个工具的过程：
+ * - 多条工具调用默认折叠为一个组，标题"🔧 使用了 N 个工具"
+ * - 展开后每条 tool call 占 54px 高度，显示工具名、参数摘要、状态
+ * - 点击某条 tool call → BindSheet 弹出显示该工具的完整参数与返回结果
+ *
+ * 设计要点：
+ * - 连续 tools 折叠显示，避免占用过多纵向空间
+ * - 每条 54px 高度限制，超出截断
+ * - 点击查看详情使用 BindSheet（side=bottom），与移动端体验一致
+ */
+import { ref, computed, watch, nextTick } from 'vue'
+import { animate } from 'animejs'
+import { BindSheet } from './basic'
+import type { ToolCallRecord } from '../types'
+
+const props = defineProps<{
+  /** 工具调用记录列表（按时间顺序） */
+  calls: ToolCallRecord[]
+}>()
+
+// 整组是否折叠：多条默认折叠，单条默认展开
+const groupCollapsed = ref(props.calls.length > 1)
+// 当列表长度变化时，若是首次新增（从 0 → 1），保持展开
+watch(
+  () => props.calls.length,
+  (n, old) => {
+    if (old === 0 && n === 1) groupCollapsed.value = false
+  },
+)
+
+const groupBodyRef = ref<HTMLElement | null>(null)
+
+// 当前选中查看详情的 tool call
+const selectedIdx = ref<number | null>(null)
+const detailVisible = ref(false)
+
+const selectedCall = computed(() =>
+  selectedIdx.value !== null ? props.calls[selectedIdx.value] : null,
+)
+
+// 整组展开/折叠切换
+function toggleGroup() {
+  if (groupCollapsed.value) expandGroup()
+  else collapseGroup()
+}
+
+function expandGroup() {
+  groupCollapsed.value = false
+  nextTick(() => {
+    const el = groupBodyRef.value
+    if (!el) return
+    const targetH = el.scrollHeight
+    animate(el, {
+      maxHeight: ['0px', `${targetH}px`],
+      opacity: [0, 1],
+      duration: 280,
+      ease: 'out(3)',
+    })
+  })
+}
+
+function collapseGroup() {
+  const el = groupBodyRef.value
+  if (el) {
+    animate(el, {
+      maxHeight: [`${el.scrollHeight}px`, '0px'],
+      opacity: [1, 0],
+      duration: 220,
+      ease: 'inOut(2)',
+      onComplete: () => {
+        groupCollapsed.value = true
+      },
+    })
+  } else {
+    groupCollapsed.value = true
+  }
+}
+
+// 点击单条 tool call → 弹出详情
+function openDetail(idx: number) {
+  selectedIdx.value = idx
+  detailVisible.value = true
+}
+
+// 工具图标：根据工具名映射
+function toolIcon(name: string): string {
+  const map: Record<string, string> = {
+    search_history: '🔍',
+    get_time: '🕐',
+    read_file: '📄',
+    list_files: '📁',
+    shell: '⚙️',
+    web_fetch: '🌐',
+  }
+  return map[name] || '🛠'
+}
+
+// 参数摘要：取前 40 字符
+function argsSummary(args: string): string {
+  if (!args || args === 'null' || args === '{}') return '无参数'
+  const trimmed = args.length > 40 ? args.slice(0, 40) + '…' : args
+  return trimmed
+}
+
+// 美化 JSON 用于详情显示
+function prettyJson(s: string): string {
+  if (!s) return ''
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2)
+  } catch {
+    return s
+  }
+}
+
+// 状态文案
+function statusText(c: ToolCallRecord): string {
+  if (c.pending) return '执行中…'
+  if (c.is_error) return '失败'
+  return '完成'
+}
+
+// 完成数量
+const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
+</script>
+
+<template>
+  <div v-if="calls.length > 0" class="tool-group">
+    <!-- 组标题：54px -->
+    <div class="group-header" @click="toggleGroup">
+      <span class="group-icon">🔧</span>
+      <span class="group-title">
+        {{ calls.length === 1 ? '使用了工具' : `使用了 ${calls.length} 个工具` }}
+      </span>
+      <span class="group-progress">{{ doneCount }}/{{ calls.length }}</span>
+      <span class="group-arrow">{{ groupCollapsed ? '▸' : '▾' }}</span>
+    </div>
+
+    <!-- 工具列表：每条 54px -->
+    <div v-show="!groupCollapsed" ref="groupBodyRef" class="group-body">
+      <div
+        v-for="(c, idx) in calls"
+        :key="c.call_id"
+        class="tool-item"
+        @click="openDetail(idx)"
+      >
+        <span class="tool-icon">{{ toolIcon(c.tool_name) }}</span>
+        <div class="tool-info">
+          <div class="tool-name-row">
+            <span class="tool-name">{{ c.tool_name }}</span>
+            <span
+              class="tool-status"
+              :class="{ pending: c.pending, error: c.is_error && !c.pending, ok: !c.pending && !c.is_error }"
+            >{{ statusText(c) }}</span>
+          </div>
+          <div class="tool-args">{{ argsSummary(c.arguments) }}</div>
+        </div>
+        <span class="tool-arrow">›</span>
+      </div>
+    </div>
+
+    <!-- 单条 tool 详情 BindSheet -->
+    <BindSheet
+      v-model:visible="detailVisible"
+      side="bottom"
+      :title="selectedCall ? selectedCall.tool_name : '工具详情'"
+      :height="'60vh'"
+    >
+      <div v-if="selectedCall" class="tool-detail">
+        <section class="detail-section">
+          <h4 class="detail-section-title">工具名</h4>
+          <pre class="detail-pre">{{ selectedCall.tool_name }}</pre>
+        </section>
+
+        <section class="detail-section">
+          <h4 class="detail-section-title">输入参数</h4>
+          <pre class="detail-pre">{{ prettyJson(selectedCall.arguments) || '无' }}</pre>
+        </section>
+
+        <section class="detail-section">
+          <h4 class="detail-section-title">
+            返回结果
+            <span
+              v-if="!selectedCall.pending"
+              class="result-status"
+              :class="{ error: selectedCall.is_error, ok: !selectedCall.is_error }"
+            >{{ selectedCall.is_error ? '失败' : '成功' }}</span>
+            <span v-else class="result-status pending">执行中…</span>
+          </h4>
+          <pre
+            v-if="selectedCall.result"
+            class="detail-pre"
+            :class="{ 'is-error': selectedCall.is_error }"
+          >{{ selectedCall.result }}</pre>
+          <div v-else class="detail-empty">等待结果返回…</div>
+        </section>
+      </div>
+    </BindSheet>
+  </div>
+</template>
+
+<style scoped>
+.tool-group {
+  margin: 6px 0 8px;
+  border-radius: var(--radius-md, 12px);
+  background: var(--card-2, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  overflow: hidden;
+  font-size: 13px;
+}
+
+/* 组标题：54px */
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 54px;
+  max-height: 54px;
+  padding: 0 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.group-header:hover {
+  background: var(--card, rgba(0, 0, 0, 0.06));
+}
+
+.group-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.group-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text, #333);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-progress {
+  font-size: 11px;
+  color: var(--muted, #888);
+  padding: 2px 6px;
+  background: var(--card, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+}
+
+.group-arrow {
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+
+/* 工具列表 */
+.group-body {
+  overflow: hidden;
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.05));
+}
+
+/* 每条 tool call：54px 高度 */
+.tool-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 54px;
+  max-height: 54px;
+  padding: 0 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.04));
+  transition: background var(--duration-fast, 120ms) var(--ease-standard, ease);
+  overflow: hidden;
+}
+
+.tool-item:last-child {
+  border-bottom: none;
+}
+
+.tool-item:hover {
+  background: var(--card, rgba(0, 0, 0, 0.06));
+}
+
+.tool-icon {
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.tool-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.tool-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text, #333);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.tool-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.tool-status.pending {
+  color: var(--muted, #888);
+  background: var(--card, rgba(0, 0, 0, 0.08));
+}
+
+.tool-status.error {
+  color: #fff;
+  background: #e53935;
+}
+
+.tool-status.ok {
+  color: #fff;
+  background: #43a047;
+}
+
+.tool-args {
+  font-size: 11px;
+  color: var(--muted, #888);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-arrow {
+  font-size: 18px;
+  color: var(--muted, #888);
+  flex-shrink: 0;
+}
+
+/* BindSheet 详情内容 */
+.tool-detail {
+  padding: 8px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #333);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.result-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 400;
+}
+
+.result-status.pending {
+  color: var(--muted, #888);
+  background: var(--card, rgba(0, 0, 0, 0.08));
+}
+
+.result-status.error {
+  color: #fff;
+  background: #e53935;
+}
+
+.result-status.ok {
+  color: #fff;
+  background: #43a047;
+}
+
+.detail-pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--card-2, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  color: var(--text, #333);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.detail-pre.is-error {
+  border-color: #e53935;
+  color: #c62828;
+}
+
+.detail-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--muted, #888);
+  text-align: center;
+  background: var(--card-2, rgba(0, 0, 0, 0.04));
+  border-radius: 8px;
+}
+</style>

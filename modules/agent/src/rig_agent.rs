@@ -18,8 +18,9 @@
 //! - 每次 `chat`/`chat_stream` 构建一次 `Agent` 是 rig 推荐用法（builder 零成本），
 //!   不缓存带状态的 agent，天然支持并发请求。
 //! - `history` 通过 `Arc<RwLock<Vec<Message>>>` 共享给工具，读多写少用 RwLock。
-//! - 流式实现：仅过滤 `StreamedAssistantContent::Text` 作为用户可见增量，
-//!   tool call / reasoning 等不直接 emit 给前端（避免噪音）。
+//! - 流式实现：把 `StreamedAssistantContent` 按语义分类透传为
+//!   `AgentStreamItem`（Text/Reasoning/ToolCallStart/ToolResult），
+//!   让前端能分别渲染推理框、工具调用提示框与正文。
 
 use std::sync::Arc;
 
@@ -31,12 +32,13 @@ use rig_core::{
     agent::MultiTurnStreamItem,
     client::{CompletionClient, ProviderClient},
     completion::Prompt,
+    message::ToolResultContent,
     providers::openai,
-    streaming::{StreamedAssistantContent, StreamingPrompt},
+    streaming::{StreamedAssistantContent, StreamedUserContent, StreamingPrompt},
 };
 use tokio::sync::RwLock;
 
-use crate::agent::ChatAgent;
+use crate::agent::{AgentStreamItem, ChatAgent};
 use crate::tools::{
     GetTimeTool, ListFilesTool, ReadFileTool, SearchHistoryTool, ShellTool, WebFetchTool,
 };
@@ -234,6 +236,22 @@ fn truncate_for_context(content: &str, max_chars: usize) -> String {
     s
 }
 
+/// 从 `OneOrMany<ToolResultContent>` 提取可读文本
+///
+/// - Text 块：直接取 `.text`
+/// - Image 块：占位为 `[image]`
+/// - 多块内容用 `\n` 连接
+fn extract_tool_output(content: &rig_core::OneOrMany<ToolResultContent>) -> String {
+    let parts: Vec<String> = content
+        .iter()
+        .map(|c| match c {
+            ToolResultContent::Text(t) => t.text.clone(),
+            ToolResultContent::Image(_) => "[image]".to_string(),
+        })
+        .collect();
+    parts.join("\n")
+}
+
 #[async_trait]
 impl ChatAgent for RigAgent {
     async fn chat(&self, messages: &[Message]) -> Result<String> {
@@ -255,7 +273,7 @@ impl ChatAgent for RigAgent {
     fn chat_stream<'a>(
         &'a self,
         messages: &'a [Message],
-    ) -> BoxStream<'a, Result<String>> {
+    ) -> BoxStream<'a, Result<AgentStreamItem>> {
         let s = async_stream::stream! {
             // 先同步历史
             self.sync_history(messages).await;
@@ -272,15 +290,58 @@ impl ChatAgent for RigAgent {
                     Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
                         // 文本增量，emit 给前端
                         if !text.text.is_empty() {
-                            yield Ok(text.text);
+                            yield Ok(AgentStreamItem::Text { content: text.text });
                         }
+                    }
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(r))) => {
+                        // 完整推理块：用 display_text() 合并所有 Text/Summary/Redacted 块
+                        let text = r.display_text();
+                        if !text.is_empty() {
+                            yield Ok(AgentStreamItem::Reasoning { content: text });
+                        }
+                    }
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { reasoning, .. })) => {
+                        // 推理增量：reasoning 字段已是 String，直接透传
+                        if !reasoning.is_empty() {
+                            yield Ok(AgentStreamItem::Reasoning { content: reasoning });
+                        }
+                    }
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { tool_call, internal_call_id })) => {
+                        // 模型决定调用工具：透传工具名与参数
+                        yield Ok(AgentStreamItem::ToolCallStart {
+                            call_id: internal_call_id,
+                            tool_name: tool_call.function.name.clone(),
+                            arguments: tool_call.function.arguments.clone(),
+                        });
+                    }
+                    Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, internal_call_id })) => {
+                        // 工具执行结果：从 OneOrMany<ToolResultContent> 提取文本
+                        let output = extract_tool_output(&tool_result.content);
+                        let is_error = output.starts_with("Error:") || output.starts_with("error:");
+                        yield Ok(AgentStreamItem::ToolResult {
+                            call_id: internal_call_id,
+                            output,
+                            is_error,
+                        });
+                    }
+                    Ok(MultiTurnStreamItem::StreamAssistantItem(_)) => {
+                        // ToolCallDelta 等增量事件暂不透传，避免噪音
+                        continue;
+                    }
+                    Ok(MultiTurnStreamItem::ToolExecutionStart { .. }) => {
+                        // rig 执行工具前的事件，与 ToolCall 重复，跳过
+                        continue;
+                    }
+                    Ok(MultiTurnStreamItem::CompletionCall(_)) => {
+                        // 单次 completion 请求的 usage 统计，暂不透传
+                        continue;
                     }
                     Ok(MultiTurnStreamItem::FinalResponse(_)) => {
                         // 流结束
                         return;
                     }
                     Ok(_) => {
-                        // tool call / reasoning 等不 emit 给前端
+                        // non_exhaustive 兜底：未来新增变体暂不透传
                         continue;
                     }
                     Err(e) => {

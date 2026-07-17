@@ -14,7 +14,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, stream};
 use tokio::time::sleep;
 
-use crate::agent::ChatAgent;
+use crate::agent::{AgentStreamItem, ChatAgent};
 
 pub struct MockAgent {
     name: String,
@@ -62,7 +62,7 @@ impl ChatAgent for MockAgent {
     fn chat_stream<'a>(
         &'a self,
         messages: &'a [Message],
-    ) -> BoxStream<'a, Result<String>> {
+    ) -> BoxStream<'a, Result<AgentStreamItem>> {
         let reply = match messages.iter().rev().find(|m| m.role == Role::User) {
             Some(m) if !m.content.is_empty() => {
                 format!("[mock stream] 收到「{}」——这是流式回显演示。", m.content)
@@ -72,7 +72,7 @@ impl ChatAgent for MockAgent {
         let chunks = chunk_reply(reply);
 
         let s = stream::iter(chunks)
-            .map(|chunk| Ok(chunk))
+            .map(|chunk| Ok(AgentStreamItem::Text { content: chunk }))
             .then(|r| async move {
                 // 30ms 间隔，模拟网络延迟
                 sleep(Duration::from_millis(30)).await;
@@ -113,7 +113,10 @@ mod tests {
         let mut collected = String::new();
         let mut count = 0;
         while let Some(chunk) = stream.next().await {
-            collected.push_str(&chunk.unwrap());
+            match chunk.unwrap() {
+                AgentStreamItem::Text { content } => collected.push_str(&content),
+                _ => {}
+            }
             count += 1;
         }
         assert!(count > 1, "stream should produce multiple chunks, got {count}");

@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, computed, watch, reactive } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
 import { Button, IconButton, BindSheet, Chips, useToast } from './basic'
+import ReasoningBox from './ReasoningBox.vue'
+import ToolCallGroup from './ToolCallGroup.vue'
 import type {
   Message,
   Conversation,
   StreamTokenPayload,
   StreamErrorPayload,
+  AgentReasoningPayload,
+  AgentToolCallPayload,
+  AgentToolResultPayload,
+  ToolCallRecord,
   PickedFile,
 } from '../types'
 
@@ -39,6 +45,31 @@ const input = ref('')
 const sending = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充的气泡 id
+
+// 每个助手气泡的元数据：reasoning / tool calls（流式期间累积，不持久化）
+interface BubbleMeta {
+  reasoning: string
+  isThinking: boolean
+  toolCalls: ToolCallRecord[]
+}
+const bubbleMeta = reactive<Record<string, BubbleMeta>>({})
+
+// 获取某条消息的元数据（若不存在返回 null）
+function getMeta(id: string): BubbleMeta | null {
+  return bubbleMeta[id] ?? null
+}
+
+// 确保某 bubble 的 meta 存在
+function ensureMeta(id: string): BubbleMeta {
+  if (!bubbleMeta[id]) {
+    bubbleMeta[id] = {
+      reasoning: '',
+      isThinking: false,
+      toolCalls: [],
+    }
+  }
+  return bubbleMeta[id]
+}
 
 // 底部工具/附件 Sheet
 const toolSheetOpen = ref(false)
@@ -75,16 +106,21 @@ async function loadConversation() {
   const id = activeId.value
   if (!id) {
     messages.value = []
+    // 清空 meta
+    Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
     return
   }
   try {
     const conv = await invoke<Conversation | null>('get_conversation', { id })
     messages.value = conv?.messages ?? []
+    // 历史会话不携带 reasoning/tools 元数据，清空
+    Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
     await nextTick()
     scrollBottom()
   } catch (e) {
     console.warn('get_conversation failed', e)
     messages.value = []
+    Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
   }
 }
 
@@ -118,6 +154,71 @@ async function appendStreamToken(token: string) {
     await nextTick()
     scrollBottom()
   }
+  // 收到文本 token 表示推理阶段已结束
+  if (streamingBubbleId.value) {
+    const meta = bubbleMeta[streamingBubbleId.value]
+    if (meta && meta.isThinking) meta.isThinking = false
+  }
+}
+
+// ---------- 推理事件 ----------
+async function onReasoning(content: string) {
+  if (!streamingBubbleId.value) {
+    // 没有气泡时先创建一个空的 assistant 气泡
+    streamingBubbleId.value = newId()
+    await addMessage({
+      id: streamingBubbleId.value,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    })
+  }
+  const meta = ensureMeta(streamingBubbleId.value)
+  meta.isThinking = true
+  meta.reasoning += content
+  await nextTick()
+  scrollBottom()
+}
+
+// ---------- 工具调用事件 ----------
+async function onToolCall(call: AgentToolCallPayload) {
+  if (!streamingBubbleId.value) {
+    streamingBubbleId.value = newId()
+    await addMessage({
+      id: streamingBubbleId.value,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    })
+  }
+  const meta = ensureMeta(streamingBubbleId.value)
+  // 收到 tool call 表示推理阶段结束
+  meta.isThinking = false
+  meta.toolCalls.push({
+    call_id: call.call_id,
+    tool_name: call.tool_name,
+    arguments: call.arguments,
+    result: null,
+    is_error: false,
+    pending: true,
+  })
+  await nextTick()
+  scrollBottom()
+}
+
+// ---------- 工具结果事件 ----------
+async function onToolResult(result: AgentToolResultPayload) {
+  if (!streamingBubbleId.value) return
+  const meta = bubbleMeta[streamingBubbleId.value]
+  if (!meta) return
+  const target = meta.toolCalls.find((c) => c.call_id === result.call_id)
+  if (target) {
+    target.result = result.output
+    target.is_error = result.is_error
+    target.pending = false
+  }
+  await nextTick()
+  scrollBottom()
 }
 
 async function finalizeStream(full: string) {
@@ -266,6 +367,30 @@ onMounted(async () => {
   )
 
   unlistens.push(
+    await listen<AgentReasoningPayload>('agent-reasoning', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onReasoning(p.content)
+    }),
+  )
+
+  unlistens.push(
+    await listen<AgentToolCallPayload>('agent-tool-call', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onToolCall(p)
+    }),
+  )
+
+  unlistens.push(
+    await listen<AgentToolResultPayload>('agent-tool-result', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onToolResult(p)
+    }),
+  )
+
+  unlistens.push(
     await listen<StreamTokenPayload>('agent-done', async (e) => {
       const p = e.payload
       if (activeId.value && p.conversation_id !== activeId.value) return
@@ -336,7 +461,20 @@ onUnmounted(() => {
           :class="[`role-${m.role}`, { streaming: m.id === streamingBubbleId }]"
         >
           <template v-if="m.role === 'assistant'">
+            <!-- 推理折叠框：仅在存在 reasoning 时渲染 -->
+            <ReasoningBox
+              v-if="getMeta(m.id)?.reasoning"
+              :content="getMeta(m.id)!.reasoning"
+              :is-thinking="getMeta(m.id)!.isThinking"
+            />
+            <!-- 工具调用提示组：仅在存在 tool calls 时渲染 -->
+            <ToolCallGroup
+              v-if="getMeta(m.id)?.toolCalls.length"
+              :calls="getMeta(m.id)!.toolCalls"
+            />
+            <!-- 正文：仅在内容非空时渲染（思考/工具阶段内容可能为空） -->
             <MarkdownRender
+              v-if="m.content"
               mode="chat"
               :content="m.content"
               :final="m.id !== streamingBubbleId"

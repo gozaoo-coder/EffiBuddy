@@ -156,6 +156,42 @@ export interface StreamErrorPayload {
   error: string
 }
 
+// 推理增量 payload（agent-reasoning 事件）
+export interface AgentReasoningPayload {
+  conversation_id: string
+  content: string
+}
+
+// 工具调用开始 payload（agent-tool-call 事件）
+export interface AgentToolCallPayload {
+  conversation_id: string
+  call_id: string
+  tool_name: string
+  // JSON 字符串形式的参数
+  arguments: string
+}
+
+// 工具执行结果 payload（agent-tool-result 事件）
+export interface AgentToolResultPayload {
+  conversation_id: string
+  call_id: string
+  output: string
+  is_error: boolean
+}
+
+// 单次工具调用记录（前端聚合 ToolCallStart + ToolResult 后的结构）
+export interface ToolCallRecord {
+  call_id: string
+  tool_name: string
+  // 原始 JSON 字符串参数
+  arguments: string
+  // 执行结果（未到达时为 null）
+  result: string | null
+  is_error: boolean
+  // 是否正在执行中
+  pending: boolean
+}
+
 // =========================================================
 // 技能 & 定时任务（与 core::{Skill, ScheduledTask} 对齐）
 // =========================================================

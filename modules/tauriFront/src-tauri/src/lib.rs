@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use effisuite_agent::{ChatAgent, MockAgent, RigAgent};
+use effisuite_agent::{AgentStreamItem, ChatAgent, MockAgent, RigAgent};
 use effisuite_core::{
     AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationMeta,
     ConversationStore, Device, EventBus, Message, ProviderPreset, Role, ScheduledTask,
@@ -451,20 +451,52 @@ async fn send_message_stream(
 
         while let Some(chunk) = stream.next().await {
             match chunk {
-                Ok(token) => {
-                    full.push_str(&token);
+                Ok(AgentStreamItem::Text { content }) => {
+                    full.push_str(&content);
                     // 通过事件总线 + Tauri emit 双通道推送
                     bus.publish(BusEvent::AgentStreamToken {
                         conversation_id: conv_id.clone(),
-                        content: token.clone(),
+                        content: content.clone(),
                         done: false,
                     });
                     let _ = handle.emit(
                         "agent-token",
                         &StreamTokenPayload {
                             conversation_id: &conv_id,
-                            content: &token,
+                            content: &content,
                             done: false,
+                        },
+                    );
+                }
+                Ok(AgentStreamItem::Reasoning { content }) => {
+                    let _ = handle.emit(
+                        "agent-reasoning",
+                        &AgentReasoningPayload {
+                            conversation_id: &conv_id,
+                            content: &content,
+                        },
+                    );
+                }
+                Ok(AgentStreamItem::ToolCallStart { call_id, tool_name, arguments }) => {
+                    let args_str = serde_json::to_string(&arguments).unwrap_or_else(|_| "null".to_string());
+                    let _ = handle.emit(
+                        "agent-tool-call",
+                        &AgentToolCallPayload {
+                            conversation_id: &conv_id,
+                            call_id: &call_id,
+                            tool_name: &tool_name,
+                            arguments: &args_str,
+                        },
+                    );
+                }
+                Ok(AgentStreamItem::ToolResult { call_id, output, is_error }) => {
+                    let _ = handle.emit(
+                        "agent-tool-result",
+                        &AgentToolResultPayload {
+                            conversation_id: &conv_id,
+                            call_id: &call_id,
+                            output: &output,
+                            is_error,
                         },
                     );
                 }
@@ -527,6 +559,32 @@ struct StreamTokenPayload<'a> {
 struct StreamErrorPayload<'a> {
     conversation_id: &'a str,
     error: &'a str,
+}
+
+/// 推理增量 payload（agent-reasoning 事件）
+#[derive(Debug, serde::Serialize)]
+struct AgentReasoningPayload<'a> {
+    conversation_id: &'a str,
+    content: &'a str,
+}
+
+/// 工具调用开始 payload（agent-tool-call 事件）
+#[derive(Debug, serde::Serialize)]
+struct AgentToolCallPayload<'a> {
+    conversation_id: &'a str,
+    call_id: &'a str,
+    tool_name: &'a str,
+    /// JSON 字符串形式的参数
+    arguments: &'a str,
+}
+
+/// 工具执行结果 payload（agent-tool-result 事件）
+#[derive(Debug, serde::Serialize)]
+struct AgentToolResultPayload<'a> {
+    conversation_id: &'a str,
+    call_id: &'a str,
+    output: &'a str,
+    is_error: bool,
 }
 
 // =========================================================
