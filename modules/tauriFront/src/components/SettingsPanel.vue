@@ -1,234 +1,132 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from 'vue'
+import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import {
   BindSheet,
   Button,
-  IconButton,
-  Switch,
-  SegmentedButton,
-  Chips,
-  Dropdown,
-  type DropdownOption,
-  type SegmentedOption,
+  RadioGroup,
+  Radio,
+  Slider,
+  Dialog,
   useToast,
-  useSnackbar,
 } from './basic'
-import type { AgentConfig, AvailableModel, ProviderPreset, BackendKind } from '../types'
+import { useTheme } from '../composables/useTheme'
+import { useAnimeTransition } from '../composables/useAnimeTransition'
+import type { ThemeMode, ConversationMeta } from '../types'
 
 const props = defineProps<{ open: boolean }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', backend: string): void }>()
+const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { toast } = useToast()
-const { snackbar } = useSnackbar()
+const { themeMode, resolvedTheme, setTheme } = useTheme()
 
-// 当前激活的完整配置（含 models 列表）
-const config = ref<AgentConfig | null>(null)
-// 内置 provider 预设
-const presets = ref<ProviderPreset[]>([])
-// draft：当前编辑的运行时字段（保存到 AgentConfig 顶层）
-const draft = ref({
-  backend: 'mock' as BackendKind,
-  provider_id: 'openai',
-  api_key: '',
-  base_url: '',
-  model_name: 'gpt-4o-mini',
-  preamble: '你是 EffiSuite 的 AI 助手，简洁友好地回答用户问题。',
-  enable_tools: true,
-})
+// 当前选中的分类
+type SettingsTab = 'appearance' | 'data' | 'about'
+const activeTab = ref<SettingsTab>('appearance')
 
-const saving = ref(false)
-// 保存为模型时的标签输入
-const saveLabel = ref('')
-
-onMounted(async () => {
-  try {
-    const [c, p] = await Promise.all([
-      invoke<AgentConfig>('get_config'),
-      invoke<ProviderPreset[]>('list_provider_presets'),
-    ])
-    config.value = c
-    presets.value = p
-    syncDraftFromConfig(c)
-  } catch (e) {
-    toast({ content: `加载配置失败：${e}`, type: 'error' })
-  }
-})
-
-function syncDraftFromConfig(c: AgentConfig) {
-  draft.value = {
-    backend: c.backend,
-    provider_id: c.provider_id || 'openai',
-    api_key: c.api_key,
-    base_url: c.base_url,
-    model_name: c.model_name,
-    preamble: c.preamble,
-    enable_tools: c.enable_tools,
-  }
-  saveLabel.value = ''
-}
-
-watch(
-  () => props.open,
-  (v) => {
-    if (v) {
-      // 重新加载
-      invoke<AgentConfig>('get_config')
-        .then((c) => {
-          config.value = c
-          syncDraftFromConfig(c)
-        })
-        .catch((e) => toast({ content: `加载失败：${e}`, type: 'error' }))
-    }
-  },
-)
-
-// Backend 选项：用 SegmentedButton
-const backendOptions: SegmentedOption[] = [
-  { label: 'Mock（离线）', value: 'mock' },
-  { label: 'OpenAI 兼容', value: 'openai' },
+const tabs: { key: SettingsTab; icon: string; label: string }[] = [
+  { key: 'appearance', icon: '🎨', label: '外观' },
+  { key: 'data', icon: '💾', label: '数据管理' },
+  { key: 'about', icon: 'ℹ', label: '关于' },
 ]
 
-function onBackendChange(v: string | number) {
-  draft.value.backend = v as BackendKind
+// 字体大小（本地占位，未来可持久化）
+const fontSize = ref(14)
+function onFontSizeChange(v: number) {
+  fontSize.value = v
+  document.documentElement.style.fontSize = `${v}px`
 }
 
-// Provider 预设：作为 Dropdown 选项（也可作 Chips 快选）
-const presetDropdownOptions = computed<DropdownOption[]>(() =>
-  presets.value.map((p) => ({
-    label: p.name,
-    value: p.id,
-    icon: '◆',
-  })),
+// 分类切换淡入动画
+const { onEnter, onLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    translateY: [10, 0],
+    duration: 300,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    translateY: [0, -8],
+    duration: 200,
+    ease: 'inOut(2)',
+  },
+})
+
+function onThemeChange(v: unknown) {
+  setTheme(v as ThemeMode)
+}
+
+// ---------- 数据管理 ----------
+const clearDataDialog = ref(false)
+const clearConvDialog = ref(false)
+const clearing = ref(false)
+
+const resolvedThemeLabel = computed(() =>
+  resolvedTheme.value === 'dark' ? '暗色' : '亮色',
 )
 
-function onPresetDropdownChange(_v: string | number, opt: DropdownOption) {
-  const p = presets.value.find((x) => x.id === opt.value)
-  if (!p) return
-  selectPreset(p)
-}
-
-// 选择 provider 预设：填充默认 base_url 和 model_name
-function selectPreset(p: ProviderPreset) {
-  draft.value.provider_id = p.id
-  if (p.id !== 'custom') {
-    draft.value.base_url = p.default_base_url
-    if (p.default_model) draft.value.model_name = p.default_model
-  }
-  draft.value.backend = 'openai'
-}
-
-function findPreset(id: string): ProviderPreset | undefined {
-  return presets.value.find((p) => p.id === id)
-}
-
-// ---------- 保存当前 draft 到 config（应用为运行时配置） ----------
-async function save() {
-  if (!config.value) return
-  saving.value = true
+async function clearAllData() {
+  clearing.value = true
   try {
-    const newConfig: AgentConfig = {
-      ...config.value,
-      backend: draft.value.backend,
-      provider_id: draft.value.provider_id,
-      api_key: draft.value.api_key,
-      base_url: draft.value.base_url,
-      model_name: draft.value.model_name,
-      preamble: draft.value.preamble,
-      enable_tools: draft.value.enable_tools,
+    let usedFallback = false
+    try {
+      await invoke('clear_all_data')
+    } catch {
+      usedFallback = true
+      const convs = await invoke<ConversationMeta[]>('list_conversations')
+      for (const c of convs) {
+        try {
+          await invoke('delete_conversation', { id: c.id })
+        } catch {
+          /* 忽略单条失败 */
+        }
+      }
     }
-    await invoke('set_config', { config: newConfig })
-    config.value = newConfig
-    toast({ content: '已保存并热替换 agent', type: 'success' })
-    emit('saved', draft.value.backend === 'openai' ? 'rig-openai-compat' : 'mock')
-  } catch (e) {
-    toast({ content: `保存失败：${e}`, type: 'error' })
-  } finally {
-    saving.value = false
-  }
-}
-
-// ---------- 保存当前 draft 为可使用模型 ----------
-function newId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID()
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-async function saveAsModel() {
-  if (!config.value) return
-  const label = saveLabel.value.trim()
-  if (!label) {
-    toast({ content: '请输入模型标签', type: 'warn' })
-    return
-  }
-  try {
-    const model: AvailableModel = {
-      id: newId(),
-      label,
-      provider_id: draft.value.provider_id,
-      base_url: draft.value.base_url,
-      model_name: draft.value.model_name,
-      api_key: draft.value.api_key,
-      preamble: draft.value.preamble,
-      enable_tools: draft.value.enable_tools,
-      created_at: Date.now(),
-    }
-    await invoke('save_model', { model })
-    saveLabel.value = ''
-    toast({ content: `已保存模型「${label}」`, type: 'success' })
-    // 刷新 config
-    config.value = await invoke<AgentConfig>('get_config')
-  } catch (e) {
-    toast({ content: `保存模型失败：${e}`, type: 'error' })
-  }
-}
-
-// ---------- 激活某个已保存模型 ----------
-async function activateModel(id: string) {
-  try {
-    await invoke('set_active_model', { id })
-    config.value = await invoke<AgentConfig>('get_config')
-    if (config.value) syncDraftFromConfig(config.value)
-    toast({ content: '已切换模型并热替换 agent', type: 'success' })
-    emit('saved', 'rig-openai-compat')
-  } catch (e) {
-    toast({ content: `激活失败：${e}`, type: 'error' })
-  }
-}
-
-// 用 snackbar 带撤销操作确认删除
-async function deleteModel(id: string, label: string) {
-  // 先记录当前 config 以便撤销
-  const snapshot = config.value
-  try {
-    await invoke('delete_model', { id })
-    config.value = await invoke<AgentConfig>('get_config')
-    snackbar({
-      content: `已删除模型「${label}」`,
-      mode: 'timed',
-      action: {
-        text: '撤销',
-        onClick: async () => {
-          // 简单撤销：把模型重新保存回去
-          if (snapshot) {
-            const m = snapshot.models.find((x) => x.id === id)
-            if (m) {
-              try {
-                await invoke('save_model', { model: m })
-                config.value = await invoke<AgentConfig>('get_config')
-                toast({ content: '已恢复', type: 'success' })
-              } catch (e) {
-                toast({ content: `恢复失败：${e}`, type: 'error' })
-              }
-            }
-          }
-        },
-      },
+    toast({
+      content: usedFallback ? '已清除所有会话数据，建议重启应用' : '已清除所有应用数据',
+      type: 'success',
     })
   } catch (e) {
-    toast({ content: `删除失败：${e}`, type: 'error' })
+    toast({ content: `清除失败：${e}`, type: 'error' })
+  } finally {
+    clearing.value = false
+    clearDataDialog.value = false
+  }
+}
+
+async function clearConversations() {
+  clearing.value = true
+  try {
+    const convs = await invoke<ConversationMeta[]>('list_conversations')
+    for (const c of convs) {
+      try {
+        await invoke('delete_conversation', { id: c.id })
+      } catch {
+        /* 忽略单条失败 */
+      }
+    }
+    toast({ content: `已清除 ${convs.length} 条会话`, type: 'success' })
+  } catch (e) {
+    toast({ content: `清除失败：${e}`, type: 'error' })
+  } finally {
+    clearing.value = false
+    clearConvDialog.value = false
+  }
+}
+
+function exportData() {
+  toast({ content: '数据导出功能即将上线', type: 'info' })
+}
+
+// ---------- 关于 ----------
+const APP_NAME = 'EffiBuddy'
+const APP_VERSION = '0.1.0'
+const GITHUB_URL = 'https://github.com/EffiSuite/EffiBuddy'
+
+function openGithub() {
+  if (typeof window !== 'undefined') {
+    window.open(GITHUB_URL, '_blank', 'noopener')
   }
 }
 
@@ -241,345 +139,542 @@ function onClose() {
   <BindSheet
     :visible="props.open"
     side="right"
-    width="480px"
-    title="Agent 配置"
+    width="640px"
+    title="设置"
     @close="onClose"
   >
-    <div class="settings-body">
-      <!-- Backend 选择 -->
-      <div class="field">
-        <label class="field-label">后端类型</label>
-        <SegmentedButton
-          :model-value="draft.backend"
-          :options="backendOptions"
-          block
-          size="md"
-          @change="onBackendChange"
-        />
-      </div>
+    <div class="settings-shell">
+      <!-- 左侧分类导航 -->
+      <nav class="settings-nav">
+        <button
+          v-for="t in tabs"
+          :key="t.key"
+          type="button"
+          class="nav-item"
+          :class="{ active: activeTab === t.key }"
+          @click="activeTab = t.key"
+        >
+          <span class="nav-icon">{{ t.icon }}</span>
+          <span class="nav-label">{{ t.label }}</span>
+        </button>
+      </nav>
 
-      <!-- Provider 预设快选（仅 openai 模式显示） -->
-      <template v-if="draft.backend === 'openai'">
-        <div class="field">
-          <label class="field-label">Provider 预设</label>
-          <Dropdown
-            :model-value="draft.provider_id"
-            :options="presetDropdownOptions"
-            placeholder="选择 provider..."
-            size="md"
-            @change="onPresetDropdownChange"
-          />
-          <!-- 预设 chips 快选 -->
-          <div class="preset-chips-row">
-            <Chips
-              v-for="p in presets"
-              :key="p.id"
-              :label="p.name"
-              :selected="draft.provider_id === p.id"
-              size="sm"
-              @click="selectPreset(p)"
-            />
-          </div>
-          <div v-if="findPreset(draft.provider_id)?.docs_url" class="preset-hint">
-            <a :href="findPreset(draft.provider_id)!.docs_url" target="_blank" rel="noopener">
-              文档：{{ findPreset(draft.provider_id)!.docs_url }}
-            </a>
-            <span v-if="findPreset(draft.provider_id)!.env_var">
-              · 推荐环境变量 {{ findPreset(draft.provider_id)!.env_var }}
-            </span>
-          </div>
-        </div>
+      <!-- 右侧内容区 -->
+      <div class="settings-content">
+        <Transition :css="false" @enter="onEnter" @leave="onLeave" mode="out-in">
+          <!-- 外观页 -->
+          <section v-if="activeTab === 'appearance'" key="appearance" class="page">
+            <header class="page-head">
+              <h2 class="page-title">外观</h2>
+              <p class="page-sub">定制 EffiBuddy 的视觉风格</p>
+            </header>
 
-        <!-- API Key -->
-        <div class="field">
-          <label class="field-label">API Key</label>
-          <input
-            v-model="draft.api_key"
-            type="password"
-            placeholder="sk-..."
-            class="field-input"
-          />
-        </div>
+            <div class="card">
+              <div class="card-head">
+                <span class="card-title">主题模式</span>
+                <span class="card-badge">{{ resolvedThemeLabel }}</span>
+              </div>
+              <RadioGroup
+                :model-value="themeMode"
+                name="theme-mode"
+                @change="onThemeChange"
+              >
+                <label class="radio-row">
+                  <Radio value="system" />
+                  <span class="radio-row-text">
+                    <span class="radio-row-label">跟随系统</span>
+                    <span class="radio-row-hint">自动匹配操作系统主题</span>
+                  </span>
+                  <span class="radio-row-glyph">⌂</span>
+                </label>
+                <label class="radio-row">
+                  <Radio value="light" />
+                  <span class="radio-row-text">
+                    <span class="radio-row-label">亮色</span>
+                    <span class="radio-row-hint">明亮、清爽的日间模式</span>
+                  </span>
+                  <span class="radio-row-glyph">☀</span>
+                </label>
+                <label class="radio-row">
+                  <Radio value="dark" />
+                  <span class="radio-row-text">
+                    <span class="radio-row-label">暗色</span>
+                    <span class="radio-row-hint">护眼、沉浸的夜间模式</span>
+                  </span>
+                  <span class="radio-row-glyph">☾</span>
+                </label>
+              </RadioGroup>
+            </div>
 
-        <!-- Base URL -->
-        <div class="field">
-          <label class="field-label">
-            Base URL
-            <span v-if="draft.provider_id === 'custom'" class="hint-tag">自定义</span>
-          </label>
-          <input
-            v-model="draft.base_url"
-            type="text"
-            placeholder="https://api.openai.com/v1"
-            class="field-input"
-          />
-        </div>
+            <div class="card">
+              <div class="card-head">
+                <span class="card-title">字体大小</span>
+                <span class="card-badge">{{ fontSize }}px</span>
+              </div>
+              <Slider
+                :model-value="fontSize"
+                :min="12"
+                :max="18"
+                :step="1"
+                show-value
+                @change="onFontSizeChange"
+              />
+              <p class="card-hint">调整界面正文字号（12–18px）</p>
+            </div>
+          </section>
 
-        <!-- Model Name -->
-        <div class="field">
-          <label class="field-label">模型名</label>
-          <input
-            v-model="draft.model_name"
-            type="text"
-            placeholder="gpt-4o-mini"
-            class="field-input"
-          />
-        </div>
-      </template>
+          <!-- 数据管理页 -->
+          <section v-else-if="activeTab === 'data'" key="data" class="page">
+            <header class="page-head">
+              <h2 class="page-title">数据管理</h2>
+              <p class="page-sub">管理本地会话与应用数据</p>
+            </header>
 
-      <!-- Preamble -->
-      <div class="field">
-        <label class="field-label">系统提示词（preamble）</label>
-        <textarea
-          v-model="draft.preamble"
-          rows="4"
-          placeholder="定义 agent 的人设与行为约束"
-          class="field-input field-textarea"
-        ></textarea>
-      </div>
+            <div class="action-card action-card--danger">
+              <div class="action-card-text">
+                <span class="action-card-title">清除所有会话</span>
+                <span class="action-card-hint">删除全部对话记录，不可恢复</span>
+              </div>
+              <Button variant="danger" size="sm" @click="clearConvDialog = true">
+                清除
+              </Button>
+            </div>
 
-      <!-- 工具开关 -->
-      <div class="field field-row">
-        <div class="field-row-text">
-          <label class="field-label">启用工具调用</label>
-          <span class="field-row-hint">RAG 历史检索 / 时间查询</span>
-        </div>
-        <Switch v-model="draft.enable_tools" size="md" />
-      </div>
+            <div class="action-card action-card--danger">
+              <div class="action-card-text">
+                <span class="action-card-title">清除所有应用数据</span>
+                <span class="action-card-hint">重置所有本地数据，建议重启应用</span>
+              </div>
+              <Button variant="danger" size="sm" @click="clearDataDialog = true">
+                清除
+              </Button>
+            </div>
 
-      <!-- 保存当前配置 -->
-      <div class="actions-row">
-        <Button variant="primary" block :loading="saving" @click="save">
-          {{ saving ? '保存中…' : '应用为当前配置' }}
-        </Button>
-      </div>
+            <div class="action-card">
+              <div class="action-card-text">
+                <span class="action-card-title">导出数据</span>
+                <span class="action-card-hint">将对话与配置导出为文件</span>
+              </div>
+              <Button variant="normal" size="sm" @click="exportData">
+                导出
+              </Button>
+            </div>
+          </section>
 
-      <!-- 保存为可使用模型 -->
-      <div class="field save-as-model">
-        <label class="field-label">保存为可使用模型（输入标签后保存）</label>
-        <div class="save-row">
-          <input
-            v-model="saveLabel"
-            type="text"
-            placeholder="例如：我的 GPT-4o / DeepSeek 工作号"
-            class="field-input"
-          />
-          <Button variant="normal" @click="saveAsModel">保存</Button>
-        </div>
-      </div>
+          <!-- 关于页 -->
+          <section v-else key="about" class="page">
+            <header class="page-head">
+              <h2 class="page-title">关于</h2>
+              <p class="page-sub">了解 EffiBuddy</p>
+            </header>
 
-      <!-- 可使用模型列表 -->
-      <div class="field" v-if="config && config.models.length > 0">
-        <label class="field-label">可使用模型（点击切换激活）</label>
-        <div class="model-list">
-          <div
-            v-for="m in config.models"
-            :key="m.id"
-            class="model-item"
-            :class="{ active: config.active_model_id === m.id }"
-          >
-            <div class="model-info" @click="activateModel(m.id)">
-              <div class="model-label">{{ m.label }}</div>
-              <div class="model-meta">
-                {{ m.provider_id }} · {{ m.model_name }}
-                <span v-if="config.active_model_id === m.id" class="active-tag">当前</span>
+            <div class="about-hero">
+              <div class="about-mark">EB</div>
+              <div class="about-id">
+                <div class="about-name">{{ APP_NAME }}</div>
+                <div class="about-version">版本 {{ APP_VERSION }}</div>
               </div>
             </div>
-            <IconButton
-              icon="✕"
-              size="sm"
-              variant="danger"
-              title="删除该模型"
-              @click="deleteModel(m.id, m.label)"
-            />
-          </div>
-        </div>
+
+            <p class="about-desc">
+              EffiBuddy 是一款高效的 AI 助手桌面应用，提供流畅的对话体验、
+              设备协同与可插拔的模型配置能力。
+            </p>
+
+            <div class="card">
+              <div class="card-head">
+                <span class="card-title">技术栈</span>
+              </div>
+              <div class="tech-grid">
+                <span class="tech-chip">Vue 3.5</span>
+                <span class="tech-chip">Tauri 2</span>
+                <span class="tech-chip">Rust</span>
+                <span class="tech-chip">rig</span>
+                <span class="tech-chip">anime.js v4</span>
+              </div>
+            </div>
+
+            <div class="card about-links">
+              <button type="button" class="link-row" @click="openGithub">
+                <span class="link-glyph">⌥</span>
+                <span class="link-text">GitHub 仓库</span>
+                <span class="link-arrow">↗</span>
+              </button>
+              <div class="link-row link-row--static">
+                <span class="link-glyph">§</span>
+                <span class="link-text">开源许可 (MIT)</span>
+              </div>
+            </div>
+          </section>
+        </Transition>
       </div>
     </div>
 
-    <!-- 底部关闭 -->
-    <div class="settings-foot">
-      <Button variant="text" block @click="onClose">关闭</Button>
-    </div>
+    <!-- 清除所有会话确认 -->
+    <Dialog
+      :visible="clearConvDialog"
+      title="清除所有会话？"
+      content="此操作将删除全部对话记录，且无法撤销。"
+      confirm-text="清除"
+      danger
+      @confirm="clearConversations"
+      @cancel="clearConvDialog = false"
+    />
+
+    <!-- 清除所有应用数据确认 -->
+    <Dialog
+      :visible="clearDataDialog"
+      title="清除所有应用数据？"
+      content="将重置所有本地数据（含会话与配置缓存），建议清除后重启应用。此操作不可撤销。"
+      confirm-text="全部清除"
+      danger
+      @confirm="clearAllData"
+      @cancel="clearDataDialog = false"
+    />
   </BindSheet>
 </template>
 
 <style scoped>
-.settings-body {
-  padding: 16px 20px;
+.settings-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ---------- 左侧导航 ---------- */
+.settings-nav {
+  width: 180px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 4px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-2);
   overflow-y: auto;
 }
 
-.field {
+.nav-item {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.field-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.field-input {
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  height: var(--h-control-md);
-  padding: 0 12px;
-  font-family: inherit;
-  font-size: 14px;
-  color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  transition: border-color var(--duration-fast) var(--ease-standard);
-}
-
-.field-input:focus {
-  border-color: var(--primary);
-}
-
-.field-textarea {
-  height: auto;
-  min-height: 88px;
   padding: 10px 12px;
-  resize: vertical;
-  line-height: 1.5;
-  font-family: inherit;
-}
-
-.preset-chips-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.preset-hint {
-  font-size: 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
-  margin-top: 4px;
-  line-height: 1.6;
-}
-
-.preset-hint a {
-  color: var(--primary);
-  text-decoration: none;
-}
-
-.preset-hint a:hover {
-  text-decoration: underline;
-}
-
-.hint-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 11px;
-  color: var(--primary);
-  border: 1px solid var(--primary);
-  border-radius: var(--radius-xs);
-}
-
-.field-row {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.field-row-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.field-row-hint {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.actions-row {
-  margin-top: 4px;
-}
-
-.save-row {
-  display: flex;
-  gap: 8px;
-}
-
-.save-row .field-input {
-  flex: 1;
-}
-
-.model-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.model-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  transition: all var(--duration-fast) var(--ease-standard);
-}
-
-.model-item:hover {
-  border-color: var(--primary);
-}
-
-.model-item.active {
-  border-color: var(--primary);
-  background: rgba(74, 126, 255, 0.08);
-}
-
-.model-info {
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-}
-
-.model-label {
-  font-size: 14px;
+  font-family: inherit;
+  font-size: var(--fs-base);
   font-weight: 500;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.nav-item:hover {
+  background: var(--card);
   color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--card-2);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.nav-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-meta {
-  font-size: 12px;
+/* ---------- 右侧内容区 ---------- */
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 24px 28px 32px;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.page-head {
+  margin-bottom: 4px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.page-sub {
+  margin: 4px 0 0;
+  font-size: var(--fs-sm);
   color: var(--muted);
-  margin-top: 2px;
+}
+
+/* ---------- 通用卡片 ---------- */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-badge {
+  font-size: var(--fs-xs);
+  color: var(--primary);
+  padding: 2px 8px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-full);
+  line-height: 1.4;
+}
+
+.card-hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ---------- 主题单选行 ---------- */
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+
+.radio-row:hover {
+  border-color: var(--primary);
+}
+
+.radio-row-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.radio-row-label {
+  font-size: var(--fs-base);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.radio-row-hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.radio-row-glyph {
+  font-size: var(--fs-lg);
+  color: var(--muted);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ---------- 数据管理操作卡 ---------- */
+.action-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.action-card--danger {
+  border-color: rgba(255, 92, 92, 0.35);
+}
+
+.action-card--danger:hover {
+  border-color: var(--danger);
+}
+
+.action-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.action-card-title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-card-hint {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* ---------- 关于页 ---------- */
+.about-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background: linear-gradient(135deg, rgba(74, 126, 255, 0.12), rgba(74, 126, 255, 0.02));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.about-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+
+.about-id {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.about-name {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.about-version {
+  font-size: var(--fs-sm);
+  color: var(--muted);
   font-family: 'SFMono-Regular', Consolas, monospace;
 }
 
-.active-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 10px;
-  color: #fff;
-  background: var(--primary);
-  border-radius: var(--radius-xs);
+.about-desc {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  color: var(--text);
 }
 
-.settings-foot {
-  padding: 12px 20px;
-  border-top: 1px solid var(--border);
+.tech-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tech-chip {
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.about-links {
+  gap: 4px;
+}
+
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.link-row:hover {
+  background: var(--card-2);
+}
+
+.link-row--static {
+  cursor: default;
+}
+
+.link-row--static:hover {
+  background: transparent;
+}
+
+.link-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  font-size: 15px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.link-text {
+  flex: 1;
+}
+
+.link-arrow {
+  font-size: var(--fs-sm);
+  color: var(--muted);
 }
 </style>
