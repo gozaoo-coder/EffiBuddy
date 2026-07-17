@@ -12,13 +12,14 @@
 //! - 流式命令 spawn 独立 task，逐 token emit "agent-token"，结束 emit "agent-done"
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use effisuite_agent::{AgentStreamItem, ChatAgent, MockAgent, RigAgent};
+use effisuite_agent::{AgentStreamItem, ChatAgent, MockAgent, OpenAIEmbeddingProvider, RigAgent, DEFAULT_EMBEDDING_MODEL};
 use effisuite_core::{
     AgentConfig, AvailableModel, BackendKind, BusEvent, Conversation, ConversationMeta,
-    ConversationStore, Device, EventBus, Message, ProviderPreset, Role, ScheduledTask,
-    ScheduledTaskStore, SearchHit, Skill, SkillStore, ThemeMode, builtin_presets,
+    ConversationStore, Device, EventBus, MemoryHit, MemoryIndex, MemoryStats, Message,
+    ProviderPreset, Role, ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode, Skill,
+    SkillStore, ThemeMode, builtin_presets,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
@@ -43,6 +44,10 @@ pub struct AppState {
     pub config: Arc<RwLock<AgentConfig>>,
     pub p2p: Arc<P2pManager>,
     pub event_bus: EventBus,
+    /// 跨会话历史记忆索引（RAG 记忆增强核心），与 agent 共享同一份 Arc
+    pub memory: Arc<MemoryIndex>,
+    /// 当前活跃会话 id，由 send_message 命令更新；agent 据此排除当前会话
+    pub current_conversation_id: Arc<RwLock<Option<String>>>,
     /// cron 调度器 task 句柄（setup 中 spawn 后写入；shutdown 时可 abort）。
     /// 用 `Mutex` 是因为句柄在 setup 阶段才产生，需运行时回填到已 manage 的 state。
     pub scheduler_handle: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -85,6 +90,11 @@ fn schedules_dir() -> std::path::PathBuf {
     appdata_root().join("schedules")
 }
 
+/// embedding 向量缓存文件：`<appdata>/memory_embeddings.json`
+fn embeddings_cache_path() -> std::path::PathBuf {
+    appdata_root().join("memory_embeddings.json")
+}
+
 /// 加载配置；不存在时返回默认值
 fn load_config_or_default() -> AgentConfig {
     let path = config_path();
@@ -106,7 +116,14 @@ fn save_config(config: &AgentConfig) -> std::result::Result<(), String> {
 }
 
 /// 根据 config 构造对应的 ChatAgent
-fn build_agent(config: &AgentConfig) -> Arc<dyn ChatAgent> {
+///
+/// `memory` 与 `current_conversation_id` 注入到 RigAgent 以启用 RAG 记忆增强；
+/// MockAgent 后端忽略这两个参数。
+fn build_agent(
+    config: &AgentConfig,
+    memory: Arc<MemoryIndex>,
+    current_conversation_id: Arc<RwLock<Option<String>>>,
+) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
             match RigAgent::from_key(
@@ -115,6 +132,8 @@ fn build_agent(config: &AgentConfig) -> Arc<dyn ChatAgent> {
                 &config.model_name,
                 &config.preamble,
                 config.enable_tools,
+                Some(memory),
+                current_conversation_id,
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -124,6 +143,85 @@ fn build_agent(config: &AgentConfig) -> Arc<dyn ChatAgent> {
             }
         }
         _ => Arc::new(MockAgent::new()),
+    }
+}
+
+/// 根据 config 构造 embedding provider 并注入到 memory index。
+///
+/// - backend=openai 且有 api_key：构造 `OpenAIEmbeddingProvider`，启用向量检索路
+/// - 否则：清除 memory 的 provider，退化为纯词法检索
+async fn apply_embedding_provider(config: &AgentConfig, memory: &MemoryIndex) {
+    if config.is_rig_ready() {
+        let provider = Arc::new(OpenAIEmbeddingProvider::new(
+            config.api_key.clone(),
+            config.base_url.clone(),
+            DEFAULT_EMBEDDING_MODEL.to_string(),
+            Some(embeddings_cache_path()),
+        ));
+        memory.set_embedding_provider(provider).await;
+        tracing::info!(model = %DEFAULT_EMBEDDING_MODEL, "已启用向量检索路");
+    } else {
+        memory.clear_embedding_provider().await;
+        tracing::info!("向量检索路已禁用（无 api_key 或 backend 非 openai）");
+    }
+}
+
+/// 从 ConversationStore 全量重建 memory index。
+///
+/// 异步遍历所有 conversation 文件，把每条非系统、非空消息加入索引。
+/// 在启动时 spawn 一次，避免阻塞 app 启动；后续 send_message 会增量更新。
+async fn rebuild_memory_from_store(store: &ConversationStore, memory: &MemoryIndex) {
+    let metas = match store.list_meta().await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "rebuild_memory: list_meta 失败");
+            return;
+        }
+    };
+    // 收集所有 (conv_id, Message) 对
+    let mut pairs: Vec<(String, Message)> = Vec::with_capacity(metas.iter().map(|m| m.message_count).sum());
+    for meta in &metas {
+        match store.load(&meta.id).await {
+            Ok(Some(conv)) => {
+                for msg in conv.messages {
+                    pairs.push((conv.id.clone(), msg));
+                }
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(error = %e, conv_id = %meta.id, "rebuild_memory: load 失败");
+            }
+        }
+    }
+    memory.rebuild_from_messages(pairs).await;
+    let stats = memory.stats().await;
+    tracing::info!(
+        total = stats.total_entries,
+        tokens = stats.unique_tokens,
+        "memory index 重建完成"
+    );
+}
+
+/// 后台批量计算 embedding，直到全部条目已嵌入或 provider 失效。
+///
+/// 每批 32 条，批间 100ms sleep 避免触发 rate limit。
+async fn spawn_embedding_computation(memory: Arc<MemoryIndex>) {
+    loop {
+        match memory.ensure_embeddings(32).await {
+            Ok(0) => {
+                tracing::info!("embedding 批量计算完成（无更多待嵌入条目）");
+                return;
+            }
+            Ok(n) => {
+                tracing::info!(embedded = n, "embedding 批量完成");
+                // 短暂 sleep 避免 rate limit
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "embedding 批量计算失败，停止后台任务");
+                return;
+            }
+        }
     }
 }
 
@@ -173,8 +271,15 @@ async fn set_config(
     // 持久化
     save_config(&config)?;
 
-    // 构造新 agent
-    let new_agent = build_agent(&config);
+    // 根据新配置刷新 embedding provider（启用/禁用向量检索路）
+    apply_embedding_provider(&config, &state.memory).await;
+
+    // 构造新 agent：注入 memory 与 current_conversation_id 以启用 RAG 记忆增强
+    let new_agent = build_agent(
+        &config,
+        Arc::clone(&state.memory),
+        Arc::clone(&state.current_conversation_id),
+    );
 
     // 替换 state 中的 agent 和 config
     {
@@ -266,7 +371,14 @@ async fn set_active_model(
 
     save_config(&config)?;
 
-    let new_agent = build_agent(&config);
+    // 切换模型时刷新 embedding provider（base_url/api_key 可能变化）
+    apply_embedding_provider(&config, &state.memory).await;
+
+    let new_agent = build_agent(
+        &config,
+        Arc::clone(&state.memory),
+        Arc::clone(&state.current_conversation_id),
+    );
     {
         let mut agent_lock = state.agent.write().await;
         *agent_lock = new_agent;
@@ -350,7 +462,7 @@ async fn toggle_pin_conversation(
         .map_err(|e| e.to_string())
 }
 
-/// 跨会话搜索消息内容
+/// 跨会话搜索消息内容（基于存储层的简单关键词匹配）
 #[tauri::command]
 async fn search_conversations(
     state: tauri::State<'_, AppState>,
@@ -361,6 +473,51 @@ async fn search_conversations(
         .search(&query)
         .await
         .map_err(|e| e.to_string())
+}
+
+// =========================================================
+// 命令：RAG 记忆增强检索
+// =========================================================
+
+/// 跨会话历史记忆检索（RAG：BM25 词法 + 向量 embedding + RRF 混合）
+///
+/// 与 `search_conversations`（存储层简单关键词匹配）不同，本命令走 memory index：
+/// - `lexical`：BM25 + IDF 加权，倒排表加速
+/// - `vector`：embedding 余弦相似度（需配置 OpenAI 兼容 provider）
+/// - `hybrid`：RRF 融合两路（默认推荐）
+///
+/// 自动排除当前活跃会话（若已通过 send_message 设置）。
+#[tauri::command]
+async fn search_memory(
+    state: tauri::State<'_, AppState>,
+    query: String,
+    mode: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<MemoryHit>, String> {
+    let mode = parse_search_mode(mode.as_deref());
+    let limit = limit.unwrap_or(5).max(1).min(50);
+    // 读出当前会话 id（短暂读锁），检索时排除
+    let exclude = state.current_conversation_id.read().await.clone();
+    let hits = state
+        .memory
+        .search(&query, limit, mode, exclude.as_deref())
+        .await;
+    Ok(hits)
+}
+
+/// 返回 memory index 统计信息（条目数、唯一 token 数、已嵌入条目数、平均文档长度）
+#[tauri::command]
+async fn get_memory_stats(state: tauri::State<'_, AppState>) -> Result<MemoryStats, String> {
+    Ok(state.memory.stats().await)
+}
+
+/// 解析前端传入的检索模式字符串为 SearchMode 枚举
+fn parse_search_mode(s: Option<&str>) -> SearchMode {
+    match s.map(str::to_ascii_lowercase).as_deref() {
+        Some("lexical") | Some("bm25") | Some("keyword") => SearchMode::Lexical,
+        Some("vector") | Some("embedding") | Some("semantic") => SearchMode::Vector,
+        _ => SearchMode::Hybrid,
+    }
 }
 
 // =========================================================
@@ -377,6 +534,11 @@ async fn send_message(
     let agent = state.agent.read().await.clone();
     let store = state.store.clone();
     let bus = state.event_bus.clone();
+    let memory = Arc::clone(&state.memory);
+    let cur_conv = Arc::clone(&state.current_conversation_id);
+
+    // 标记当前会话：agent 据此排除当前会话，避免与已注入上下文重复
+    *cur_conv.write().await = Some(conversation_id.clone());
 
     // 先把用户消息持久化到 store，同时取回完整历史
     let user_msg = Message::new(
@@ -385,10 +547,14 @@ async fn send_message(
         content,
         now_ms(),
     );
+    // 克隆一份用于 memory 增量索引（append_message 会 move user_msg）
+    let user_msg_for_memory = user_msg.clone();
     let conv = store
         .append_message(&conversation_id, user_msg, now_ms())
         .await
         .map_err(|e| e.to_string())?;
+    // 增量更新 memory index（幂等，已存在则跳过）
+    memory.add(&conversation_id, user_msg_for_memory).await;
 
     // 调用 agent
     let history = conv.history().to_vec();
@@ -401,10 +567,12 @@ async fn send_message(
         reply.clone(),
         now_ms(),
     );
+    let assistant_msg_for_memory = assistant_msg.clone();
     store
         .append_message(&conversation_id, assistant_msg, now_ms())
         .await
         .map_err(|e| e.to_string())?;
+    memory.add(&conversation_id, assistant_msg_for_memory).await;
 
     // 通过事件总线通知前端
     bus.publish(BusEvent::AgentMessage {
@@ -427,8 +595,12 @@ async fn send_message_stream(
 ) -> Result<(), String> {
     let agent = state.agent.read().await.clone();
     let store = state.store.clone();
-    let bus = state.event_bus.clone();
+    let memory = Arc::clone(&state.memory);
+    let cur_conv = Arc::clone(&state.current_conversation_id);
     let handle = app_handle.clone();
+
+    // 标记当前会话：agent 据此排除当前会话
+    *cur_conv.write().await = Some(conversation_id.clone());
 
     // 1. 持久化用户消息并取回完整历史
     let user_msg = Message::new(
@@ -437,10 +609,14 @@ async fn send_message_stream(
         content,
         now_ms(),
     );
+    let user_msg_for_memory = user_msg.clone();
     let conv = store
         .append_message(&conversation_id, user_msg, now_ms())
         .await
         .map_err(|e| e.to_string())?;
+    // 增量更新 memory index
+    memory.add(&conversation_id, user_msg_for_memory).await;
+
     let history = conv.history().to_vec();
     let conv_id = conversation_id.clone();
 
@@ -453,12 +629,10 @@ async fn send_message_stream(
             match chunk {
                 Ok(AgentStreamItem::Text { content }) => {
                     full.push_str(&content);
-                    // 通过事件总线 + Tauri emit 双通道推送
-                    bus.publish(BusEvent::AgentStreamToken {
-                        conversation_id: conv_id.clone(),
-                        content: content.clone(),
-                        done: false,
-                    });
+                    // 仅直接 emit 给前端。
+                    // 注意：不能同时 bus.publish，否则 setup() 中的总线订阅者会经
+                    // forward_event 再 emit 一次 "agent-token"，导致前端收到双份
+                    // token，表现为文本交错重复。
                     let _ = handle.emit(
                         "agent-token",
                         &StreamTokenPayload {
@@ -521,19 +695,17 @@ async fn send_message_stream(
             full.clone(),
             now_ms(),
         );
+        let assistant_msg_for_memory = assistant_msg.clone();
         if let Err(e) = store
             .append_message(&conv_id, assistant_msg, now_ms())
             .await
         {
             tracing::warn!(error = %e, "persist assistant reply failed");
         }
+        // 增量更新 memory index（即使持久化失败也尝试索引，best-effort）
+        memory.add(&conv_id, assistant_msg_for_memory).await;
 
-        // 4. 通知前端流结束
-        bus.publish(BusEvent::AgentStreamToken {
-            conversation_id: conv_id.clone(),
-            content: String::new(),
-            done: true,
-        });
+        // 4. 通知前端流结束（仅直接 emit，避免与总线转发重复）
         let _ = handle.emit(
             "agent-done",
             &StreamTokenPayload {
@@ -883,7 +1055,17 @@ pub fn run() {
 
     // 加载配置
     let config = load_config_or_default();
-    let agent: Arc<dyn ChatAgent> = build_agent(&config);
+
+    // 初始化跨会话记忆索引与当前会话 id 句柄（RAG 记忆增强核心）
+    let memory: Arc<MemoryIndex> = Arc::new(MemoryIndex::new());
+    let current_conversation_id: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+
+    // 构造 agent：注入 memory 与 current_conversation_id
+    let agent: Arc<dyn ChatAgent> = build_agent(
+        &config,
+        Arc::clone(&memory),
+        Arc::clone(&current_conversation_id),
+    );
 
     // 初始化存储
     let store = match ConversationStore::new(conversations_dir()) {
@@ -918,6 +1100,8 @@ pub fn run() {
 
     tracing::info!(backend = %agent.backend(), "EffiSuite 启动");
 
+    // 克隆一份配置用于 setup 阶段异步初始化 memory（避免在同步 setup 闭包中 .await）
+    let config_for_setup = config.clone();
     let agent_lock = Arc::new(RwLock::new(agent));
     let state = AppState {
         skill_store,
@@ -927,6 +1111,8 @@ pub fn run() {
         config: Arc::new(RwLock::new(config)),
         p2p,
         event_bus,
+        memory: Arc::clone(&memory),
+        current_conversation_id: Arc::clone(&current_conversation_id),
         scheduler_handle: std::sync::Mutex::new(None),
     };
 
@@ -935,7 +1121,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .setup(move |app| {
             // 订阅内部事件总线，转发为前端 Tauri 事件。
             // 使用 tauri::async_runtime::spawn 以兼容桌面与 mobile 运行时。
             let handle = app.handle().clone();
@@ -958,6 +1144,18 @@ pub fn run() {
                 Arc::clone(&state.store),
             );
             *state.scheduler_handle.lock().unwrap() = Some(sched_handle);
+
+            // RAG 记忆增强启动任务：
+            // 1. 全量重建 memory index（从 ConversationStore 加载所有历史消息）
+            // 2. 应用 embedding provider（若配置了 api_key）
+            // 3. 后台批量计算缺失 embedding（直到全部完成或 provider 失效）
+            let store_clone = Arc::clone(&state.store);
+            let memory_clone = Arc::clone(&state.memory);
+            tauri::async_runtime::spawn(async move {
+                rebuild_memory_from_store(&store_clone, &memory_clone).await;
+                apply_embedding_provider(&config_for_setup, &memory_clone).await;
+                spawn_embedding_computation(memory_clone).await;
+            });
 
             Ok(())
         })
@@ -982,6 +1180,9 @@ pub fn run() {
             rename_conversation,
             toggle_pin_conversation,
             search_conversations,
+            // RAG 记忆增强检索
+            search_memory,
+            get_memory_stats,
             // chat
             send_message,
             send_message_stream,

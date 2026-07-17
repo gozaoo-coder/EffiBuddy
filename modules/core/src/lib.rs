@@ -7,6 +7,7 @@
 pub mod config;
 pub mod error;
 pub mod events;
+pub mod memory;
 pub mod models;
 pub mod schedule_store;
 pub mod skill_store;
@@ -17,6 +18,9 @@ pub use config::{
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
+pub use memory::{
+    EmbeddingProvider, MemoryEntry, MemoryHit, MemoryIndex, MemoryStats, SearchMode,
+};
 pub use models::{
     Attachment, AttachmentKind, Conversation, Device, DeviceStatus, Message, Role, ScheduledTask,
     Skill,

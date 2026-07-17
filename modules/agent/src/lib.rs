@@ -7,14 +7,17 @@
 //! 当前版本提供：
 //! - [`MockAgent`]：纯本地回显，无网络依赖，用于离线开发与单测，支持流式
 //! - [`RigAgent`]：通过 rig 调用 OpenAI 兼容接口，支持流式输出与工具调用
-//! - [`tools`]：RAG 索引式调用工具集（search_history / get_time）
+//! - [`tools`]：RAG 检索工具集（search_history / search_memory / get_time 等）
+//! - [`embedding`]：OpenAI 兼容嵌入向量 provider，为 `MemoryIndex` 提供向量路
 
 pub mod agent;
+pub mod embedding;
 pub mod mock;
 pub mod rig_agent;
 pub mod tools;
 
 pub use agent::{AgentStreamItem, ChatAgent};
+pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::RigAgent;
-pub use tools::{GetTimeTool, SearchHistoryTool};
+pub use tools::{GetTimeTool, SearchHistoryTool, SearchMemoryTool};

@@ -46,6 +46,14 @@ const sending = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充的气泡 id
 
+// 自动滚动控制：markstream-vue 的 smooth-streaming 内部异步渲染，
+// nextTick 后 DOM 可能尚未增长，scrollHeight 是旧值导致 scrollBottom 失效。
+// 改用 MutationObserver 监听 scroller 子树变化，配合 requestAnimationFrame
+// 节流地跟随底部。stickToBottom 跟踪用户滚动位置，上滑阅读时暂停跟随。
+const stickToBottom = ref(true)
+let mutationObserver: MutationObserver | null = null
+let scrollRafId: number | null = null
+
 // 每个助手气泡的元数据：reasoning / tool calls（流式期间累积，不持久化）
 interface BubbleMeta {
   reasoning: string
@@ -86,7 +94,44 @@ function newId(): string {
 
 function scrollBottom() {
   const el = scroller.value
-  if (el) el.scrollTop = el.scrollHeight
+  if (el && stickToBottom.value) el.scrollTop = el.scrollHeight
+}
+
+// 节流跟随底部：MutationObserver 触发时合并到下一帧统一滚动，避免高频 token 抖动
+function scheduleFollowBottom() {
+  if (!stickToBottom.value || scrollRafId !== null) return
+  scrollRafId = requestAnimationFrame(() => {
+    scrollRafId = null
+    const el = scroller.value
+    if (el && stickToBottom.value) el.scrollTop = el.scrollHeight
+  })
+}
+
+// 滚动事件：用户上滑超过阈值时停止跟随，滑回底部时恢复
+function onScrollerScroll() {
+  const el = scroller.value
+  if (!el) return
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  stickToBottom.value = distance < 80
+}
+
+// 在 scroller 挂载/卸载时绑定/解绑 observer 与滚动监听
+function attachScroller(el: HTMLElement | null, oldEl?: HTMLElement | null) {
+  if (oldEl) {
+    oldEl.removeEventListener('scroll', onScrollerScroll)
+  }
+  if (mutationObserver) {
+    mutationObserver.disconnect()
+    mutationObserver = null
+  }
+  if (!el) return
+  el.addEventListener('scroll', onScrollerScroll, { passive: true })
+  mutationObserver = new MutationObserver(scheduleFollowBottom)
+  mutationObserver.observe(el, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  })
 }
 
 // 是否显示空状态首页
@@ -101,6 +146,12 @@ watch(
     loadConversation()
   },
 )
+
+// scroller 是 v-else 渲染的元素，首次发消息时才挂载。
+// 在此 watch 中绑定 MutationObserver，确保流式期间 DOM 增长能可靠触发滚动。
+watch(scroller, (el, oldEl) => {
+  attachScroller(el, oldEl ?? null)
+})
 
 async function loadConversation() {
   const id = activeId.value
@@ -244,6 +295,9 @@ async function finalizeStream(full: string) {
 async function send() {
   const content = input.value.trim()
   if (!content || sending.value) return
+
+  // 用户主动发送：强制跟随到底部
+  stickToBottom.value = true
 
   // 没有当前会话时新建一个
   let id = activeId.value
@@ -419,6 +473,14 @@ onMounted(async () => {
 onUnmounted(() => {
   unlistens.forEach((fn) => fn?.())
   unlistens = []
+  if (mutationObserver) {
+    mutationObserver.disconnect()
+    mutationObserver = null
+  }
+  if (scrollRafId !== null) {
+    cancelAnimationFrame(scrollRafId)
+    scrollRafId = null
+  }
 })
 </script>
 

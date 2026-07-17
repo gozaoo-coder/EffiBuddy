@@ -7,10 +7,12 @@
 //! 同时支持：
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
-//! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`GetTimeTool`、
-//!   `ReadFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`，
-//!   LLM 可主动调用以检索历史、获取时间、读写本地文件、执行 shell 命令
-//!   （集成 agent-reach / browser-act）、抓取网页
+//! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`SearchMemoryTool`、
+//!   `GetTimeTool`、`ReadFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`，
+//!   LLM 可主动调用以检索历史、跨会话记忆、获取时间、读写本地文件、
+//!   执行 shell 命令（集成 agent-reach / browser-act）、抓取网页
+//! - **RAG 记忆增强**：每次对话前自动通过 `MemoryIndex` 检索相关跨会话历史，
+//!   注入到 prompt 的 `[相关历史记忆]` 区段（"自动提供上文"）
 //!
 //! 设计要点（对齐 user_rules 中的 Rust 性能/并发规则）：
 //! - `CompletionsClient` 内部已是 `Arc` 共享句柄，`RigAgent` 直接持有而**不**再包
@@ -18,6 +20,8 @@
 //! - 每次 `chat`/`chat_stream` 构建一次 `Agent` 是 rig 推荐用法（builder 零成本），
 //!   不缓存带状态的 agent，天然支持并发请求。
 //! - `history` 通过 `Arc<RwLock<Vec<Message>>>` 共享给工具，读多写少用 RwLock。
+//! - `MemoryIndex` 与 `current_conversation_id` 句柄由 Tauri 层注入并跨请求共享，
+//!   检索时排除当前会话避免与已注入上下文重复。
 //! - 流式实现：把 `StreamedAssistantContent` 按语义分类透传为
 //!   `AgentStreamItem`（Text/Reasoning/ToolCallStart/ToolResult），
 //!   让前端能分别渲染推理框、工具调用提示框与正文。
@@ -25,7 +29,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use effisuite_core::{CoreError, Message, Result, Role};
+use effisuite_core::{CoreError, MemoryIndex, Message, Result, Role};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use rig_core::{
@@ -40,8 +44,17 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent};
 use crate::tools::{
-    GetTimeTool, ListFilesTool, ReadFileTool, SearchHistoryTool, ShellTool, WebFetchTool,
+    GetTimeTool, ListFilesTool, ReadFileTool, SearchHistoryTool, SearchMemoryTool, ShellTool,
+    WebFetchTool,
 };
+
+/// 自动注入的相关历史记忆条数上限
+const MEMORY_AUTO_INJECT_LIMIT: usize = 5;
+/// 当启用记忆增强时，当前对话保留在 prompt 中的最近消息条数
+/// （更早的消息由 RAG 检索覆盖，避免 token 爆炸）
+const RECENT_HISTORY_WITH_MEMORY: usize = 10;
+/// 单条历史消息截断字符数
+const HISTORY_TRUNCATE_CHARS: usize = 800;
 
 pub struct RigAgent {
     /// 统一用 CompletionsClient（Chat Completions API），兼容所有 OpenAI 兼容 provider
@@ -52,14 +65,25 @@ pub struct RigAgent {
     history: Arc<RwLock<Vec<Message>>>,
     /// 是否启用工具调用
     enable_tools: bool,
+    /// 跨会话历史记忆索引（RAG 记忆增强核心）
+    /// None 时退化为旧行为（包含全部当前对话历史）
+    memory: Option<Arc<MemoryIndex>>,
+    /// 当前会话 id 句柄，由 Tauri 命令层在每次 send_message 前更新；
+    /// search_memory 工具与自动注入都据此排除当前会话
+    current_conversation_id: Arc<RwLock<Option<String>>>,
 }
 
 impl RigAgent {
     /// 从环境变量 `OPENAI_API_KEY` 构造 OpenAI 客户端
+    ///
+    /// `memory` 与 `current_conversation_id` 用于 RAG 记忆增强；传 None / 默认句柄
+    /// 则关闭记忆增强能力（行为同旧版）。
     pub fn from_env(
         model_name: impl Into<String>,
         preamble: impl Into<String>,
         enable_tools: bool,
+        memory: Option<Arc<MemoryIndex>>,
+        current_conversation_id: Arc<RwLock<Option<String>>>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -69,6 +93,8 @@ impl RigAgent {
             preamble: preamble.into(),
             history: Arc::new(RwLock::new(Vec::new())),
             enable_tools,
+            memory,
+            current_conversation_id,
         })
     }
 
@@ -77,12 +103,15 @@ impl RigAgent {
     /// - `api_key`：Bearer token，空串会被 rig 拒绝
     /// - `base_url`：可覆盖默认 `https://api.openai.com/v1`，留空则用默认
     /// - 走 Chat Completions API（`openai::CompletionsClient`）
+    /// - `memory` 注入后启用 RAG 记忆增强（自动上文 + search_memory 工具）
     pub fn from_key(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         model_name: impl Into<String>,
         preamble: impl Into<String>,
         enable_tools: bool,
+        memory: Option<Arc<MemoryIndex>>,
+        current_conversation_id: Arc<RwLock<Option<String>>>,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -99,6 +128,8 @@ impl RigAgent {
             preamble: preamble.into(),
             history: Arc::new(RwLock::new(Vec::new())),
             enable_tools,
+            memory,
+            current_conversation_id,
         })
     }
 
@@ -110,8 +141,8 @@ impl RigAgent {
 
     /// 构建一个带工具的 agent（每次调用重新构建，零成本）
     ///
-    /// 装配工具时，所有工具共享同一份 history Arc，确保 LLM 调用
-    /// search_history 时看到的是最新历史。
+    /// 装配工具时，所有工具共享同一份 history Arc 与 current_conversation_id Arc，
+    /// 确保 LLM 调用 search_history / search_memory 时看到的是最新上下文。
     ///
     /// 返回类型用关联类型 `<openai::CompletionsClient as CompletionClient>::CompletionModel`，
     /// 即 `GenericCompletionModel<OpenAICompletionsExt>`，统一所有 OpenAI 兼容 provider。
@@ -125,7 +156,7 @@ impl RigAgent {
             .preamble(&self.preamble);
 
         if self.enable_tools {
-            // 注册 RAG 检索工具：每次 build 都重新创建工具实例，但它们共享 history
+            // 注册会话内检索工具：每次 build 都重新创建工具实例，但它们共享 history
             let search = SearchHistoryTool::new(Arc::clone(&self.history));
             let time = GetTimeTool::new(Arc::clone(&self.history));
             // 无状态本地能力工具：读文件、列目录、执行 shell（agent-reach/browser-act）、抓网页
@@ -133,15 +164,25 @@ impl RigAgent {
             let list_files = ListFilesTool::new();
             let shell = ShellTool::new();
             let web_fetch = WebFetchTool::new();
-            builder
+
+            let mut b = builder
                 .tool(search)
                 .tool(time)
                 .tool(read_file)
                 .tool(list_files)
                 .tool(shell)
-                .tool(web_fetch)
-                .default_max_turns(usize::MAX)
-                .build()
+                .tool(web_fetch);
+
+            // 跨会话记忆检索工具：仅在 MemoryIndex 可用时注册
+            if let Some(memory) = &self.memory {
+                let search_memory = SearchMemoryTool::new(
+                    Arc::clone(memory),
+                    Arc::clone(&self.current_conversation_id),
+                );
+                b = b.tool(search_memory);
+            }
+
+            b.default_max_turns(usize::MAX).build()
         } else {
             builder.build()
         }
@@ -161,14 +202,13 @@ impl RigAgent {
 
     /// 构建包含完整对话历史的上下文 prompt
     ///
-    /// 将历史消息格式化为对话脚本，让 LLM 能看到所有之前的交流，
-    /// 而非仅看到最后一条用户消息。这是解决 agent "一问三不知" 的关键。
-    ///
-    /// 格式：
+    /// 启用 RAG 记忆增强时的格式：
     /// ```text
-    /// [对话历史]
-    /// 用户: 我们之前聊过 Rust 的异步编程
-    /// 助手: 是的，Rust 的 async/await 基于 Future trait...
+    /// [相关历史记忆]（来自其他对话，供参考）
+    /// 1. [会话abc123] [用户] 我们之前聊过 Rust 的异步编程
+    /// 2. [会话def456] [助手] tokio 使用 work-stealing 调度器...
+    ///
+    /// [当前对话最近]
     /// 用户: 那 tokio 是怎么调度这些 future 的？
     /// 助手: tokio 使用 work-stealing 调度器...
     ///
@@ -176,9 +216,9 @@ impl RigAgent {
     /// 用户: 能再详细解释一下 work-stealing 吗？
     /// ```
     ///
+    /// 未启用记忆增强或无相关记忆时退化为旧行为：包含全部当前对话历史。
     /// 长消息会被截断到 800 字符，避免 token 爆炸。
-    /// 仅有一条消息时不加历史头，直接返回。
-    fn build_contextual_prompt(&self, messages: &[Message]) -> String {
+    async fn build_contextual_prompt(&self, messages: &[Message]) -> String {
         if messages.is_empty() {
             return "hello".to_string();
         }
@@ -188,36 +228,111 @@ impl RigAgent {
             .iter()
             .rposition(|m| m.role == Role::User)
             .unwrap_or(messages.len() - 1);
-
-        // 如果只有一条消息（或只有一条用户消息），直接返回
-        let history_msgs = &messages[..last_user_idx];
         let current_msg = &messages[last_user_idx];
 
-        if history_msgs.is_empty() {
+        // 1. 若启用记忆增强，先检索跨会话相关历史
+        let memory_section = if let Some(memory) = &self.memory {
+            // 跳过过短查询（如单字符）避免无意义检索
+            let query = current_msg.content.trim();
+            if query.len() < 2 {
+                String::new()
+            } else {
+                let exclude = self.current_conversation_id.read().await.clone();
+                let hits = memory
+                    .search_hybrid(query, MEMORY_AUTO_INJECT_LIMIT, exclude.as_deref())
+                    .await;
+                if hits.is_empty() {
+                    String::new()
+                } else {
+                    format_memory_section(&hits)
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        // 2. 当前对话历史：启用记忆时只取最近 N 条，否则取全部（旧行为）
+        let history_msgs: &[Message] = if self.memory.is_some() {
+            let start = last_user_idx.saturating_sub(RECENT_HISTORY_WITH_MEMORY);
+            &messages[start..last_user_idx]
+        } else {
+            &messages[..last_user_idx]
+        };
+
+        // 3. 若无历史且无记忆，直接返回当前问题
+        if history_msgs.is_empty() && memory_section.is_empty() {
             return current_msg.content.clone();
         }
 
-        // 构建完整上下文 prompt
-        // 预估容量：每条消息 ~128 字节，减少扩容
-        let mut prompt = String::with_capacity(messages.len() * 128);
-        prompt.push_str("[对话历史]\n");
+        // 4. 拼装 prompt
+        // 预估容量：记忆段 + 历史段 + 当前问题
+        let mut prompt = String::with_capacity(
+            memory_section.len() + history_msgs.len() * 128 + current_msg.content.len() + 64,
+        );
 
-        for m in history_msgs {
-            let role_label = match m.role {
-                Role::User => "用户",
-                Role::Assistant => "助手",
-                Role::System => "系统",
-            };
-            let content = truncate_for_context(&m.content, 800);
-            prompt.push_str(role_label);
-            prompt.push_str(": ");
-            prompt.push_str(&content);
+        if !memory_section.is_empty() {
+            prompt.push_str(&memory_section);
             prompt.push('\n');
         }
 
-        prompt.push_str("\n[当前问题]\n用户: ");
+        if !history_msgs.is_empty() {
+            prompt.push_str("[当前对话最近]\n");
+            for m in history_msgs {
+                let role_label = match m.role {
+                    Role::User => "用户",
+                    Role::Assistant => "助手",
+                    Role::System => "系统",
+                };
+                let content = truncate_for_context(&m.content, HISTORY_TRUNCATE_CHARS);
+                prompt.push_str(role_label);
+                prompt.push_str(": ");
+                prompt.push_str(&content);
+                prompt.push('\n');
+            }
+            prompt.push('\n');
+        }
+
+        prompt.push_str("[当前问题]\n用户: ");
         prompt.push_str(&current_msg.content);
         prompt
+    }
+}
+
+/// 格式化记忆增强的 `[相关历史记忆]` 段落
+///
+/// 输出格式：
+/// ```text
+/// [相关历史记忆]（来自其他对话，供参考）
+/// 1. [会话abc12345] [用户] 我们之前聊过 Rust 的异步编程
+/// 2. [会话def67890] [助手] tokio 使用 work-stealing 调度器...
+/// ```
+fn format_memory_section(hits: &[effisuite_core::MemoryHit]) -> String {
+    let mut s = String::with_capacity(hits.len() * 128 + 32);
+    s.push_str("[相关历史记忆]（来自其他对话，供参考）\n");
+    for (i, hit) in hits.iter().enumerate() {
+        let role = match hit.role {
+            Role::User => "用户",
+            Role::Assistant => "助手",
+            Role::System => "系统",
+        };
+        s.push_str(&format!(
+            "{}. [会话{}] [{}] {}\n",
+            i + 1,
+            short_conv_id(&hit.conversation_id),
+            role,
+            hit.snippet
+        ));
+    }
+    s
+}
+
+/// 截断会话 id 用于显示（取前 8 字符，UTF-8 边界安全）
+#[inline]
+fn short_conv_id(id: &str) -> &str {
+    if id.len() <= 8 {
+        id
+    } else {
+        &id[..id.ceil_char_boundary(8)]
     }
 }
 
@@ -260,7 +375,7 @@ impl ChatAgent for RigAgent {
 
         let agent = self.build_agent();
         // 使用完整对话历史上下文，而非仅取最后一条用户消息
-        let prompt = self.build_contextual_prompt(messages);
+        let prompt = self.build_contextual_prompt(messages).await;
 
         let resp = agent
             .prompt(&prompt)
@@ -280,7 +395,7 @@ impl ChatAgent for RigAgent {
 
             let agent = self.build_agent();
             // 使用完整对话历史上下文，而非仅取最后一条用户消息
-            let prompt = self.build_contextual_prompt(messages);
+            let prompt = self.build_contextual_prompt(messages).await;
 
             // stream_prompt 返回 StreamingPromptRequest，await 后直接得到流
             let mut stream = agent.stream_prompt(prompt).await;
