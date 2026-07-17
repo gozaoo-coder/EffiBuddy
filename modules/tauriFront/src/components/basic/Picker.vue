@@ -6,8 +6,10 @@
  * 滚轮用 scroll-snap 实现：scroll-snap-type: y mandatory，每项 scroll-snap-align: center
  * 选中项 primary 色加粗；顶部标题栏 + 取消/确定按钮
  * 遮罩 rgba(0,0,0,0.45)，点击遮罩取消
+ * 遮罩 fade 与面板从底部滑入使用 anime.js v4（通过 useAnimeTransition）
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useAnimeTransition } from '../../composables/useAnimeTransition'
 
 export interface PickerOption {
   /** 显示文本 */
@@ -176,6 +178,34 @@ watch(open, (v) => {
 })
 
 onUnmounted(() => unlockBody())
+
+// 遮罩 fade 动画（anime.js v4 + Vue Transition JS 钩子）
+const { onEnter: onOverlayEnter, onLeave: onOverlayLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    duration: 250,
+    ease: 'outQuad',
+  },
+  leave: {
+    opacity: [1, 0],
+    duration: 220,
+    ease: 'inOut(2)',
+  },
+})
+
+// 面板从底部滑入/滑出
+const { onEnter: onSheetEnter, onLeave: onSheetLeave } = useAnimeTransition({
+  enter: {
+    transform: ['translateY(100%)', 'translateY(0px)'],
+    duration: 320,
+    ease: 'out(3)',
+  },
+  leave: {
+    transform: ['translateY(0px)', 'translateY(100%)'],
+    duration: 260,
+    ease: 'inOut(2)',
+  },
+})
 </script>
 
 <template>
@@ -193,10 +223,10 @@ onUnmounted(() => unlockBody())
 
     <!-- 面板：Teleport 到 body -->
     <Teleport to="body">
-      <Transition name="picker-overlay">
+      <Transition :css="false" @enter="onOverlayEnter" @leave="onOverlayLeave">
         <div v-if="open" class="picker-overlay" @click="onOverlayClick"></div>
       </Transition>
-      <Transition name="picker-sheet">
+      <Transition :css="false" @enter="onSheetEnter" @leave="onSheetLeave">
         <div v-if="open" class="picker-sheet" role="dialog" aria-modal="true">
           <!-- 顶部标题栏 -->
           <div class="picker-header">

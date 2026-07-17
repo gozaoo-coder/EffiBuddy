@@ -5,8 +5,13 @@
  * 圆形指示器 18px，选中时内圈实心 primary 色（伪元素缩放出现）
  * label 文字在右侧，点击整行切换；disabled 时 opacity 0.5
  * 通过 inject 自动接入 RadioGroup 上下文（也支持独立使用）
+ *
+ * 微交互：选中时内圈 dot 用 anime.js v4 做 scale(0)→scale(1) 动画。
+ * 原 CSS 用 ::after 伪元素（保留作为 fallback），这里改为对真实
+ * <span class="radio-dot"> 做动画（anime.js 无法直接操作伪元素）。
  */
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
+import { animate } from 'animejs'
 import { radioGroupKey, type RadioGroupContext } from './RadioGroup.vue'
 
 const props = withDefaults(
@@ -70,6 +75,41 @@ function onClick() {
     emit('change', props.value)
   }
 }
+
+// ---- anime.js v4 微交互：选中圈 dot scale 动画 ----
+// 使用真实 span.radio-dot 替代 ::after 伪元素，便于 anime.js 直接操作。
+// 通过 watch 监听 isChecked 变化，在 Vue 更新 DOM class 之前（flush:'pre'）
+// 设置内联 transform，避免 CSS class 切换造成的闪烁。
+const dotEl = ref<HTMLSpanElement | null>(null)
+
+watch(
+  isChecked,
+  (checked) => {
+    if (!dotEl.value) return
+    if (checked) {
+      // 选中：scale 0 → 1
+      animate(dotEl.value, {
+        transform: ['scale(0)', 'scale(1)'],
+        duration: 280,
+        ease: 'out(3)',
+        onComplete: () => {
+          // 清理内联 transform：CSS 已通过 .radio--checked 处于 scale(1)
+          if (dotEl.value) dotEl.value.style.transform = ''
+        },
+      })
+    } else {
+      // 取消选中：scale 1 → 0
+      animate(dotEl.value, {
+        transform: ['scale(1)', 'scale(0)'],
+        duration: 220,
+        ease: 'out(3)',
+        onComplete: () => {
+          if (dotEl.value) dotEl.value.style.transform = ''
+        },
+      })
+    }
+  },
+)
 </script>
 
 <template>
@@ -89,9 +129,38 @@ function onClick() {
       tabindex="-1"
       @click.stop
     />
-    <span class="radio-indicator" aria-hidden="true"></span>
+    <span class="radio-indicator" aria-hidden="true">
+      <span ref="dotEl" class="radio-dot"></span>
+    </span>
     <span v-if="label || $slots.default" class="radio-label">
       <slot>{{ label }}</slot>
     </span>
   </label>
 </template>
+
+<style scoped>
+/*
+ * radio-dot：真实的选中圆点（替代 ::after 伪元素，便于 anime.js 操作）。
+ * 使用 inset:0 + margin:auto 居中，避免 translate 与 anime.js transform 冲突。
+ * 初始 scale(0)，选中时由 .radio--checked 切到 scale(1)（CSS 兜底），
+ * anime.js watch 会在 class 切换前设置内联 transform 驱动动画。
+ */
+.radio-dot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  margin: auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  transform: scale(0);
+  pointer-events: none;
+}
+
+.radio--checked .radio-dot {
+  transform: scale(1);
+}
+</style>

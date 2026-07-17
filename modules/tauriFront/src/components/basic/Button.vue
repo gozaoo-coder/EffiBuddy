@@ -3,8 +3,12 @@
  * Button 通用按钮组件
  * 参考 HarmonyOS NEXT 设计规范，统一使用 design tokens
  * 支持 variant/size/icon-only/container/loading/disabled/block/shape 等配置
+ *
+ * 微交互：press/release 的 scale 动画由 anime.js v4 驱动，替代 CSS :active。
+ * hover 颜色过渡、loading spinner 旋转仍由 CSS 负责。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { animate } from 'animejs'
 
 export type ButtonVariant = 'primary' | 'normal' | 'text' | 'danger'
 export type ButtonSize = 'sm' | 'md' | 'lg'
@@ -67,14 +71,61 @@ function onClick(ev: MouseEvent) {
   if (isDisabled.value) return
   emit('click', ev)
 }
+
+// ---- anime.js v4 微交互：press/release scale ----
+const btnEl = ref<HTMLButtonElement | null>(null)
+// 是否处于按下状态：避免 pointerleave 与 pointerup 重复触发回弹动画
+const pressed = ref(false)
+
+function onPointerDown() {
+  if (isDisabled.value || !btnEl.value) return
+  pressed.value = true
+  animate(btnEl.value, {
+    scale: [1, 0.97],
+    duration: 120,
+    ease: 'out(3)',
+  })
+}
+
+function onPointerUp() {
+  if (!pressed.value || !btnEl.value) return
+  pressed.value = false
+  animate(btnEl.value, {
+    scale: [0.97, 1],
+    duration: 150,
+    ease: 'out(3)',
+    onComplete: () => {
+      // 清理内联 transform，避免影响后续布局或 CSS hover
+      if (btnEl.value) btnEl.value.style.transform = ''
+    },
+  })
+}
+
+function onPointerLeave() {
+  // 按下后移出元素：同样回弹
+  if (!pressed.value || !btnEl.value) return
+  pressed.value = false
+  animate(btnEl.value, {
+    scale: [0.97, 1],
+    duration: 150,
+    ease: 'out(3)',
+    onComplete: () => {
+      if (btnEl.value) btnEl.value.style.transform = ''
+    },
+  })
+}
 </script>
 
 <template>
   <button
+    ref="btnEl"
     :class="classes"
     :disabled="isDisabled"
     :aria-busy="loading"
     @click="onClick"
+    @pointerdown="onPointerDown"
+    @pointerup="onPointerUp"
+    @pointerleave="onPointerLeave"
   >
     <!-- loading 状态显示 spinner 替换内容 -->
     <span v-if="loading" class="btn-base-spinner" aria-hidden="true"></span>

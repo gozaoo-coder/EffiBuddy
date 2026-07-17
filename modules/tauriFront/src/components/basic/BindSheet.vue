@@ -11,8 +11,11 @@
  * - 半模态：side=bottom 时居中显示，两侧留空，最大宽度 480px
  * - ESC 关闭、点击遮罩关闭（可配置）
  * - body 滚动锁
+ * - 进出动画使用 anime.js v4（通过 useAnimeTransition），按 side 选择滑动方向
  */
 import { ref, watch, onUnmounted, computed } from 'vue'
+import { animate } from 'animejs'
+import { useAnimeTransition } from '../../composables/useAnimeTransition'
 
 const props = withDefaults(
   defineProps<{
@@ -132,11 +135,81 @@ function onPanelClick(e: MouseEvent) {
 function onClose() {
   setVisible(false)
 }
+
+// 根据 side 计算面板滑入/滑出的 transform
+// - bottom: translateY(100%) → 0
+// - top:    translateY(-100%) → 0
+// - left:   translateX(-100%) → 0
+// - right:  translateX(100%) → 0
+function panelAxis() {
+  return props.side === 'left' || props.side === 'right' ? 'translateX' : 'translateY'
+}
+function panelFromTransform() {
+  const axis = panelAxis()
+  const sign = props.side === 'top' || props.side === 'left' ? '-' : ''
+  return `${axis}(${sign}100%)`
+}
+function panelToTransform() {
+  return `${panelAxis()}(0px)`
+}
+
+// 进出动画：遮罩 fade + 面板按 side 方向滑动
+// 遮罩与面板分别动画化，面板动画完成后清理内联 transform/opacity 避免影响布局
+const { onEnter, onLeave } = useAnimeTransition({
+  enter: (el, done) => {
+    const overlay = el.querySelector('.bindsheet-overlay')
+    const panel = el.querySelector('.bindsheet-panel') as HTMLElement | null
+    if (overlay) {
+      animate(overlay, {
+        opacity: [0, 1],
+        duration: 250,
+        ease: 'outQuad',
+      })
+    }
+    if (panel) {
+      animate(panel, {
+        transform: [panelFromTransform(), panelToTransform()],
+        duration: 300,
+        ease: 'out(3)',
+        onComplete: () => {
+          panel.style.transform = ''
+          if (overlay) (overlay as HTMLElement).style.opacity = ''
+          done()
+        },
+      })
+    } else {
+      done()
+    }
+  },
+  leave: (el, done) => {
+    const overlay = el.querySelector('.bindsheet-overlay')
+    const panel = el.querySelector('.bindsheet-panel') as HTMLElement | null
+    if (overlay) {
+      animate(overlay, {
+        opacity: [1, 0],
+        duration: 220,
+        ease: 'inOut(2)',
+      })
+    }
+    if (panel) {
+      animate(panel, {
+        transform: [panelToTransform(), panelFromTransform()],
+        duration: 240,
+        ease: 'inOut(2)',
+        onComplete: () => {
+          done()
+        },
+      })
+    } else {
+      done()
+    }
+  },
+})
 </script>
 
 <template>
   <Teleport to="body">
-    <Transition :name="`bindsheet-${side}`" appear>
+    <Transition :css="false" @enter="onEnter" @leave="onLeave" appear>
       <div
         v-if="innerVisible"
         class="bindsheet-root"

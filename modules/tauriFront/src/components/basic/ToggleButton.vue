@@ -3,8 +3,12 @@
  * ToggleButton 状态开关按钮
  * 点击切换 active 状态，支持 v-model
  * active 时显示 primary 色实心，inactive 时显示 normal 样式
+ *
+ * 微交互：press/release 的 scale 动画由 anime.js v4 驱动，替代 CSS :active。
+ * hover 颜色过渡仍由 CSS 负责。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { animate } from 'animejs'
 
 export type ToggleButtonSize = 'sm' | 'md' | 'lg'
 export type ToggleButtonVariant = 'primary' | 'normal'
@@ -61,14 +65,58 @@ function onClick() {
   emit('update:modelValue', next)
   emit('change', next)
 }
+
+// ---- anime.js v4 微交互：press/release scale ----
+const btnEl = ref<HTMLButtonElement | null>(null)
+const pressed = ref(false)
+
+function onPointerDown() {
+  if (props.disabled || !btnEl.value) return
+  pressed.value = true
+  animate(btnEl.value, {
+    scale: [1, 0.97],
+    duration: 120,
+    ease: 'out(3)',
+  })
+}
+
+function onPointerUp() {
+  if (!pressed.value || !btnEl.value) return
+  pressed.value = false
+  animate(btnEl.value, {
+    scale: [0.97, 1],
+    duration: 150,
+    ease: 'out(3)',
+    onComplete: () => {
+      if (btnEl.value) btnEl.value.style.transform = ''
+    },
+  })
+}
+
+function onPointerLeave() {
+  if (!pressed.value || !btnEl.value) return
+  pressed.value = false
+  animate(btnEl.value, {
+    scale: [0.97, 1],
+    duration: 150,
+    ease: 'out(3)',
+    onComplete: () => {
+      if (btnEl.value) btnEl.value.style.transform = ''
+    },
+  })
+}
 </script>
 
 <template>
   <button
+    ref="btnEl"
     :class="classes"
     :disabled="disabled"
     :aria-pressed="modelValue"
     @click="onClick"
+    @pointerdown="onPointerDown"
+    @pointerup="onPointerUp"
+    @pointerleave="onPointerLeave"
   >
     <span v-if="displayText" class="toggle-btn-label">{{ displayText }}</span>
     <slot v-else />

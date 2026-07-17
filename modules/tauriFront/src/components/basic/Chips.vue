@@ -5,8 +5,10 @@
  * 胶囊形（radius-full），sm 高度 28px / md 高度 36px
  * 左侧 icon/image，中间 label，右侧 × 删除按钮（removable 时）
  * selected 时 primary 色边框 + 淡 primary 背景
+ * 点击使用 anime.js v4 做 scale 弹性反馈（1 → 0.94 → 1）
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { animate } from 'animejs'
 
 export type ChipsSize = 'sm' | 'md'
 
@@ -50,11 +52,26 @@ const classes = computed(() => {
   return list
 })
 
+// 根元素引用，用于触发 anime.js 弹性反馈
+const rootEl = ref<HTMLElement | null>(null)
+
 function onClick(ev: MouseEvent) {
   if (props.disabled) return
   emit('click', ev)
   // 点击切换 selected（如果用 v-model:selected）
   emit('update:selected', !props.selected)
+  // 弹性反馈：1 → 0.94 → 1 三帧回弹
+  if (rootEl.value) {
+    animate(rootEl.value, {
+      scale: [1, 0.94, 1],
+      duration: 220,
+      ease: 'out(3)',
+      onComplete: () => {
+        // 清理内联 transform，避免影响 hover/selected 等布局状态
+        if (rootEl.value) rootEl.value.style.transform = ''
+      },
+    })
+  }
 }
 
 function onRemove(ev: MouseEvent) {
@@ -66,6 +83,7 @@ function onRemove(ev: MouseEvent) {
 
 <template>
   <span
+    ref="rootEl"
     :class="classes"
     role="button"
     :aria-pressed="selected"

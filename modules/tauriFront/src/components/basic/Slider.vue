@@ -5,8 +5,14 @@
  * 轨道高度 4/6/8px（sm/md/lg），已填充部分 primary 色
  * 滑块圆形 16/20/24px，hover 1.1、active 1.2 缩放
  * showValue 时右侧显示数值（宽度 40px，muted 色）
+ *
+ * 微交互：thumb 是伪元素 ::-webkit-slider-thumb，无法直接 ref，
+ * 因此保留 CSS 的 thumb hover/active scale。改为对 input 元素做
+ * focus 反馈动画（轻微上浮 + 亮度提升），blur 时还原。
+ * 轨道渐变（--slider-percent）保留 CSS。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { animate } from 'animejs'
 
 export type SliderSize = 'sm' | 'md' | 'lg'
 
@@ -74,11 +80,43 @@ function onChange(e: Event) {
   const v = Number(target.value)
   emit('change', v)
 }
+
+// ---- anime.js v4 微交互：focus 时 input 轻微上浮 + 亮度提升 ----
+// thumb 是伪元素无法直接 ref，保留 CSS thumb scale；
+// 这里对 input 元素做 focus 反馈，作为 track 的"高亮"提示。
+const inputEl = ref<HTMLInputElement | null>(null)
+
+function onFocus() {
+  if (props.disabled || !inputEl.value) return
+  animate(inputEl.value, {
+    translateY: [0, -1],
+    filter: ['brightness(1)', 'brightness(1.1)'],
+    duration: 200,
+    ease: 'out(3)',
+  })
+}
+
+function onBlur() {
+  if (!inputEl.value) return
+  animate(inputEl.value, {
+    translateY: [-1, 0],
+    filter: ['brightness(1.1)', 'brightness(1)'],
+    duration: 200,
+    ease: 'out(3)',
+    onComplete: () => {
+      if (inputEl.value) {
+        inputEl.value.style.transform = ''
+        inputEl.value.style.filter = ''
+      }
+    },
+  })
+}
 </script>
 
 <template>
   <div :class="wrapperClasses">
     <input
+      ref="inputEl"
       class="slider-input"
       type="range"
       :min="min"
@@ -89,6 +127,8 @@ function onChange(e: Event) {
       :style="sliderStyle"
       @input="onInput"
       @change="onChange"
+      @focus="onFocus"
+      @blur="onBlur"
     />
     <span v-if="showValue" class="slider-value">{{ modelValue }}</span>
   </div>

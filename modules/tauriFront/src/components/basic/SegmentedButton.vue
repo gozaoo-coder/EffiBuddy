@@ -5,8 +5,10 @@
  * 多段横排，整体圆角 radius-sm，每段等宽，段间 1px border 分隔
  * 选中段 primary 色背景白字，未选中透明背景 text 色
  * 切换有过渡动效；block 时宽度 100%
+ * 选中切换使用 anime.js v4 做轻量 scale 弹性反馈
  */
 import { computed } from 'vue'
+import { animate } from 'animejs'
 
 export type SegmentedSize = 'sm' | 'md' | 'lg'
 
@@ -53,11 +55,24 @@ const wrapperClasses = computed(() => {
   return list
 })
 
-function onSelect(opt: SegmentedOption) {
+function onSelect(opt: SegmentedOption, ev: MouseEvent) {
   if (props.disabled) return
   if (opt.value === props.modelValue) return
   emit('update:modelValue', opt.value)
   emit('change', opt.value, opt)
+  // 选中段弹性反馈：从 0.94 回弹到 1
+  const el = ev.currentTarget as HTMLElement | null
+  if (el) {
+    animate(el, {
+      scale: [0.94, 1],
+      duration: 220,
+      ease: 'out(3)',
+      onComplete: () => {
+        // 清理内联 transform，避免影响 hover/active 等布局状态
+        el.style.transform = ''
+      },
+    })
+  }
 }
 </script>
 
@@ -77,7 +92,7 @@ function onSelect(opt: SegmentedOption) {
         },
       ]"
       :disabled="disabled"
-      @click="onSelect(opt)"
+      @click="onSelect(opt, $event)"
     >
       <span v-if="opt.icon" class="segmented-item-icon">{{ opt.icon }}</span>
       <span class="segmented-item-label">{{ opt.label }}</span>

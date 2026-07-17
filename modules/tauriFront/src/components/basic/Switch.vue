@@ -4,8 +4,12 @@
  * 参考 HarmonyOS NEXT 设计规范，统一使用 design tokens
  * 三档尺寸：sm 36×20 / md 44×24 / lg 52×28
  * 开时轨道 primary 色，关时 card-2 色，滑块白色滑动
+ *
+ * 微交互：滑块位移由 anime.js v4 驱动，替代 CSS transform 过渡。
+ * 轨道背景色仍由 CSS transition 负责。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { animate } from 'animejs'
 
 export type SwitchSize = 'sm' | 'md' | 'lg'
 
@@ -41,6 +45,31 @@ const classes = computed(() => {
 
 // 滑块位移：根据尺寸决定（轨道宽 - 滑块直径 - 2*边距）
 // sm: 36-16-4=16 ; md: 44-20-4=20 ; lg: 52-24-4=24
+const sizeTravel: Record<SwitchSize, number> = { sm: 16, md: 20, lg: 24 }
+
+const knobEl = ref<HTMLSpanElement | null>(null)
+
+// 监听 modelValue 变化，用 anime.js 驱动滑块位移
+// false→true: translateX 0→travel；true→false: travel→0
+watch(
+  () => props.modelValue,
+  (next, prev) => {
+    if (next === prev || !knobEl.value) return
+    const travel = sizeTravel[props.size]
+    const from = next ? 0 : travel
+    const to = next ? travel : 0
+    animate(knobEl.value, {
+      translateX: [from, to],
+      duration: 280,
+      ease: 'out(3)',
+      onComplete: () => {
+        // 清理内联 transform：CSS 已根据 switch--on class 处于正确状态
+        if (knobEl.value) knobEl.value.style.transform = ''
+      },
+    })
+  },
+)
+
 function toggle() {
   if (props.disabled) return
   const next = !props.modelValue
@@ -58,6 +87,6 @@ function toggle() {
     :disabled="disabled"
     @click="toggle"
   >
-    <span class="switch-knob"></span>
+    <span ref="knobEl" class="switch-knob"></span>
   </button>
 </template>
