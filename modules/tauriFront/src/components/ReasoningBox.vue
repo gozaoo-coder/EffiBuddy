@@ -5,7 +5,7 @@
  * 用于展示 LLM 的推理/思考链（DeepSeek-R1 / o1 等模型产生）。
  *
  * 设计要点：
- * - 标题区与折叠状态整体最高 54px
+ * - 标题区与折叠状态整体最高 38px
  * - 展开后内容区最高 200px，超出滚动
  * - 思考完成（isThinking: true → false）时自动折叠
  * - 标题栏可点击切换展开/折叠
@@ -127,14 +127,14 @@ const arrowIcon = computed(() => (collapsed.value ? '▸' : '▾'))
   color: var(--muted, #888);
 }
 
-/* 标题栏：最高 54px */
+/* 标题栏：最高 38px */
 .reasoning-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 54px;
-  max-height: 54px;
-  padding: 0 14px;
+  gap: 6px;
+  height: 38px;
+  max-height: 38px;
+  padding: 0 12px;
   cursor: pointer;
   user-select: none;
   transition: background var(--duration-fast, 120ms) var(--ease-standard, ease);
