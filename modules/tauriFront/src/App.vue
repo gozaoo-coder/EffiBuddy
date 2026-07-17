@@ -8,6 +8,7 @@ import DevicePanel from './components/DevicePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
+import ClawHubPanel from './components/ClawHubPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
 import { IconButton, Icon, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
@@ -22,6 +23,7 @@ const settingsOpen = ref(false)
 const modelConfigOpen = ref(false)
 const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
+const clawhubPanelOpen = ref(false)
 // 当前选中的会话 id（由 SideNav 选择或 ChatWindow 新建时更新）
 const currentConversationId = ref<string | null>(null)
 const { toast } = useToast()
@@ -110,6 +112,12 @@ function openSkills() {
   skillPanelOpen.value = true
 }
 
+function openClawHub() {
+  sideNavOpen.value = false
+  skillPanelOpen.value = false
+  clawhubPanelOpen.value = true
+}
+
 // 顶部药丸导航中显示的当前模型名称
 const modelDisplay = computed(() => {
   if (!agentBackend.value || agentBackend.value === 'unknown') return 'EffiBuddy'
@@ -181,6 +189,7 @@ const modelDisplay = computed(() => {
       @open-model-config="openModelConfig"
       @open-scheduled-tasks="openScheduledTasks"
       @open-skills="openSkills"
+      @open-clawhub="openClawHub"
       @select-conversation="handleSelectConv"
     />
 
@@ -200,6 +209,12 @@ const modelDisplay = computed(() => {
       :open="skillPanelOpen"
       :conversation-id="currentConversationId"
       @close="skillPanelOpen = false"
+      @open-clawhub="openClawHub"
+    />
+
+    <ClawHubPanel
+      :open="clawhubPanelOpen"
+      @close="clawhubPanelOpen = false"
     />
 
     <SchedulePanel

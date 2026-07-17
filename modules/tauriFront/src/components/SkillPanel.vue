@@ -20,7 +20,10 @@ import {
 import type { Skill } from '../types'
 
 const props = defineProps<{ open: boolean; conversationId: string | null }>()
-const emit = defineEmits<{ (e: 'close'): void }>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'open-clawhub'): void
+}>()
 
 const { toast } = useToast()
 
@@ -44,16 +47,23 @@ const builtinVisuals: Record<string, { glyph: string; desc: string; accent: stri
 
 function glyphOf(s: Skill): string {
   if (s.builtin && builtinVisuals[s.id]) return builtinVisuals[s.id].glyph
+  if (s.source === 'clawhub') return 'globe'
   return 'spark'
 }
 
 function descOf(s: Skill): string {
   if (s.builtin && builtinVisuals[s.id]) return builtinVisuals[s.id].desc
+  if (s.source === 'clawhub') {
+    const owner = s.source_owner ? ` · @${s.source_owner}` : ''
+    const version = s.source_version ? ` · v${s.source_version}` : ''
+    return `${s.description || 'ClawHub 技能'}${owner}${version}`
+  }
   return s.description || '用户自定义技能'
 }
 
 function accentOf(s: Skill): string {
   if (s.builtin && builtinVisuals[s.id]) return builtinVisuals[s.id].accent
+  if (s.source === 'clawhub') return '#a855f7'
   return '#7a8190'
 }
 
@@ -332,6 +342,7 @@ function onClose() {
               <div class="skill-info">
                 <div class="skill-top">
                   <span class="skill-name">{{ s.name }}</span>
+                  <span v-if="s.source === 'clawhub'" class="source-badge">ClawHub</span>
                 </div>
                 <p class="skill-desc">{{ descOf(s) }}</p>
                 <div v-if="s.tools.length" class="skill-tools">
@@ -358,6 +369,10 @@ function onClose() {
         <Button variant="primary" block @click="openCreate">
           <template #icon><Icon name="plus" :size="18" /></template>
           新建技能
+        </Button>
+        <Button variant="text" block class="clawhub-entry" @click="emit('open-clawhub')">
+          <template #icon><Icon name="globe" :size="18" /></template>
+          浏览 ClawHub 商店
         </Button>
       </div>
     </div>
@@ -615,6 +630,17 @@ function onClose() {
   white-space: nowrap;
 }
 
+.source-badge {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.12);
+  border-radius: var(--radius-full);
+  letter-spacing: 0.02em;
+}
+
 .builtin-badge {
   flex-shrink: 0;
   padding: 1px 8px;
@@ -705,6 +731,13 @@ function onClose() {
 /* ---------- 底部 ---------- */
 .skill-footer {
   padding-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clawhub-entry {
+  color: #a855f7;
 }
 
 /* ---------- Dialog 表单 ---------- */

@@ -62,6 +62,10 @@ impl SkillStore {
                 working_dir: None,
                 created_at: 0,
                 builtin: true,
+                source: None,
+                source_slug: None,
+                source_owner: None,
+                source_version: None,
             },
             Skill {
                 id: BUILTIN_BROWSER_ACT.to_string(),
@@ -72,16 +76,26 @@ impl SkillStore {
                 working_dir: None,
                 created_at: 0,
                 builtin: true,
+                source: None,
+                source_slug: None,
+                source_owner: None,
+                source_version: None,
             },
         ]
     }
 
     /// 列出用户自定义技能（仅磁盘文件，不含内置）。
+    ///
+    /// 仅扫描 `*.json` 文件，跳过子目录（ClawHub 技能解压目录使用子文件夹存放资源）。
     pub async fn list_user(&self) -> Result<Vec<Skill>> {
         let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
         let mut out = Vec::with_capacity(8);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
             let path = entry.path();
+            // 仅处理 .json 文件，跳过目录与非 json 文件
+            if !path.is_file() {
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
@@ -121,6 +135,16 @@ impl SkillStore {
         Ok(Some(skill))
     }
 
+    /// 按 ClawHub slug 查找已安装技能（用于检测是否已安装 / 跳过重复安装）。
+    ///
+    /// 遍历用户技能列表，匹配 `source_slug == slug`。O(n) 但 n 通常很小。
+    pub async fn find_by_clawhub_slug(&self, slug: &str) -> Result<Option<Skill>> {
+        let user_skills = self.list_user().await?;
+        Ok(user_skills
+            .into_iter()
+            .find(|s| s.source.as_deref() == Some("clawhub") && s.source_slug.as_deref() == Some(slug)))
+    }
+
     /// 保存（或覆盖）一个用户技能。
     /// 内置技能 id 落盘无意义，但允许写入以支持自定义同名覆盖场景。
     pub async fn save(&self, skill: &Skill) -> Result<()> {
@@ -131,12 +155,21 @@ impl SkillStore {
     }
 
     /// 删除指定技能文件；内置技能在磁盘上不存在，直接返回 Ok。
+    ///
+    /// 若技能是 ClawHub 安装技能（有同名解压目录），同时递归删除目录。
     pub async fn delete(&self, id: &str) -> Result<()> {
         let path = self.path_for(id);
         if path.exists() {
             tokio::fs::remove_file(&path)
                 .await
                 .map_err(CoreError::Io)?;
+        }
+        // 删除 ClawHub 技能解压目录（若存在）：<root>/<id>/
+        let dir = self.root.join(id);
+        if dir.is_dir() {
+            if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+                tracing::warn!(error = %e, dir = ?dir, "删除 ClawHub 技能目录失败（忽略）");
+            }
         }
         Ok(())
     }
@@ -177,6 +210,10 @@ mod tests {
             working_dir: None,
             created_at: 1,
             builtin: false,
+            source: None,
+            source_slug: None,
+            source_owner: None,
+            source_version: None,
         };
         store.save(&skill).await.unwrap();
         let got = store.get("custom-1").await.unwrap().unwrap();

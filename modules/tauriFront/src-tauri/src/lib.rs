@@ -20,10 +20,14 @@ use effisuite_agent::{
 };
 use effisuite_core::{
     AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, Conversation,
-    ConversationMeta, ConversationStore, Device, EventBus, MemoryHit, MemoryIndex, MemoryStats,
-    Message, ModelKind, PinnedMemory, PinnedMemorySource, PinnedMemoryStore, ProviderPreset, Role,
-    ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore, ThemeMode,
-    builtin_presets,
+    ConversationMeta, ConversationStore, Device, EventBus, InstalledPlugin, MemoryHit, MemoryIndex,
+    MemoryStats, Message, ModelKind, PinnedMemory, PinnedMemorySource, PinnedMemoryStore,
+    PluginStore, ProviderPreset, Role, ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode,
+    Skill, SkillStore, ThemeMode, builtin_presets,
+};
+use effisuite_core::clawhub::{
+    ClawHubClient, PackageListResponse, PackageResponse, PackageSearchResponse,
+    SkillListResponse, SkillResponse, SearchResponse,
 };
 use effisuite_p2p::P2pManager;
 use futures::StreamExt;
@@ -42,6 +46,10 @@ pub struct AppState {
     pub skill_store: SkillStore,
     /// 定时任务存储（PathBuf+Arc，4 usize）
     pub schedule_store: ScheduledTaskStore,
+    /// 已安装插件存储（PathBuf+Arc，4 usize）
+    pub plugin_store: PluginStore,
+    /// ClawHub 客户端（Clone 廉价，内部 Arc<reqwest::Client>）
+    pub clawhub: ClawHubClient,
     /// 可热替换的 agent：RwLock 写少读多，内层 Arc 让 async 命令可跨 await 持有
     pub agent: Arc<RwLock<Arc<dyn ChatAgent>>>,
     pub store: Arc<ConversationStore>,
@@ -97,6 +105,11 @@ fn conversations_dir() -> std::path::PathBuf {
 /// 技能存储目录：`<appdata>/skills`
 fn skills_dir() -> std::path::PathBuf {
     appdata_root().join("skills")
+}
+
+/// 插件存储目录：`<appdata>/plugins`
+fn plugins_dir() -> std::path::PathBuf {
+    appdata_root().join("plugins")
 }
 
 /// 定时任务存储目录：`<appdata>/schedules`
@@ -1494,6 +1507,316 @@ async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String>
 }
 
 // =========================================================
+// 命令：ClawHub 浏览 / 安装（Skills & Plugins）
+// =========================================================
+//
+// 与本地 skill_store 不同，ClawHub 命令直接走 HTTP API：
+// - 浏览 / 搜索 / 详情：透传到 clawhub.ai，前端按需懒加载
+// - 安装 skill：下载 ZIP → spawn_blocking 解压到 `<skills_dir>/<slug>/`
+//   → 解析 SKILL.md → 写入 skill_store（source="clawhub"）
+// - 安装 plugin：下载 → 解压到 `<plugins_dir>/<safe_id>/`
+//   → 写入 plugin_store 元数据
+// - 卸载：删除文件 + 解压目录
+//
+// ClawHub 限速 3000/min/IP（读）与 1200/min/IP（下载），429 时返回 Retry-After。
+// 这里只做单次请求，重试退避由前端控制（避免在命令层阻塞）。
+
+/// `GET /api/v1/skills` - 列出 ClawHub 技能
+#[tauri::command]
+async fn clawhub_list_skills(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+    sort: Option<String>,
+    cursor: Option<String>,
+) -> Result<SkillListResponse, String> {
+    state
+        .clawhub
+        .list_skills(limit, sort.as_deref(), cursor.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `GET /api/v1/search?q=...` - 搜索 ClawHub 技能
+#[tauri::command]
+async fn clawhub_search_skills(
+    state: tauri::State<'_, AppState>,
+    q: String,
+    limit: Option<u32>,
+) -> Result<SearchResponse, String> {
+    state
+        .clawhub
+        .search_skills(&q, limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `GET /api/v1/skills/{slug}` - 获取 ClawHub 技能详情
+#[tauri::command]
+async fn clawhub_get_skill(
+    state: tauri::State<'_, AppState>,
+    slug: String,
+) -> Result<SkillResponse, String> {
+    state
+        .clawhub
+        .get_skill(&slug)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 安装 ClawHub 技能：下载 ZIP → 解压到 `<skills_dir>/<slug>/` → 解析 SKILL.md → 落盘 skill_store
+///
+/// 流程：
+/// 1. 检查是否已安装（find_by_clawhub_slug），已安装则返回 existing id（幂等）
+/// 2. 拉取 skill 详情获取 owner/version 元数据
+/// 3. 下载 ZIP（5min 超时）
+/// 4. spawn_blocking 中解压到 `<skills_dir>/<slug>/`，带 zip-slip 防护
+/// 5. 尝试解析 SKILL.md frontmatter 提取 name/description/version
+/// 6. 构造 Skill 记录，写入 skill_store（source="clawhub"）
+///
+/// 返回新（或已存在）技能 id。
+#[tauri::command]
+async fn clawhub_install_skill(
+    state: tauri::State<'_, AppState>,
+    slug: String,
+) -> Result<String, String> {
+    use effisuite_core::clawhub::{extract_zip_to, parse_skill_md};
+
+    // 幂等：若已安装则直接返回
+    if let Some(existing) = state
+        .skill_store
+        .find_by_clawhub_slug(&slug)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(existing.id);
+    }
+
+    let client = state.clawhub.clone();
+    let skill_store = state.skill_store.clone();
+    let skills_root = skills_dir();
+    let slug_clone = slug.clone();
+
+    // 1. 拉详情获取 owner / latest_version
+    let detail = client
+        .get_skill(&slug)
+        .await
+        .map_err(|e| format!("获取技能详情失败: {e}"))?;
+    let owner_handle = detail.owner.as_ref().and_then(|o| o.handle.clone()).unwrap_or_default();
+    let version = detail
+        .latest_version
+        .as_ref()
+        .map(|v| v.version.clone())
+        .unwrap_or_default();
+
+    // 2. 下载 ZIP
+    let zip_bytes = client
+        .download_skill_zip(&slug, None, None)
+        .await
+        .map_err(|e| format!("下载技能包失败: {e}"))?;
+
+    // 3. 解压到 <skills_dir>/<slug>/
+    let dest_dir = skills_root.join(&slug);
+    let dest_for_blocking = dest_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        extract_zip_to(&dest_for_blocking, &zip_bytes)
+    })
+    .await
+    .map_err(|e| format!("解压任务调度失败: {e}"))?
+    .map_err(|e| format!("解压失败: {e}"))?;
+
+    // 4. 尝试读取 SKILL.md
+    let skill_md_path = dest_dir.join("SKILL.md");
+    let (name, description, parsed_version) = match tokio::fs::read_to_string(&skill_md_path).await {
+        Ok(content) => {
+            let p = parse_skill_md(&content);
+            (
+                if p.name.is_empty() { slug.clone() } else { p.name },
+                if p.description.is_empty() { format!("ClawHub 技能: {}", slug) } else { p.description },
+                if p.version.is_empty() { version.clone() } else { p.version },
+            )
+        }
+        Err(_) => (slug.clone(), format!("ClawHub 技能: {}", slug), version.clone()),
+    };
+
+    // 5. 落盘 skill_store
+    let skill = Skill {
+        id: slug_clone.clone(),
+        name,
+        description,
+        preamble: String::new(), // ClawHub 技能的 preamble 在 SKILL.md 内，不单独持久化
+        tools: Vec::new(),
+        working_dir: Some(dest_dir.to_string_lossy().into_owned()),
+        created_at: now_ms(),
+        builtin: false,
+        source: Some("clawhub".to_string()),
+        source_slug: Some(slug_clone.clone()),
+        source_owner: if owner_handle.is_empty() { None } else { Some(owner_handle) },
+        source_version: if parsed_version.is_empty() { None } else { Some(parsed_version) },
+    };
+    skill_store
+        .save(&skill)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(skill.id)
+}
+
+/// 卸载 ClawHub 技能：删除 skill_store 记录 + 解压目录
+#[tauri::command]
+async fn clawhub_uninstall_skill(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state
+        .skill_store
+        .delete(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `GET /api/v1/plugins` - 列出 ClawHub 插件
+#[tauri::command]
+async fn clawhub_list_plugins(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+    sort: Option<String>,
+    cursor: Option<String>,
+) -> Result<PackageListResponse, String> {
+    state
+        .clawhub
+        .list_plugins(limit, sort.as_deref(), cursor.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `GET /api/v1/plugins/search?q=...` - 搜索 ClawHub 插件
+#[tauri::command]
+async fn clawhub_search_plugins(
+    state: tauri::State<'_, AppState>,
+    q: String,
+    limit: Option<u32>,
+) -> Result<PackageSearchResponse, String> {
+    state
+        .clawhub
+        .search_plugins(&q, limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `GET /api/v1/packages/{name}` - 获取 ClawHub 包详情
+#[tauri::command]
+async fn clawhub_get_package(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<PackageResponse, String> {
+    state
+        .clawhub
+        .get_package(&name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 安装 ClawHub 插件：下载 → 解压到 `<plugins_dir>/<safe_id>/` → 落盘 plugin_store
+///
+/// EffiSuite 不执行插件代码（OpenClaw 运行时不同），仅记录元信息并提供卸载入口。
+#[tauri::command]
+async fn clawhub_install_plugin(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
+    use effisuite_core::clawhub::extract_zip_to;
+
+    // 幂等：若已安装则直接返回
+    if let Some(existing) = state
+        .plugin_store
+        .find_by_name(&name)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(existing.id);
+    }
+
+    let client = state.clawhub.clone();
+    let plugin_store = state.plugin_store.clone();
+    let plugins_root = plugins_dir();
+
+    // 1. 拉取包详情
+    let detail = client
+        .get_package(&name)
+        .await
+        .map_err(|e| format!("获取插件详情失败: {e}"))?;
+    let pkg = detail
+        .package
+        .ok_or_else(|| format!("ClawHub 包 {} 不存在", name))?;
+    let owner_handle = detail
+        .owner
+        .as_ref()
+        .and_then(|o| o.handle.clone())
+        .unwrap_or_else(|| pkg.owner_handle.clone().unwrap_or_default());
+
+    // 2. 下载
+    let zip_bytes = client
+        .download_package(&name)
+        .await
+        .map_err(|e| format!("下载插件包失败: {e}"))?;
+
+    // 3. 解压到 <plugins_dir>/<safe_id>/
+    // safe_id 用 owner_handle/name 形式，与 InstalledPlugin.id 一致
+    let safe_id = if owner_handle.is_empty() {
+        pkg.name.clone()
+    } else {
+        format!("{}/{}", owner_handle, pkg.name)
+    };
+    let dest_dir = plugins_root.join(safe_id.replace('/', "__"));
+    let dest_for_blocking = dest_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        extract_zip_to(&dest_for_blocking, &zip_bytes)
+    })
+    .await
+    .map_err(|e| format!("解压任务调度失败: {e}"))?
+    .map_err(|e| format!("解压失败: {e}"))?;
+
+    // 4. 落盘 plugin_store
+    let plugin = InstalledPlugin {
+        id: safe_id.clone(),
+        name: pkg.name.clone(),
+        display_name: pkg.display_name.clone(),
+        summary: pkg.summary.clone().unwrap_or_default(),
+        family: pkg.family.clone(),
+        channel: pkg.channel.clone(),
+        owner_handle,
+        version: pkg.latest_version.clone().unwrap_or_default(),
+        install_path: Some(dest_dir.to_string_lossy().into_owned()),
+        installed_at: now_ms(),
+    };
+    plugin_store
+        .save(&plugin)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(plugin.id)
+}
+
+/// 卸载 ClawHub 插件：删除 plugin_store 记录 + 解压目录
+#[tauri::command]
+async fn clawhub_uninstall_plugin(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    state
+        .plugin_store
+        .delete(&id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 列出本地已安装插件（按 installed_at 降序）
+#[tauri::command]
+async fn list_installed_plugins(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<InstalledPlugin>, String> {
+    state.plugin_store.list().await.map_err(|e| e.to_string())
+}
+
+// =========================================================
 // 命令：定时任务（ScheduledTask）管理
 // =========================================================
 
@@ -1631,6 +1954,16 @@ pub fn run() {
                 .expect("临时目录 SkillStore 必须成功")
         }
     };
+    let plugin_store = match PluginStore::new(plugins_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "PluginStore 初始化失败，回退到临时目录");
+            PluginStore::new(std::env::temp_dir().join("effisuite-plugins"))
+                .expect("临时目录 PluginStore 必须成功")
+        }
+    };
+    // ClawHub 客户端：共享单个 reqwest::Client 连接池
+    let clawhub_client = ClawHubClient::new();
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
         Err(e) => {
@@ -1651,6 +1984,8 @@ pub fn run() {
     let state = AppState {
         skill_store,
         schedule_store,
+        plugin_store,
+        clawhub: clawhub_client,
         agent: Arc::clone(&agent_lock),
         store: Arc::clone(&store),
         config: Arc::new(RwLock::new(config)),
@@ -1764,6 +2099,18 @@ pub fn run() {
             apply_skill,
             set_conversation_working_dir,
             get_conversation_working_dir,
+            // ClawHub 浏览 / 安装
+            clawhub_list_skills,
+            clawhub_search_skills,
+            clawhub_get_skill,
+            clawhub_install_skill,
+            clawhub_uninstall_skill,
+            clawhub_list_plugins,
+            clawhub_search_plugins,
+            clawhub_get_package,
+            clawhub_install_plugin,
+            clawhub_uninstall_plugin,
+            list_installed_plugins,
             // 定时任务
             list_scheduled_tasks,
             create_scheduled_task,

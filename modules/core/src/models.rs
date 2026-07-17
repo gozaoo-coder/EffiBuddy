@@ -190,6 +190,20 @@ pub struct Skill {
     /// 是否内置（agent-reach / browser-act 等预置技能）
     #[serde(default)]
     pub builtin: bool,
+    /// 技能来源：None 表示本地创建；"clawhub" 表示从 ClawHub 安装。
+    /// 用以区分用户自定义技能与 ClawHub 安装技能，UI 显示徽章。
+    #[serde(default)]
+    pub source: Option<String>,
+    /// ClawHub 技能 slug（如 "weather"），仅 source=clawhub 时有效。
+    /// 用于后续检测更新 / 卸载时定位 ClawHub 资源。
+    #[serde(default)]
+    pub source_slug: Option<String>,
+    /// ClawHub 技能所有者 handle（如 "steipete"），用于构造 canonical URL。
+    #[serde(default)]
+    pub source_owner: Option<String>,
+    /// ClawHub 技能版本字符串（如 "1.0.0"），用于检测更新。
+    #[serde(default)]
+    pub source_version: Option<String>,
 }
 
 /// 定时任务：按 cron 表达式定时执行技能
@@ -209,6 +223,42 @@ pub struct ScheduledTask {
     /// 是否启用
     #[serde(default)]
     pub enabled: bool,
+}
+
+/// 已安装的 ClawHub 插件元数据
+///
+/// 仅记录插件元信息（不执行插件代码，因 OpenClaw 运行时与 EffiSuite 不同）。
+/// 用户可在面板查看已安装插件、版本、来源，并触达 ClawHub 详情页。
+///
+/// 字段按大小降序：String（24B）→ u64（8B）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledPlugin {
+    /// 主键：`<owner>/<name>` 形式，作为 Tauri 命令的稳定 id
+    pub id: String,
+    /// 插件包名（如 "whatsapp" 或 "@openclaw/whatsapp"）
+    pub name: String,
+    /// 展示名（如 "WhatsApp"）
+    pub display_name: String,
+    /// 简介
+    #[serde(default)]
+    pub summary: String,
+    /// 插件家族：code-plugin | bundle-plugin
+    #[serde(default)]
+    pub family: String,
+    /// 渠道：official | community | private
+    #[serde(default)]
+    pub channel: String,
+    /// 所有者 handle（如 "openclaw"）
+    #[serde(default)]
+    pub owner_handle: String,
+    /// ClawHub 版本字符串
+    #[serde(default)]
+    pub version: String,
+    /// 本地安装路径（解压目录，若适用）
+    #[serde(default)]
+    pub install_path: Option<String>,
+    /// 安装时间（Unix 毫秒）
+    pub installed_at: u64,
 }
 
 #[cfg(test)]
@@ -234,6 +284,10 @@ mod tests {
             working_dir: None,
             created_at: 42,
             builtin: true,
+            source: None,
+            source_slug: None,
+            source_owner: None,
+            source_version: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         // 模拟旧文件：移除 builtin/tools/preamble/working_dir 字段后仍能反序列化
@@ -243,12 +297,18 @@ mod tests {
         obj.remove("tools");
         obj.remove("preamble");
         obj.remove("working_dir");
+        obj.remove("source");
+        obj.remove("source_slug");
+        obj.remove("source_owner");
+        obj.remove("source_version");
         let back: Skill = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
         assert_eq!(back.id, "agent-reach");
         assert!(!back.builtin);
         assert!(back.tools.is_empty());
         assert!(back.preamble.is_empty());
         assert!(back.working_dir.is_none());
+        assert!(back.source.is_none());
+        assert!(back.source_slug.is_none());
     }
 
     #[test]
@@ -259,5 +319,16 @@ mod tests {
         assert_eq!(t.id, "t1");
         assert!(!t.enabled);
         assert!(t.last_run.is_none());
+    }
+
+    #[test]
+    fn installed_plugin_default_fields() {
+        // 仅有必填字段时也能反序列化（其他字段缺省）
+        let json = r#"{"id":"openclaw/whatsapp","name":"whatsapp","display_name":"WhatsApp","installed_at":1}"#;
+        let p: InstalledPlugin = serde_json::from_str(json).unwrap();
+        assert_eq!(p.id, "openclaw/whatsapp");
+        assert!(p.summary.is_empty());
+        assert!(p.family.is_empty());
+        assert!(p.install_path.is_none());
     }
 }

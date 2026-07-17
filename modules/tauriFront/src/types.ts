@@ -243,6 +243,14 @@ export interface Skill {
   working_dir?: string | null
   created_at: number
   builtin: boolean
+  /** 技能来源：null = 本地创建；"clawhub" = 从 ClawHub 安装 */
+  source?: string | null
+  /** ClawHub slug（仅 source="clawhub" 时存在） */
+  source_slug?: string | null
+  /** ClawHub owner handle */
+  source_owner?: string | null
+  /** ClawHub 版本字符串 */
+  source_version?: string | null
 }
 
 export interface ScheduledTask {
@@ -319,4 +327,166 @@ export interface ContextPreview {
   history_truncate_chars: number
   /** 是否启用了 RAG 跨会话记忆增强 */
   memory_enabled: boolean
+}
+
+// =========================================================
+// ClawHub（与 core::clawhub 与 core::InstalledPlugin 对齐）
+// =========================================================
+//
+// 用于前端浏览 / 搜索 / 安装 ClawHub 技能与插件。
+// 字段对应后端 clawhub.rs 中的响应结构（snake_case 序列化）。
+
+/** ClawHub 技能最新版本信息 */
+export interface SkillLatestVersion {
+  version: string
+  created_at?: number
+  changelog?: string
+}
+
+/** ClawHub 所有者信息 */
+export interface ClawHubOwner {
+  handle?: string | null
+  display_name?: string | null
+  image?: string | null
+}
+
+/** ClawHub 安全审核信息 */
+export interface ClawHubModeration {
+  is_suspicious?: boolean
+  is_malware_blocked?: boolean
+  verdict?: string | null
+  reason_codes?: string[]
+  summary?: string | null
+}
+
+/** `GET /api/v1/skills` 列表项 */
+export interface SkillListItem {
+  slug: string
+  display_name: string
+  summary?: string | null
+  topics?: string[]
+  /** 版本 tag 映射，结构松散，保留为原始 JSON */
+  tags?: unknown
+  /** 统计信息（downloads/stars 等） */
+  stats?: unknown
+  created_at?: number
+  updated_at?: number
+  latest_version?: SkillLatestVersion | null
+}
+
+/** `GET /api/v1/skills` 响应 */
+export interface SkillListResponse {
+  items: SkillListItem[]
+  next_cursor?: string | null
+}
+
+/** 技能详情（比 ListItem 多出 moderation 等字段） */
+export interface SkillDetail {
+  slug: string
+  display_name: string
+  summary?: string | null
+  tags?: unknown
+  stats?: unknown
+  created_at?: number
+  updated_at?: number
+}
+
+/** `GET /api/v1/skills/{slug}` 响应 */
+export interface SkillResponse {
+  skill: SkillDetail
+  latest_version?: SkillLatestVersion | null
+  owner?: ClawHubOwner | null
+  moderation?: ClawHubModeration | null
+}
+
+/** `GET /api/v1/search` 结果项 */
+export interface ClawHubSearchResult {
+  score?: number
+  slug?: string | null
+  display_name?: string | null
+  summary?: string | null
+  version?: string | null
+  updated_at?: number | null
+  owner_handle?: string | null
+  owner?: ClawHubOwner | null
+}
+
+/** `GET /api/v1/search` 响应 */
+export interface SearchResponse {
+  results: ClawHubSearchResult[]
+}
+
+/** `GET /api/v1/plugins` 列表项 */
+export interface PackageCatalogItem {
+  name: string
+  display_name: string
+  /** `skill` | `code-plugin` | `bundle-plugin` */
+  family?: string
+  /** `official` | `community` | `private` */
+  channel?: string
+  is_official?: boolean
+  summary?: string | null
+  owner_handle?: string | null
+  created_at?: number
+  updated_at?: number
+  latest_version?: string | null
+}
+
+/** `GET /api/v1/plugins` 响应 */
+export interface PackageListResponse {
+  items: PackageCatalogItem[]
+  next_cursor?: string | null
+}
+
+/** `GET /api/v1/plugins/search` 结果项 */
+export interface PackageSearchResult {
+  score?: number
+  name?: string | null
+  display_name?: string | null
+  family?: string | null
+  summary?: string | null
+  owner_handle?: string | null
+  updated_at?: number | null
+}
+
+/** `GET /api/v1/plugins/search` 响应 */
+export interface PackageSearchResponse {
+  results: PackageSearchResult[]
+}
+
+/** `GET /api/v1/packages/{name}` 包详情 */
+export interface PackageDetail {
+  name: string
+  display_name: string
+  family?: string
+  channel?: string
+  is_official?: boolean
+  summary?: string | null
+  owner_handle?: string | null
+  created_at?: number
+  updated_at?: number
+  latest_version?: string | null
+}
+
+/** `GET /api/v1/packages/{name}` 响应 */
+export interface PackageResponse {
+  package?: PackageDetail | null
+  owner?: ClawHubOwner | null
+}
+
+/** 本地已安装插件（与 core::InstalledPlugin 对齐） */
+export interface InstalledPlugin {
+  /** 主键：`<owner>/<name>` 形式 */
+  id: string
+  name: string
+  display_name: string
+  summary?: string
+  /** `code-plugin` | `bundle-plugin` */
+  family?: string
+  /** `official` | `community` | `private` */
+  channel?: string
+  owner_handle?: string
+  version?: string
+  install_path?: string | null
+  installed_at: number
 }

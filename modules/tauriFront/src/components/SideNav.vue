@@ -21,8 +21,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'open-settings'): void
-  (e: 'open-scheduled-tasks'): void
   (e: 'open-skills'): void
+  (e: 'open-clawhub'): void
+  (e: 'open-scheduled-tasks'): void
   (e: 'open-device'): void
   (e: 'open-model-config'): void
   (e: 'select-conversation', id: string | null): void
@@ -250,6 +251,10 @@ defineExpose({ refresh })
           <span class="entry-icon"><Icon name="bolt" :size="20" /></span>
           <span class="entry-label">技能</span>
         </button>
+        <button type="button" class="entry-btn" @click="emit('open-clawhub')">
+          <span class="entry-icon"><Icon name="globe" :size="20" /></span>
+          <span class="entry-label">ClawHub</span>
+        </button>
         <button type="button" class="entry-btn" @click="emit('open-scheduled-tasks')">
           <span class="entry-icon"><Icon name="alarm" :size="20" /></span>
           <span class="entry-label">定时任务</span>
@@ -414,7 +419,7 @@ defineExpose({ refresh })
 /* 顶部功能入口 */
 .sidenav-entries {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   padding: 8px 12px;
   flex-shrink: 0;

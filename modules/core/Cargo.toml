@@ -16,3 +16,6 @@ uuid.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
+# ClawHub HTTP 客户端 + ZIP 解压
+reqwest.workspace = true
+zip.workspace = true
