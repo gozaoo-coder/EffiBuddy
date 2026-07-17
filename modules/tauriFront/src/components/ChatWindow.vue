@@ -2,10 +2,10 @@
 import { ref, nextTick, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { animate } from 'animejs'
+import { animate, stagger } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
-import { useListLayout } from '../composables/useLayoutAnimation'
+import { useLayout } from '../composables/useLayout'
 import { Button, IconButton, Dialog, useToast } from './basic'
 import type {
   Message,
@@ -20,29 +20,6 @@ const { resolvedTheme } = useTheme()
 const isDark = computed(() => resolvedTheme.value === 'dark')
 const { toast } = useToast()
 
-// ---------- animejs v4 Layout 动画 ----------
-// 消息列表：入场动画
-const msgListLayout = useListLayout({
-  container: '.msg-list',
-  enterFrom: {
-    transform: 'translateY(20px) scale(0.95)',
-    opacity: 0,
-    duration: 380,
-    ease: 'out(3)',
-  },
-})
-
-// 会话列表：入场动画
-const convListLayout = useListLayout({
-  container: '.conv-list',
-  enterFrom: {
-    transform: 'translateX(-16px)',
-    opacity: 0,
-    duration: 300,
-    ease: 'out(2)',
-  },
-})
-
 // ---------- 状态 ----------
 const conversations = ref<ConversationMeta[]>([])
 const currentId = ref<string | null>(null)
@@ -55,6 +32,32 @@ const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充�
 // 删除确认对话框
 const deleteDialogVisible = ref(false)
 const pendingDeleteId = ref<string | null>(null)
+
+// 会话列表容器 ref：用于 anime.js v4 Layout 动画
+const convListEl = ref<HTMLElement | null>(null)
+
+// anime.js v4 Layout 实例：会话列表项进出场 + 位置重排动画
+// - enterFrom: 新会话从左侧滑入并淡入
+// - leaveTo: 删除时缩小淡出
+// - swapAt: opacity:1 避免未显式定位的子元素中途闪烁（官方 gotchas 建议）
+const { update: updateConvLayout } = useLayout(convListEl, {
+  children: '.conv-item',
+  duration: 320,
+  ease: 'out(3)',
+  enterFrom: {
+    opacity: 0,
+    transform: 'translateX(-24px) scale(.92)',
+    duration: 360,
+    ease: 'out(3)',
+  },
+  leaveTo: {
+    opacity: 0,
+    transform: 'scale(.85)',
+    duration: 240,
+    ease: 'inOut(2)',
+  },
+  swapAt: { opacity: 1 },
+})
 
 let unlistens: UnlistenFn[] = []
 
@@ -90,6 +93,11 @@ const currentMeta = computed<ConversationMeta | null>(() => {
 async function loadConversations() {
   try {
     conversations.value = await invoke<ConversationMeta[]>('list_conversations')
+    // Vue patch 后触发 anime.js Layout 检测 enter/leave/swap
+    await nextTick()
+    updateConvLayout(() => {
+      /* Vue 已更新 DOM，layout 自动记录差分 */
+    })
   } catch (e) {
     console.warn('list_conversations failed', e)
   }
@@ -149,17 +157,11 @@ async function confirmDelete() {
 async function addMessage(msg: Message) {
   messages.value.push(msg)
   await nextTick()
-  // 使用 animejs animate 做气泡入场动画（与 Layout 协同）
   animate('.msg-bubble:last-child', {
     opacity: [0, 1],
-    translateY: [16, 0],
-    scale: [0.95, 1],
+    translateY: [10, 0],
     duration: 400,
     easing: 'easeOutQuad',
-  })
-  // 同时触发 Layout 刷新
-  msgListLayout.update(({ root }) => {
-    void root.offsetHeight
   })
   scrollBottom()
 }
@@ -318,7 +320,7 @@ onUnmounted(() => {
           新建
         </Button>
       </div>
-      <div class="conv-list">
+      <div ref="convListEl" class="conv-list">
         <div v-if="conversations.length === 0" class="empty-hint">
           暂无会话，点击「新建」开始
         </div>
@@ -475,11 +477,5 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--muted);
   font-family: 'SFMono-Regular', Consolas, monospace;
-}
-
-/* ---------- animejs Layout 动画辅助 ---------- */
-/* 隐藏的元素（用于退出动画） */
-.is-hidden {
-  display: none !important;
 }
 </style>
