@@ -7,8 +7,10 @@
 //! 同时支持：
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
-//! - 工具调用：构造 agent 时注册 `SearchHistoryTool` 和 `GetTimeTool`，
-//!   LLM 可主动调用以检索历史或获取时间
+//! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`GetTimeTool`、
+//!   `ReadFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`，
+//!   LLM 可主动调用以检索历史、获取时间、读写本地文件、执行 shell 命令
+//!   （集成 agent-reach / browser-act）、抓取网页
 //!
 //! 设计要点（对齐 user_rules 中的 Rust 性能/并发规则）：
 //! - `CompletionsClient` 内部已是 `Arc` 共享句柄，`RigAgent` 直接持有而**不**再包
@@ -35,7 +37,9 @@ use rig_core::{
 use tokio::sync::RwLock;
 
 use crate::agent::ChatAgent;
-use crate::tools::{GetTimeTool, SearchHistoryTool};
+use crate::tools::{
+    GetTimeTool, ListFilesTool, ReadFileTool, SearchHistoryTool, ShellTool, WebFetchTool,
+};
 
 pub struct RigAgent {
     /// 统一用 CompletionsClient（Chat Completions API），兼容所有 OpenAI 兼容 provider
@@ -122,9 +126,18 @@ impl RigAgent {
             // 注册 RAG 检索工具：每次 build 都重新创建工具实例，但它们共享 history
             let search = SearchHistoryTool::new(Arc::clone(&self.history));
             let time = GetTimeTool::new(Arc::clone(&self.history));
+            // 无状态本地能力工具：读文件、列目录、执行 shell（agent-reach/browser-act）、抓网页
+            let read_file = ReadFileTool::new();
+            let list_files = ListFilesTool::new();
+            let shell = ShellTool::new();
+            let web_fetch = WebFetchTool::new();
             builder
                 .tool(search)
                 .tool(time)
+                .tool(read_file)
+                .tool(list_files)
+                .tool(shell)
+                .tool(web_fetch)
                 .default_max_turns(10)
                 .build()
         } else {

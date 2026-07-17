@@ -13,9 +13,12 @@ rig-core = "0.40"
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+# 在 workspace tokio features 基础上补充 process（用于 ShellTool 的 Command）
+tokio = { workspace = true, features = ["process"] }
 thiserror.workspace = true
 tracing.workspace = true
 futures = "0.3"
 async-stream = "0.3"
 chrono.workspace = true
+# WebFetchTool 使用 reqwest；用 rustls-tls 避免依赖 OpenSSL
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
