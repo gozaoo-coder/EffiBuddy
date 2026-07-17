@@ -1,0 +1,32 @@
+# Rust
+/target
+**/target
+Cargo.lock
+# 注意：bin 项目通常提交 Cargo.lock，lib 项目不提交。EffiSuite 是应用，后续可改为提交。
+
+# Node / 前端
+node_modules/
+dist/
+.vite/
+*.local
+
+# Tauri
+modules/tauriFront/src-tauri/gen/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log

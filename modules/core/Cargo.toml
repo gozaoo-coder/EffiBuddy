@@ -1,0 +1,17 @@
+[package]
+name = "effisuite-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "EffiSuite 核心模块：跨模块共享的数据结构、错误类型与事件总线"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+tracing.workspace = true

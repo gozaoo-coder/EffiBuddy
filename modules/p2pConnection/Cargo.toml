@@ -1,0 +1,17 @@
+[package]
+name = "effisuite-p2p"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "EffiSuite P2P 模块：局域网可信设备发现、配对与数据共享"
+
+[dependencies]
+effisuite-core.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

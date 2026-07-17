@@ -1,0 +1,31 @@
+[package]
+name = "effisuite-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "EffiSuite Tauri 应用入口：连接 agent / p2p / core 并暴露给前端"
+
+[lib]
+name = "effisuite_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "effisuite-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+effisuite-core.workspace = true
+effisuite-agent.workspace = true
+effisuite-p2p.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
