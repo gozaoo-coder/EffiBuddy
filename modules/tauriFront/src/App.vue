@@ -6,6 +6,8 @@ import SideNav from './components/SideNav.vue'
 import DevicePanel from './components/DevicePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
+import SkillPanel from './components/SkillPanel.vue'
+import SchedulePanel from './components/SchedulePanel.vue'
 import ThemeSwitcher from './components/ThemeSwitcher.vue'
 import { IconButton, ToastHost, SnackbarHost, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
@@ -18,6 +20,7 @@ const devicePanelOpen = ref(false)
 const settingsOpen = ref(false)
 const modelConfigOpen = ref(false)
 const scheduledTasksOpen = ref(false)
+const skillPanelOpen = ref(false)
 // 当前选中的会话 id（由 SideNav 选择或 ChatWindow 新建时更新）
 const currentConversationId = ref<string | null>(null)
 const { toast } = useToast()
@@ -83,7 +86,11 @@ function openModelConfig() {
 function openScheduledTasks() {
   sideNavOpen.value = false
   scheduledTasksOpen.value = true
-  toast({ content: '定时任务即将上线', type: 'info' })
+}
+
+function openSkills() {
+  sideNavOpen.value = false
+  skillPanelOpen.value = true
 }
 
 // 顶部药丸导航中显示的当前模型名称
@@ -149,6 +156,7 @@ const modelDisplay = computed(() => {
       @open-device="openDevicePanel"
       @open-model-config="openModelConfig"
       @open-scheduled-tasks="openScheduledTasks"
+      @open-skills="openSkills"
       @select-conversation="handleSelectConv"
     />
 
@@ -161,6 +169,17 @@ const modelDisplay = computed(() => {
       :open="modelConfigOpen"
       @close="modelConfigOpen = false"
       @saved="onSettingsSaved"
+    />
+
+    <SkillPanel
+      :open="skillPanelOpen"
+      :conversation-id="currentConversationId"
+      @close="skillPanelOpen = false"
+    />
+
+    <SchedulePanel
+      :open="scheduledTasksOpen"
+      @close="scheduledTasksOpen = false"
     />
 
     <!-- 全局反馈宿主：Toast / Snackbar -->

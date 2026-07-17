@@ -155,3 +155,36 @@ export interface StreamErrorPayload {
   conversation_id: string
   error: string
 }
+
+// =========================================================
+// 技能 & 定时任务（与 core::{Skill, ScheduledTask} 对齐）
+// =========================================================
+
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  preamble: string
+  tools: string[]
+  created_at: number
+  builtin: boolean
+}
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  skill_id: string
+  cron: string
+  enabled: boolean
+  created_at: number
+  last_run?: number | null
+}
+
+// 后端 scheduler.rs 在任务触发时 emit "scheduled-task-result" 事件的 payload
+export interface ScheduledTaskResult {
+  task_id: string
+  task_name: string
+  conversation_id: string
+  content: string
+  success: boolean
+}

@@ -22,6 +22,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'open-settings'): void
   (e: 'open-scheduled-tasks'): void
+  (e: 'open-skills'): void
   (e: 'open-device'): void
   (e: 'open-model-config'): void
   (e: 'select-conversation', id: string | null): void
@@ -239,11 +240,15 @@ defineExpose({ refresh })
 <template>
   <BindSheet v-model:visible="open" side="left" width="320px" title="EffiBuddy">
     <div class="sidenav-body">
-      <!-- 顶部 4 入口 -->
+      <!-- 顶部功能入口 -->
       <div class="sidenav-entries">
         <button type="button" class="entry-btn" @click="emit('open-settings')">
           <span class="entry-icon">⚙</span>
           <span class="entry-label">设置</span>
+        </button>
+        <button type="button" class="entry-btn" @click="emit('open-skills')">
+          <span class="entry-icon">⚡</span>
+          <span class="entry-label">技能</span>
         </button>
         <button type="button" class="entry-btn" @click="emit('open-scheduled-tasks')">
           <span class="entry-icon">⏰</span>
@@ -255,7 +260,7 @@ defineExpose({ refresh })
         </button>
         <button type="button" class="entry-btn" @click="emit('open-model-config')">
           <span class="entry-icon">🤖</span>
-          <span class="entry-label">可用模型配置</span>
+          <span class="entry-label">模型配置</span>
         </button>
       </div>
 
@@ -406,10 +411,10 @@ defineExpose({ refresh })
   overflow: hidden;
 }
 
-/* 顶部 4 入口 */
+/* 顶部功能入口 */
 .sidenav-entries {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 8px 12px;
   flex-shrink: 0;
