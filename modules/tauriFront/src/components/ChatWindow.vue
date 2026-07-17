@@ -1,23 +1,28 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted, computed } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { animate, stagger } from 'animejs'
+import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
-import { useLayout } from '../composables/useLayout'
-import { Button, IconButton, Dialog, BindSheet, Chips, useToast } from './basic'
+import { Button, IconButton, BindSheet, Chips, useToast } from './basic'
 import type {
   Message,
   Conversation,
-  ConversationMeta,
   StreamTokenPayload,
   StreamErrorPayload,
+  PickedFile,
 } from '../types'
 
-// 后端名称（来自 App.vue 顶部模型药丸）
+// 后端名称（来自 App.vue 顶部模型药丸）+ 当前会话 id（由 App 传入）
 const props = defineProps<{
   backend?: string
+  conversationId?: string | null
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:conversation-id', id: string | null): void
+  (e: 'conversation-changed'): void
 }>()
 
 // 主题：用于把 is-dark 传给 MarkdownRender，确保代码块/深色样式正确
@@ -26,43 +31,17 @@ const isDark = computed(() => resolvedTheme.value === 'dark')
 const { toast } = useToast()
 
 // ---------- 状态 ----------
-const conversations = ref<ConversationMeta[]>([])
-const currentId = ref<string | null>(null)
+// activeId：当前正在交互的会话 id（流式事件匹配用）。
+// 与 props.conversationId 同步，但在新建会话时可立即赋值，不等 App 回传。
+const activeId = ref<string | null>(props.conversationId ?? null)
 const messages = ref<Message[]>([])
 const input = ref('')
 const sending = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const streamingBubbleId = ref<string | null>(null) // 当前正在流式填充的气泡 id
 
-// 删除确认对话框
-const deleteDialogVisible = ref(false)
-const pendingDeleteId = ref<string | null>(null)
-
 // 底部工具/附件 Sheet
 const toolSheetOpen = ref(false)
-
-// 会话列表容器 ref：用于 anime.js v4 Layout 动画
-const convListEl = ref<HTMLElement | null>(null)
-
-// anime.js v4 Layout 实例：会话列表项进出场 + 位置重排动画
-const { update: updateConvLayout } = useLayout(convListEl, {
-  children: '.conv-item',
-  duration: 320,
-  ease: 'out(3)',
-  enterFrom: {
-    opacity: 0,
-    transform: 'translateX(-24px) scale(.92)',
-    duration: 360,
-    ease: 'out(3)',
-  },
-  leaveTo: {
-    opacity: 0,
-    transform: 'scale(.85)',
-    duration: 240,
-    ease: 'inOut(2)',
-  },
-  swapAt: { opacity: 1 },
-})
 
 let unlistens: UnlistenFn[] = []
 
@@ -79,40 +58,25 @@ function scrollBottom() {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-function formatTime(ts: number): string {
-  try {
-    const d = new Date(ts)
-    return d.toLocaleString()
-  } catch {
-    return String(ts)
-  }
-}
-
-// 当前会话 meta
-const currentMeta = computed<ConversationMeta | null>(() => {
-  if (!currentId.value) return null
-  return conversations.value.find((c) => c.id === currentId.value) ?? null
-})
-
 // 是否显示空状态首页
 const isEmptyHome = computed(() => messages.value.length === 0 && !sending.value)
 
-// ---------- 会话管理 ----------
-async function loadConversations() {
-  try {
-    conversations.value = await invoke<ConversationMeta[]>('list_conversations')
-    await nextTick()
-    updateConvLayout(() => {
-      /* Vue 已更新 DOM，layout 自动记录差分 */
-    })
-  } catch (e) {
-    console.warn('list_conversations failed', e)
-  }
-}
+// ---------- 会话加载 ----------
+// conversationId 变化时加载对应会话消息
+watch(
+  () => props.conversationId,
+  (id) => {
+    activeId.value = id ?? null
+    loadConversation()
+  },
+)
 
-async function selectConversation(id: string) {
-  if (sending.value) return
-  currentId.value = id
+async function loadConversation() {
+  const id = activeId.value
+  if (!id) {
+    messages.value = []
+    return
+  }
   try {
     const conv = await invoke<Conversation | null>('get_conversation', { id })
     messages.value = conv?.messages ?? []
@@ -121,47 +85,6 @@ async function selectConversation(id: string) {
   } catch (e) {
     console.warn('get_conversation failed', e)
     messages.value = []
-  }
-}
-
-async function newConversation() {
-  if (sending.value) return
-  try {
-    const id = await invoke<string>('create_conversation')
-    await loadConversations()
-    await selectConversation(id)
-  } catch (e) {
-    toast({ content: `新建会话失败：${e}`, type: 'error' })
-  }
-}
-
-function askDeleteCurrent() {
-  if (!currentId.value || sending.value) return
-  pendingDeleteId.value = currentId.value
-  deleteDialogVisible.value = true
-}
-
-function askDeleteById(id: string) {
-  if (sending.value) return
-  pendingDeleteId.value = id
-  deleteDialogVisible.value = true
-}
-
-async function confirmDelete() {
-  const id = pendingDeleteId.value
-  if (!id) return
-  try {
-    await invoke('delete_conversation', { id })
-    if (currentId.value === id) {
-      currentId.value = null
-      messages.value = []
-    }
-    await loadConversations()
-    toast({ content: '会话已删除', type: 'success' })
-  } catch (e) {
-    toast({ content: `删除会话失败：${e}`, type: 'error' })
-  } finally {
-    pendingDeleteId.value = null
   }
 }
 
@@ -212,16 +135,27 @@ async function finalizeStream(full: string) {
     if (target && full) target.content = full
   }
   streamingBubbleId.value = null
-  await loadConversations()
+  // 流式结束后通知 App 刷新 SideNav 列表（消息数/时间更新）
+  emit('conversation-changed')
 }
 
 // ---------- 发送（流式） ----------
 async function send() {
   const content = input.value.trim()
   if (!content || sending.value) return
-  if (!currentId.value) {
-    await newConversation()
-    if (!currentId.value) return
+
+  // 没有当前会话时新建一个
+  let id = activeId.value
+  if (!id) {
+    try {
+      id = await invoke<string>('create_conversation')
+      activeId.value = id
+      emit('update:conversation-id', id)
+      emit('conversation-changed')
+    } catch (e) {
+      toast({ content: `新建会话失败：${e}`, type: 'error' })
+      return
+    }
   }
 
   sending.value = true
@@ -236,7 +170,7 @@ async function send() {
 
   try {
     await invoke('send_message_stream', {
-      conversationId: currentId.value,
+      conversationId: id,
       content,
     })
   } catch (e) {
@@ -283,25 +217,50 @@ const pluginItems = [
   { label: '技能', desc: '复用专业能力，稳定处理特定任务', icon: '🛠' },
 ]
 
-function onToolClick(label: string) {
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+// 工具卡片点击：拍照/照片/本地文件接真实 command
+async function onToolClick(label: string) {
   toolSheetOpen.value = false
-  toast({ content: `${label} 功能即将上线`, type: 'info' })
+  try {
+    let file: PickedFile | null = null
+    if (label === '拍照') {
+      file = await invoke<PickedFile>('capture_photo')
+    } else if (label === '照片') {
+      file = await invoke<PickedFile>('pick_image')
+    } else if (label === '本地文件') {
+      file = await invoke<PickedFile>('pick_file')
+    } else {
+      toast({ content: `${label} 功能即将上线`, type: 'info' })
+      return
+    }
+    if (file) {
+      toast({
+        content: `已选择：${file.name}（${formatFileSize(file.size)}）`,
+        type: 'success',
+      })
+    }
+  } catch (e) {
+    toast({ content: `${label}失败：${e}`, type: 'error' })
+  }
 }
 
 // ---------- 事件订阅 ----------
 onMounted(async () => {
-  await loadConversations()
-  if (conversations.value.length > 0) {
-    await selectConversation(conversations.value[0].id)
-  } else {
-    await newConversation()
+  // 初始加载当前会话（如果有）
+  if (activeId.value) {
+    await loadConversation()
   }
 
   unlistens.push(
     await listen<StreamTokenPayload>('agent-token', async (e) => {
       const p = e.payload
       if (p.done) return
-      if (currentId.value && p.conversation_id !== currentId.value) return
+      if (activeId.value && p.conversation_id !== activeId.value) return
       await appendStreamToken(p.content)
     }),
   )
@@ -309,7 +268,7 @@ onMounted(async () => {
   unlistens.push(
     await listen<StreamTokenPayload>('agent-done', async (e) => {
       const p = e.payload
-      if (currentId.value && p.conversation_id !== currentId.value) return
+      if (activeId.value && p.conversation_id !== activeId.value) return
       await finalizeStream(p.content)
       sending.value = false
     }),
@@ -318,7 +277,7 @@ onMounted(async () => {
   unlistens.push(
     await listen<StreamErrorPayload>('agent-stream-error', async (e) => {
       const p = e.payload
-      if (currentId.value && p.conversation_id !== currentId.value) return
+      if (activeId.value && p.conversation_id !== activeId.value) return
       await addMessage({
         id: newId(),
         role: 'system',
@@ -340,41 +299,7 @@ onUnmounted(() => {
 
 <template>
   <div class="chat-window">
-    <!-- 左侧：会话列表（桌面端常驻，窄屏折叠） -->
-    <aside class="conv-sidebar">
-      <div class="conv-head">
-        <span class="conv-head-title">会话</span>
-        <Button variant="primary" size="sm" :disabled="sending" @click="newConversation">
-          <template #icon>＋</template>
-          新建
-        </Button>
-      </div>
-      <div ref="convListEl" class="conv-list">
-        <div v-if="conversations.length === 0" class="empty-hint">
-          暂无会话，点击「新建」开始
-        </div>
-        <div
-          v-for="c in conversations"
-          :key="c.id"
-          class="conv-item"
-          :class="{ active: c.id === currentId }"
-          @click="selectConversation(c.id)"
-        >
-          <div class="conv-item-title">{{ c.id.slice(0, 8) }}…</div>
-          <div class="conv-item-meta">{{ c.message_count }} 条 · {{ formatTime(c.created_at) }}</div>
-          <IconButton
-            class="conv-delete"
-            icon="🗑"
-            size="sm"
-            variant="danger"
-            title="删除会话"
-            @click.stop="askDeleteById(c.id)"
-          />
-        </div>
-      </div>
-    </aside>
-
-    <!-- 右侧：聊天主区 -->
+    <!-- 聊天主区（侧栏已提升为 App 级 SideNav 抽屉） -->
     <section class="chat-main">
       <!-- 空状态首页：Kimi 风格中央品牌区 + 快捷胶囊 -->
       <div v-if="isEmptyHome" class="home-empty">
@@ -441,7 +366,7 @@ onUnmounted(() => {
             v-model="input"
             class="composer-input"
             :placeholder="sending ? '生成中…' : '尽管问，带图也行'"
-            :disabled="sending || !currentId"
+            :disabled="sending"
             rows="1"
             @keydown="onKeydown"
           ></textarea>
@@ -462,7 +387,7 @@ onUnmounted(() => {
             shape="circle"
             size="md"
             variant="primary"
-            :disabled="!input.trim() || !currentId"
+            :disabled="!input.trim()"
             title="发送"
             @click="send"
           >
@@ -472,24 +397,6 @@ onUnmounted(() => {
         <div class="composer-footer">内容由 AI 生成</div>
       </div>
     </section>
-
-    <!-- 删除会话确认对话框 -->
-    <Dialog
-      v-model:visible="deleteDialogVisible"
-      title="删除会话"
-      danger
-      confirm-text="删除"
-      cancel-text="取消"
-      :close-on-click-overlay="false"
-      @confirm="confirmDelete"
-    >
-      <div class="dialog-delete-content">
-        确定删除该会话？此操作不可撤销。
-        <div v-if="pendingDeleteId" class="dialog-delete-id">
-          ID：{{ pendingDeleteId.slice(0, 8) }}…
-        </div>
-      </div>
-    </Dialog>
 
     <!-- 底部工具/附件 Sheet -->
     <BindSheet v-model:visible="toolSheetOpen" title="工具" side="bottom" :height="'auto'">
@@ -537,22 +444,6 @@ onUnmounted(() => {
 
 <style scoped>
 /* ChatWindow 局部样式：补充基础组件未覆盖的部分 */
-.conv-head-title {
-  font-size: 13px;
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.chat-title-text {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.chat-title-text.muted {
-  color: var(--muted);
-  opacity: 0.7;
-}
-
 .composer-input {
   flex: 1;
   resize: none;
@@ -576,20 +467,6 @@ onUnmounted(() => {
 .composer-input:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.dialog-delete-content {
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text);
-  padding: 4px 0;
-}
-
-.dialog-delete-id {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--muted);
-  font-family: 'SFMono-Regular', Consolas, monospace;
 }
 
 /* Kimi 风格空状态首页 */

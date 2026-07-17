@@ -59,11 +59,49 @@ export interface Conversation {
 
 export interface ConversationMeta {
   id: string
+  title?: string | null
+  pinned: boolean
+  pinned_at?: number | null
   created_at: number
+  updated_at: number
   message_count: number
 }
 
 export type BackendKind = 'mock' | 'openai'
+
+// =========================================================
+// 搜索 & 文件选择（与后端 search_conversations / pick_file 等对齐）
+// =========================================================
+
+export interface SearchHit {
+  conversation_id: string
+  conversation_title: string
+  message_id: string
+  snippet: string
+  score: number
+  timestamp: number
+  pinned: boolean
+  updated_at: number
+}
+
+export interface PickedFile {
+  path: string
+  name: string
+  size: number
+}
+
+// =========================================================
+// 附件（输入区工具 Sheet 选中后附加到输入）
+// =========================================================
+
+export type AttachmentKind = 'image' | 'file'
+
+export interface Attachment {
+  kind: AttachmentKind
+  path: string
+  name: string
+  size: number
+}
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
