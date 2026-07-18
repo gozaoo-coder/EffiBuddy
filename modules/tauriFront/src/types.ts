@@ -203,6 +203,68 @@ export interface AgentUsagePayload {
 }
 
 // =========================================================
+// 消息压缩（与 tauriFront/src-tauri/src/lib.rs 中
+// CompressTokenPayload / CompressStatusPayload / CompressDonePayload /
+// CompressErrorPayload 对齐，与 core::compression::CompressionAction 对齐）
+// =========================================================
+
+/** 压缩决策类型（与后端 CompressionAction 枚举的 serde tag 一致） */
+export type CompressionMethod = 'keep' | 'hide' | 'replace'
+
+/** 单条压缩决策（后端用 #[serde(tag = "method", rename_all = "lowercase")]） */
+export interface CompressionAction {
+  method: CompressionMethod
+  reason: string
+  message_ids: string[]
+  /** 仅 method=replace 时存在 */
+  new_content?: string
+}
+
+/** 压缩状态（一个会话的完整压缩快照） */
+export interface CompressionState {
+  actions: CompressionAction[]
+  updated_at: number
+}
+
+/** 压缩阶段标识（agent-compress-status 事件的 stage 字段） */
+export type CompressionStage =
+  | 'loading_conv'
+  | 'building_prompt'
+  | 'streaming'
+  | 'parsing'
+  | 'persisting'
+  | 'done'
+  | 'error'
+
+/** agent-compress-status 事件 payload */
+export interface CompressStatusPayload {
+  conversation_id: string
+  stage: CompressionStage
+  message: string
+}
+
+/** agent-compress-token 事件 payload（流式文本增量） */
+export interface CompressTokenPayload {
+  conversation_id: string
+  token: string
+}
+
+/** agent-compress-done 事件 payload（完成时携带解析结果与耗时） */
+export interface CompressDonePayload {
+  conversation_id: string
+  actions: CompressionAction[]
+  raw_text: string
+  elapsed_ms: number
+}
+
+/** agent-compress-error 事件 payload（失败时携带错误与已接收部分文本） */
+export interface CompressErrorPayload {
+  conversation_id: string
+  error: string
+  partial: string
+}
+
+// =========================================================
 // 流式事件 payload（与 tauriFront/src-tauri/src/lib.rs 中
 // StreamTokenPayload / StreamErrorPayload 对齐）
 // =========================================================

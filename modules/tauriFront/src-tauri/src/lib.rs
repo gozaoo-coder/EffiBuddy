@@ -15,8 +15,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use effisuite_agent::{
-    AgentStreamItem, ChatAgent, ContextPreview, ImageGenConfig, ImageGenTool, MockAgent,
-    OpenAIEmbeddingProvider, RigAgent, call_compression_agent, DEFAULT_EMBEDDING_MODEL,
+    AgentStreamItem, ChatAgent, CompressionStreamItem, ContextPreview, ImageGenConfig, ImageGenTool,
+    MockAgent, OpenAIEmbeddingProvider, RigAgent, call_compression_agent,
+    call_compression_agent_stream, DEFAULT_EMBEDDING_MODEL,
 };
 use effisuite_core::{
     AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, CompressionAction,
@@ -1185,6 +1186,244 @@ async fn compress_messages(
         conversation_id = %conversation_id,
         action_count,
         "消息压缩完成并已持久化"
+    );
+    Ok(actions)
+}
+
+/// 压缩 agent 流式事件 payload（emit "agent-compress-token" / "agent-compress-status"
+/// / "agent-compress-done" / "agent-compress-error"）
+///
+/// 设计与 `AgentUsagePayload` 一致：扁平结构 + `serde` 透明序列化，前端 TS
+/// 接口一一对应。所有 payload 都携带 `conversation_id` 用于多会话过滤。
+#[derive(Debug, Clone, serde::Serialize)]
+struct CompressTokenPayload<'a> {
+    conversation_id: &'a str,
+    /// 本次增量文本
+    token: &'a str,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CompressStatusPayload<'a> {
+    conversation_id: &'a str,
+    /// 当前阶段：loading_conv / building_prompt / streaming / parsing / persisting / done / error
+    stage: &'a str,
+    /// 阶段说明（人类可读）
+    message: &'a str,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CompressDonePayload<'a> {
+    conversation_id: &'a str,
+    /// 解析得到的压缩决策列表
+    actions: &'a [CompressionAction],
+    /// 流式累计的完整原始响应文本（含 `<act>` 块）
+    raw_text: &'a str,
+    /// 处理耗时（毫秒）
+    elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CompressErrorPayload<'a> {
+    conversation_id: &'a str,
+    error: &'a str,
+    /// 失败时已累计的部分文本（可能为空），便于前端展示已接收内容
+    partial: &'a str,
+}
+
+/// 流式消息压缩命令
+///
+/// 与 [`compress_messages`] 的区别：
+/// - 通过 Tauri 事件实时推送进度，前端在 BindSheet 浮窗展示
+/// - 事件流：
+///   1. `agent-compress-status`：阶段切换（loading_conv / building_prompt / streaming / parsing / persisting / done）
+///   2. `agent-compress-token`：文本增量（仅 streaming 阶段）
+///   3. `agent-compress-done`：完成，携带 actions 列表与耗时
+///   4. `agent-compress-error`：失败，携带错误信息与已接收部分文本
+/// - 返回值与 [`compress_messages`] 一致（`Vec<CompressionAction>`），便于不关心
+///   流式进度的调用方直接使用
+///
+/// 命令本身在流式完成后才返回；前端若只想要结果可 `await` 命令，
+/// 想看进度则监听事件。命令返回即代表 `agent-compress-done` 已 emit。
+#[tauri::command]
+async fn compress_messages_stream(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    conversation_id: String,
+) -> Result<Vec<CompressionAction>, String> {
+    let started = std::time::Instant::now();
+    let conv_id = conversation_id.clone();
+    let emit_status = |stage: &str, message: &str| {
+        let _ = app_handle.emit(
+            "agent-compress-status",
+            &CompressStatusPayload {
+                conversation_id: &conv_id,
+                stage,
+                message,
+            },
+        );
+    };
+
+    // 1. 加载会话
+    emit_status("loading_conv", "正在加载会话…");
+    let conv = state
+        .store
+        .load(&conversation_id)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let _ = app_handle.emit(
+                "agent-compress-error",
+                &CompressErrorPayload {
+                    conversation_id: &conv_id,
+                    error: &msg,
+                    partial: "",
+                },
+            );
+            msg
+        })?
+        .ok_or_else(|| {
+            let msg = format!("会话 {conversation_id} 不存在");
+            let _ = app_handle.emit(
+                "agent-compress-error",
+                &CompressErrorPayload {
+                    conversation_id: &conv_id,
+                    error: &msg,
+                    partial: "",
+                },
+            );
+            msg
+        })?;
+
+    if conv.messages.is_empty() {
+        let msg = "会话无消息，无需压缩".to_string();
+        let _ = app_handle.emit(
+            "agent-compress-error",
+            &CompressErrorPayload {
+                conversation_id: &conv_id,
+                error: &msg,
+                partial: "",
+            },
+        );
+        return Err(msg);
+    }
+
+    // 2. 读取配置快照（锁临界区极短：仅 clone）
+    let config = state.config.read().await.clone();
+    if !config.is_rig_ready() {
+        let msg = "未配置 api_key 或 backend 非 openai，无法调用压缩 agent".to_string();
+        let _ = app_handle.emit(
+            "agent-compress-error",
+            &CompressErrorPayload {
+                conversation_id: &conv_id,
+                error: &msg,
+                partial: "",
+            },
+        );
+        return Err(msg);
+    }
+
+    // 3. 构造压缩 prompt
+    emit_status("building_prompt", "正在构造压缩 prompt…");
+    let prompt = build_compression_prompt(&conv.messages);
+
+    // 4. 流式调用压缩 agent
+    emit_status("streaming", "压缩 agent 正在分析…");
+    let mut stream = call_compression_agent_stream(
+        &config.api_key,
+        &config.base_url,
+        &config.model_name,
+        &prompt,
+    );
+
+    let mut raw_text = String::with_capacity(1024);
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(CompressionStreamItem::Token(t)) => {
+                raw_text.push_str(&t);
+                let _ = app_handle.emit(
+                    "agent-compress-token",
+                    &CompressTokenPayload {
+                        conversation_id: &conv_id,
+                        token: &t,
+                    },
+                );
+            }
+            Ok(CompressionStreamItem::Done(full)) => {
+                // 流结束：full 已是完整文本（与 raw_text 拼接结果一致）
+                raw_text = full;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let _ = app_handle.emit(
+                    "agent-compress-error",
+                    &CompressErrorPayload {
+                        conversation_id: &conv_id,
+                        error: &msg,
+                        partial: &raw_text,
+                    },
+                );
+                return Err(msg);
+            }
+        }
+    }
+
+    // 5. 解析 <act> 块
+    emit_status("parsing", "正在解析压缩决策…");
+    let actions = parse_compression_response(&raw_text).map_err(|e| {
+        let msg = e.to_string();
+        let _ = app_handle.emit(
+            "agent-compress-error",
+            &CompressErrorPayload {
+                conversation_id: &conv_id,
+                error: &msg,
+                partial: &raw_text,
+            },
+        );
+        msg
+    })?;
+    let action_count = actions.len();
+
+    // 6. 持久化压缩状态
+    emit_status("persisting", "正在持久化压缩状态…");
+    let comp_state = CompressionState {
+        actions: actions.clone(),
+        updated_at: now_ms(),
+    };
+    state
+        .compression_store
+        .save(&conversation_id, &comp_state)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let _ = app_handle.emit(
+                "agent-compress-error",
+                &CompressErrorPayload {
+                    conversation_id: &conv_id,
+                    error: &msg,
+                    partial: &raw_text,
+                },
+            );
+            msg
+        })?;
+
+    // 7. 完成
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    emit_status("done", &format!("压缩完成：{action_count} 条决策"));
+    let _ = app_handle.emit(
+        "agent-compress-done",
+        &CompressDonePayload {
+            conversation_id: &conv_id,
+            actions: &actions,
+            raw_text: &raw_text,
+            elapsed_ms,
+        },
+    );
+
+    tracing::info!(
+        conversation_id = %conversation_id,
+        action_count,
+        elapsed_ms,
+        "消息压缩完成并已持久化（流式）"
     );
     Ok(actions)
 }
@@ -2511,6 +2750,7 @@ pub fn run() {
             get_context_preview,
             // 消息压缩
             compress_messages,
+            compress_messages_stream,
             get_compression_state,
             clear_compression_state,
             // chat

@@ -19,6 +19,13 @@ import type {
   AgentToolResultPayload,
   AgentAttachmentPayload,
   AgentUsagePayload,
+  CompressStatusPayload,
+  CompressTokenPayload,
+  CompressDonePayload,
+  CompressErrorPayload,
+  CompressionAction,
+  CompressionStage,
+  CompressionState,
   ToolCallRecord,
   PickedFile,
   QuoteChip,
@@ -283,8 +290,85 @@ const lastUsage = ref<AgentUsagePayload | null>(null)
 const contextSheetOpen = ref(false)
 const compressing = ref(false)
 
-// 触发消息压缩：调用后端 compress_messages 命令（任务 B 实现）
-// 前端代码先写好，vue-tsc 不检查 invoke 命令是否存在
+// ---------- 消息压缩浮窗（BindSheet）----------
+// 设计：把 compress_messages_stream 命令的流式事件实时渲染到浮窗：
+// - 顶部阶段进度条（loading_conv → building_prompt → streaming → parsing → persisting → done）
+// - 中部流式输出（markdown 实时渲染，含 <act> 块原始文本）
+// - 底部决策列表（done 阶段展示解析后的 CompressionAction[]，含 method/reason/涉及消息数）
+// - 错误态：红色提示 + 已接收部分文本
+const compressionSheetOpen = ref(false)
+// 当前阶段
+const compressStage = ref<CompressionStage | 'idle'>('idle')
+// 阶段说明文本（来自 status 事件 message 字段）
+const compressStageMsg = ref('')
+// 流式累计的原始响应文本（含 <act> 块）
+const compressRawText = ref('')
+// 解析后的压缩决策列表（done 阶段填充）
+const compressActions = ref<CompressionAction[]>([])
+// 错误信息（error 阶段填充）
+const compressError = ref('')
+// 处理耗时（done 阶段填充，毫秒）
+const compressElapsedMs = ref(0)
+// 已存在的压缩状态（打开浮窗时从后端加载，用于展示历史压缩结果）
+const compressExistingState = ref<CompressionState | null>(null)
+
+// 阶段进度映射：返回 0-1 的进度比例
+const compressProgress = computed(() => {
+  const order: CompressionStage[] = [
+    'loading_conv',
+    'building_prompt',
+    'streaming',
+    'parsing',
+    'persisting',
+    'done',
+  ]
+  if (compressStage.value === 'error') return 0
+  if (compressStage.value === 'idle') return 0
+  const idx = order.indexOf(compressStage.value)
+  if (idx < 0) return 0
+  // done 算 1，其他按阶段顺序递增（最后一项 done 之前是 5/6）
+  return Math.min(1, (idx + 1) / order.length)
+})
+
+// 阶段中文标签
+const compressStageLabel = computed(() => {
+  const map: Record<CompressionStage | 'idle', string> = {
+    idle: '待机',
+    loading_conv: '加载会话',
+    building_prompt: '构造 Prompt',
+    streaming: '压缩 Agent 流式输出',
+    parsing: '解析决策',
+    persisting: '持久化',
+    done: '完成',
+    error: '错误',
+  }
+  return map[compressStage.value] ?? compressStage.value
+})
+
+// 决策统计：keep/hide/replace 各多少条
+const compressActionStats = computed(() => {
+  const stats = { keep: 0, hide: 0, replace: 0, totalIds: 0 }
+  for (const a of compressActions.value) {
+    if (a.method === 'keep') stats.keep++
+    else if (a.method === 'hide') stats.hide++
+    else if (a.method === 'replace') stats.replace++
+    stats.totalIds += a.message_ids.length
+  }
+  return stats
+})
+
+// 重置压缩浮窗状态
+function resetCompressState() {
+  compressStage.value = 'idle'
+  compressStageMsg.value = ''
+  compressRawText.value = ''
+  compressActions.value = []
+  compressError.value = ''
+  compressElapsedMs.value = 0
+}
+
+// 触发消息压缩：打开浮窗 + 调用流式命令 + 监听事件
+// 事件监听在 onMounted 注册（仅一次），这里只负责打开浮窗和发起命令
 async function triggerCompress() {
   const id = activeId.value
   if (!id) {
@@ -292,16 +376,65 @@ async function triggerCompress() {
     return
   }
   if (compressing.value) return
+
+  // 重置状态并打开浮窗
+  resetCompressState()
+  compressionSheetOpen.value = true
   compressing.value = true
+
   try {
-    await invoke('compress_messages', { conversationId: id })
-    toast({ content: '压缩完成', type: 'success' })
-    await loadConversation()
-    contextSheetOpen.value = false
+    // 调用流式命令（命令本身在流式完成后才返回）
+    // 进度通过 agent-compress-* 事件实时推送到浮窗
+    await invoke('compress_messages_stream', { conversationId: id })
+    // 命令返回即代表 done 事件已 emit，actions 已填充
+    // 仅在命令成功时刷新会话（失败时 onCompressError 已处理）
+    if (compressStage.value === 'done') {
+      await loadConversation()
+    }
   } catch (e) {
-    toast({ content: `压缩失败：${e}`, type: 'error' })
+    // 命令返回错误：若 error 事件未触发（如命令立即失败），手动设置错误态
+    if (compressStage.value !== 'error') {
+      compressStage.value = 'error'
+      compressError.value = String(e)
+    }
   } finally {
     compressing.value = false
+  }
+}
+
+// 关闭压缩浮窗：仅 UI 操作，不打断进行中的压缩任务
+function closeCompressionSheet() {
+  compressionSheetOpen.value = false
+}
+
+// 清除当前会话的压缩状态（恢复全量历史注入）
+async function clearCompression() {
+  const id = activeId.value
+  if (!id) return
+  try {
+    await invoke('clear_compression_state', { conversationId: id })
+    compressExistingState.value = null
+    compressActions.value = []
+    toast({ content: '已清除压缩状态', type: 'success' })
+    await loadConversation()
+  } catch (e) {
+    toast({ content: `清除失败：${e}`, type: 'error' })
+  }
+}
+
+// 加载已有压缩状态（用于在浮窗打开时展示历史结果）
+async function loadExistingCompression(convId: string) {
+  if (!convId) {
+    compressExistingState.value = null
+    return
+  }
+  try {
+    const s = await invoke<CompressionState | null>('get_compression_state', {
+      conversationId: convId,
+    })
+    compressExistingState.value = s
+  } catch {
+    compressExistingState.value = null
   }
 }
 
@@ -383,12 +516,14 @@ function attachScroller(el: HTMLElement | null, oldEl?: HTMLElement | null) {
 const isEmptyHome = computed(() => messages.value.length === 0 && !sending.value)
 
 // ---------- 会话加载 ----------
-// conversationId 变化时加载对应会话消息
+// conversationId 变化时加载对应会话消息 + 已有压缩状态
 watch(
   () => props.conversationId,
   (id) => {
     activeId.value = id ?? null
     loadConversation()
+    if (id) loadExistingCompression(id)
+    else compressExistingState.value = null
   },
 )
 
@@ -1021,6 +1156,37 @@ onMounted(async () => {
       streamingBubbleId.value = null
       sending.value = false
     }),
+
+    // 消息压缩流式事件：把 compress_messages_stream 的进度实时渲染到浮窗
+    // 多会话过滤：仅处理当前活跃会话的事件（压缩任务不会跨会话并发）
+    await listen<CompressStatusPayload>('agent-compress-status', (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      compressStage.value = p.stage
+      compressStageMsg.value = p.message
+    }),
+    await listen<CompressTokenPayload>('agent-compress-token', (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      compressRawText.value += p.token
+    }),
+    await listen<CompressDonePayload>('agent-compress-done', (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      compressActions.value = p.actions
+      compressRawText.value = p.raw_text
+      compressElapsedMs.value = p.elapsed_ms
+      compressStage.value = 'done'
+      // 同步刷新已存在状态（用于"上次压缩"展示）
+      loadExistingCompression(p.conversation_id)
+    }),
+    await listen<CompressErrorPayload>('agent-compress-error', (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      compressError.value = p.error
+      if (p.partial) compressRawText.value = p.partial
+      compressStage.value = 'error'
+    }),
   )
 
   // 图片预览 Esc 关闭
@@ -1311,7 +1477,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 消息压缩按钮（任务 B 并行实现后端命令）-->
+        <!-- 消息压缩按钮：打开浮窗展示进度（任务 B 并行实现后端命令）-->
         <Button
           variant="primary"
           block
@@ -1343,6 +1509,219 @@ onUnmounted(() => {
         <p class="ctx-hint">
           压缩消息会合并历史对话以释放上下文空间。工作区决定 read_file / list_files / shell 的相对路径基准。
         </p>
+      </div>
+    </BindSheet>
+
+    <!-- 消息压缩进度浮窗：实时展示压缩 agent 的阶段、流式输出与最终决策 -->
+    <BindSheet
+      v-model:visible="compressionSheetOpen"
+      title="消息压缩"
+      side="bottom"
+      :height="'85vh'"
+    >
+      <div class="compress-sheet">
+        <!-- 顶部阶段进度条 -->
+        <div class="compress-header">
+          <div class="compress-stage-row">
+            <div
+              class="compress-stage-badge"
+              :class="{
+                'stage-active': compressStage !== 'idle' && compressStage !== 'done' && compressStage !== 'error',
+                'stage-done': compressStage === 'done',
+                'stage-error': compressStage === 'error',
+              }"
+            >
+              <Icon
+                v-if="compressStage === 'done'"
+                name="check"
+                :size="14"
+              />
+              <Icon
+                v-else-if="compressStage === 'error'"
+                name="close"
+                :size="14"
+              />
+              <Icon
+                v-else-if="compressStage !== 'idle'"
+                name="loader"
+                :size="14"
+              />
+              <Icon v-else name="merge" :size="14" />
+            </div>
+            <div class="compress-stage-text">
+              <div class="compress-stage-label">{{ compressStageLabel }}</div>
+              <div v-if="compressStageMsg" class="compress-stage-msg">
+                {{ compressStageMsg }}
+              </div>
+            </div>
+            <div v-if="compressStage === 'done' && compressElapsedMs > 0" class="compress-elapsed">
+              {{ (compressElapsedMs / 1000).toFixed(1) }}s
+            </div>
+          </div>
+          <!-- 进度条：仅在活跃阶段显示 -->
+          <div
+            v-if="compressStage !== 'idle' && compressStage !== 'error'"
+            class="compress-progress-bar"
+          >
+            <div
+              class="compress-progress-fill"
+              :class="{ 'is-done': compressStage === 'done' }"
+              :style="{ width: (compressProgress * 100) + '%' }"
+            />
+          </div>
+        </div>
+
+        <!-- 错误提示 -->
+        <div v-if="compressStage === 'error'" class="compress-error-box">
+          <div class="compress-error-title">
+            <Icon name="warning" :size="16" />
+            压缩失败
+          </div>
+          <div class="compress-error-msg">{{ compressError }}</div>
+        </div>
+
+        <!-- 决策统计（done 阶段或已有压缩状态）-->
+        <div
+          v-if="compressStage === 'done' || (compressStage === 'idle' && compressExistingState)"
+          class="compress-stats"
+        >
+          <div class="compress-stat-item keep">
+            <span class="compress-stat-num">{{ compressStage === 'done' ? compressActionStats.keep : (compressExistingState?.actions.filter(a => a.method === 'keep').length ?? 0) }}</span>
+            <span class="compress-stat-label">保持</span>
+          </div>
+          <div class="compress-stat-item hide">
+            <span class="compress-stat-num">{{ compressStage === 'done' ? compressActionStats.hide : (compressExistingState?.actions.filter(a => a.method === 'hide').length ?? 0) }}</span>
+            <span class="compress-stat-label">隐藏</span>
+          </div>
+          <div class="compress-stat-item replace">
+            <span class="compress-stat-num">{{ compressStage === 'done' ? compressActionStats.replace : (compressExistingState?.actions.filter(a => a.method === 'replace').length ?? 0) }}</span>
+            <span class="compress-stat-label">替换</span>
+          </div>
+          <div class="compress-stat-item total">
+            <span class="compress-stat-num">{{ compressStage === 'done' ? compressActionStats.totalIds : (compressExistingState?.actions.reduce((s, a) => s + a.message_ids.length, 0) ?? 0) }}</span>
+            <span class="compress-stat-label">涉及消息</span>
+          </div>
+        </div>
+
+        <!-- 流式输出区（streaming 阶段实时增长；done 后展示完整 raw_text）-->
+        <div
+          v-if="compressRawText"
+          class="compress-output"
+          :class="{ 'is-streaming': compressStage === 'streaming' }"
+        >
+          <div class="compress-output-title">
+            <span>Agent 输出</span>
+            <span v-if="compressStage === 'streaming'" class="compress-output-cursor" />
+          </div>
+          <MarkdownRender :content="compressRawText" />
+        </div>
+
+        <!-- 决策列表（done 阶段或已有压缩状态展开）-->
+        <div
+          v-if="compressStage === 'done' && compressActions.length > 0"
+          class="compress-actions"
+        >
+          <div class="compress-actions-title">压缩决策（{{ compressActions.length }} 条）</div>
+          <div
+            v-for="(a, i) in compressActions"
+            :key="i"
+            class="compress-action-item"
+            :class="`method-${a.method}`"
+          >
+            <div class="compress-action-head">
+              <span class="compress-action-method">{{ a.method === 'keep' ? '保持' : a.method === 'hide' ? '隐藏' : '替换' }}</span>
+              <span class="compress-action-ids">
+                {{ a.message_ids.length }} 条消息
+              </span>
+            </div>
+            <div class="compress-action-reason">{{ a.reason }}</div>
+            <div v-if="a.method === 'replace' && a.new_content" class="compress-action-new">
+              <span class="compress-action-new-label">替换为：</span>
+              <div class="compress-action-new-content">{{ a.new_content }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 已有压缩状态展示（idle 阶段且后端有持久化结果）-->
+        <div
+          v-if="compressStage === 'idle' && compressExistingState && compressExistingState.actions.length > 0"
+          class="compress-existing"
+        >
+          <div class="compress-existing-title">
+            上次压缩结果
+            <span class="compress-existing-time">
+              · {{ new Date(compressExistingState.updated_at).toLocaleString() }}
+            </span>
+          </div>
+          <div
+            v-for="(a, i) in compressExistingState.actions"
+            :key="i"
+            class="compress-action-item"
+            :class="`method-${a.method}`"
+          >
+            <div class="compress-action-head">
+              <span class="compress-action-method">{{ a.method === 'keep' ? '保持' : a.method === 'hide' ? '隐藏' : '替换' }}</span>
+              <span class="compress-action-ids">{{ a.message_ids.length }} 条消息</span>
+            </div>
+            <div class="compress-action-reason">{{ a.reason }}</div>
+            <div v-if="a.method === 'replace' && a.new_content" class="compress-action-new">
+              <span class="compress-action-new-label">替换为：</span>
+              <div class="compress-action-new-content">{{ a.new_content }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 空状态：未压缩过且 idle -->
+        <div
+          v-if="compressStage === 'idle' && !compressExistingState"
+          class="compress-empty"
+        >
+          <Icon name="merge" :size="32" />
+          <div class="compress-empty-text">
+            点击"开始压缩"分析当前会话历史，生成 Keep/Hide/Replace 决策以释放上下文空间。
+          </div>
+        </div>
+
+        <!-- 底部操作区 -->
+        <div class="compress-footer">
+          <Button
+            v-if="compressStage === 'idle'"
+            variant="primary"
+            block
+            :loading="compressing"
+            :disabled="compressing"
+            @click="triggerCompress"
+          >
+            <template #icon><Icon name="merge" :size="18" /></template>
+            开始压缩
+          </Button>
+          <Button
+            v-else-if="compressStage === 'done' || compressStage === 'error'"
+            variant="normal"
+            block
+            @click="closeCompressionSheet"
+          >
+            关闭
+          </Button>
+          <Button
+            v-else
+            variant="text"
+            block
+            disabled
+          >
+            <Icon name="loader" :size="16" />
+            压缩进行中…
+          </Button>
+          <Button
+            v-if="(compressStage === 'idle' || compressStage === 'done') && compressExistingState"
+            variant="text"
+            block
+            @click="clearCompression"
+          >
+            <Icon name="delete" :size="16" />
+            清除压缩状态
+          </Button>
+        </div>
       </div>
     </BindSheet>
 
@@ -1745,6 +2124,341 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+/* ---------- 消息压缩浮窗 ---------- */
+/* 设计原则：与 .ctx-sheet 视觉风格一致，中性 var(--muted) 配色，
+ * 数字使用 tabular-nums，圆角 var(--radius-md)，避免彩色干扰 */
+.compress-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 8px;
+  max-height: calc(85vh - 60px);
+  overflow-y: auto;
+}
+
+.compress-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.compress-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compress-stage-badge {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.compress-stage-badge.stage-active {
+  background: var(--accent, #4a7eff);
+  color: #fff;
+  border-color: var(--accent, #4a7eff);
+  animation: compress-spin 1s linear infinite;
+}
+
+.compress-stage-badge.stage-done {
+  background: var(--success, #10a37f);
+  color: #fff;
+  border-color: var(--success, #10a37f);
+}
+
+.compress-stage-badge.stage-error {
+  background: var(--danger, #ef4444);
+  color: #fff;
+  border-color: var(--danger, #ef4444);
+}
+
+@keyframes compress-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.compress-stage-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compress-stage-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.compress-stage-msg {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.compress-elapsed {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  padding: 2px 8px;
+  background: var(--card-2);
+  border-radius: var(--radius-full);
+}
+
+.compress-progress-bar {
+  height: 3px;
+  background: var(--card-2);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.compress-progress-fill {
+  height: 100%;
+  background: var(--accent, #4a7eff);
+  border-radius: var(--radius-full);
+  transition: width 0.3s ease;
+}
+
+.compress-progress-fill.is-done {
+  background: var(--success, #10a37f);
+}
+
+/* 错误提示框 */
+.compress-error-box {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compress-error-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--danger, #ef4444);
+}
+
+.compress-error-msg {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+/* 决策统计：四宫格 */
+.compress-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.compress-stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border-radius: var(--radius-md);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+}
+
+.compress-stat-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  line-height: 1;
+}
+
+.compress-stat-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.compress-stat-item.keep .compress-stat-num { color: var(--success, #10a37f); }
+.compress-stat-item.hide .compress-stat-num { color: var(--muted); }
+.compress-stat-item.replace .compress-stat-num { color: var(--warn, #d97757); }
+.compress-stat-item.total .compress-stat-num { color: var(--text); }
+
+/* 流式输出区 */
+.compress-output {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card-2);
+  padding: 10px 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.compress-output.is-streaming {
+  border-color: var(--accent, #4a7eff);
+}
+
+.compress-output-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.compress-output-cursor {
+  width: 6px;
+  height: 12px;
+  background: var(--accent, #4a7eff);
+  display: inline-block;
+  animation: compress-cursor-blink 1s step-end infinite;
+}
+
+@keyframes compress-cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* 决策列表 / 已有压缩状态列表 */
+.compress-actions,
+.compress-existing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compress-actions-title,
+.compress-existing-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.compress-existing-time {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.compress-action-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compress-action-item.method-keep { border-left-color: var(--success, #10a37f); }
+.compress-action-item.method-hide { border-left-color: var(--muted); }
+.compress-action-item.method-replace { border-left-color: var(--warn, #d97757); }
+
+.compress-action-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compress-action-method {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--card);
+}
+
+.compress-action-item.method-keep .compress-action-method { color: var(--success, #10a37f); }
+.compress-action-item.method-hide .compress-action-method { color: var(--muted); }
+.compress-action-item.method-replace .compress-action-method { color: var(--warn, #d97757); }
+
+.compress-action-ids {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.compress-action-reason {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.compress-action-new {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--card);
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+}
+
+.compress-action-new-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.compress-action-new-content {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 空状态 */
+.compress-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.compress-empty-text {
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 280px;
+}
+
+/* 底部操作区 */
+.compress-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 /* Kimi 风格空状态首页 */

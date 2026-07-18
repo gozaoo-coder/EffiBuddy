@@ -19,7 +19,10 @@ pub mod tools;
 pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
 pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
-pub use rig_agent::{COMPRESSION_PREAMBLE, RigAgent, call_compression_agent};
+pub use rig_agent::{
+    COMPRESSION_PREAMBLE, CompressionStreamItem, RigAgent, call_compression_agent,
+    call_compression_agent_stream,
+};
 pub use tools::{
     GetTimeTool, ImageGenConfig, ImageGenTool, SearchHistoryTool, SearchMemoryTool,
     SetTitleTool,

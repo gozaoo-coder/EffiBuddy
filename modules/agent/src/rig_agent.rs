@@ -1003,3 +1003,80 @@ pub async fn call_compression_agent(
         .map_err(|e| CoreError::Agent(format!("compression prompt: {e}")))?;
     Ok(resp)
 }
+
+/// 压缩 agent 流式事件：把流式响应分类透传给调用方
+///
+/// - `Token(String)`：文本增量（含 `<act>` 块的逐步输出）
+/// - `Done(String)`：完整响应文本（所有 token 拼接）
+///
+/// 设计与 [`AgentStreamItem`] 的 Text/Reasoning 透传一致，但压缩 agent 不会
+/// 触发工具调用，故仅区分 Token 与 Done。
+#[derive(Debug, Clone)]
+pub enum CompressionStreamItem {
+    /// 文本增量
+    Token(String),
+    /// 流结束：完整响应文本
+    Done(String),
+}
+
+/// 调用压缩 agent（流式版本）
+///
+/// 返回 `BoxStream<'static, Result<CompressionStreamItem>>`，调用方逐项消费：
+/// - `Token(text)`：实时 emit 给前端展示进度
+/// - `Done(full_text)`：解析 `<act>` 块并持久化
+///
+/// 与 [`call_compression_agent`] 共享 client 构造逻辑，但走 `stream_prompt` 路径。
+/// 内部 `await` 仅在流项到达时，无阻塞 sleep。
+pub fn call_compression_agent_stream(
+    api_key: &str,
+    base_url: &str,
+    model_name: &str,
+    prompt: &str,
+) -> BoxStream<'static, Result<CompressionStreamItem>> {
+    let api_key = api_key.to_string();
+    let base_url = base_url.to_string();
+    let model_name = model_name.to_string();
+    let prompt = prompt.to_string();
+
+    let s = async_stream::stream! {
+        let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+        if !base_url.trim().is_empty() {
+            builder = builder.base_url(&base_url);
+        }
+        let client = builder
+            .build()
+            .map_err(|e| CoreError::Agent(format!("compression client init: {e}")))?;
+        let agent = client
+            .agent(&model_name)
+            .preamble(COMPRESSION_PREAMBLE)
+            .build();
+
+        let mut stream = agent.stream_prompt(&prompt).await;
+        let mut full = String::with_capacity(1024);
+
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
+                    if !text.text.is_empty() {
+                        full.push_str(&text.text);
+                        yield Ok(CompressionStreamItem::Token(text.text));
+                    }
+                }
+                Ok(MultiTurnStreamItem::StreamAssistantItem(_)) => {
+                    // Reasoning / ToolCallDelta 等暂不透传，压缩 agent 不应调用工具
+                    continue;
+                }
+                Ok(_) => {
+                    // ToolResult / CompletionCall 等忽略
+                    continue;
+                }
+                Err(e) => {
+                    yield Err(CoreError::Agent(format!("compression stream: {e}")));
+                    return;
+                }
+            }
+        }
+        yield Ok(CompressionStreamItem::Done(full));
+    };
+    Box::pin(s)
+}
