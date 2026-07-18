@@ -693,13 +693,17 @@ pub fn extract_zip_to(dest_dir: &std::path::Path, zip_bytes: &[u8]) -> std::resu
 /// ---
 /// ```
 ///
-/// 失败时返回空结构（不阻断安装，仅用作展示）。preamble 使用整个文件内容。
+/// 失败时返回空结构（不阻断安装，仅用作展示）。
+/// - `preamble`：整个文件内容（含 frontmatter），保留供需要完整内容的场景使用
+/// - `body`：去除 frontmatter 后的正文，作为 LLM 系统消息注入最干净
 pub fn parse_skill_md(content: &str) -> ParsedSkillMd {
     let mut parsed = ParsedSkillMd::default();
-    // 整个文件作为 preamble
+    // 整个文件作为 preamble（保留完整内容）
     parsed.preamble = content.to_string();
+    // 默认 body 等于 preamble（无 frontmatter 时两者一致）
+    parsed.body = content.to_string();
 
-    // 检测 frontmatter：以 `---\n` 开头
+    // 检测 frontmatter：以 `---` 开头
     if !content.starts_with("---") {
         return parsed;
     }
@@ -721,6 +725,13 @@ pub fn parse_skill_md(content: &str) -> ParsedSkillMd {
             parsed.version = rest.trim().trim_matches('"').trim_matches('\'').to_string();
         }
     }
+    // 提取正文：跳过结束的 `\n---`（4 字节）与紧随其后的单个换行
+    let after_frontmatter = &after_start[end + 4..];
+    let body = after_frontmatter
+        .strip_prefix('\n')
+        .or_else(|| after_frontmatter.strip_prefix("\r\n"))
+        .unwrap_or(after_frontmatter);
+    parsed.body = body.to_string();
     parsed
 }
 
@@ -730,8 +741,12 @@ pub struct ParsedSkillMd {
     pub name: String,
     pub description: String,
     pub version: String,
-    /// 整个 SKILL.md 内容（作为 preamble）
+    /// 整个 SKILL.md 内容（含 frontmatter）
     pub preamble: String,
+    /// SKILL.md 正文（去除 frontmatter 后的内容）。
+    /// 无 frontmatter 时与 `preamble` 一致。
+    /// 作为 LLM 系统消息注入时使用此字段，避免 YAML 噪声污染上下文。
+    pub body: String,
 }
 
 #[cfg(test)]
@@ -747,6 +762,10 @@ mod tests {
         assert_eq!(parsed.description, "Get current weather");
         assert_eq!(parsed.version, "1.0.0");
         assert!(parsed.preamble.contains("# Weather"));
+        // body 应去除 frontmatter，仅保留正文
+        assert!(!parsed.body.starts_with("---"));
+        assert!(parsed.body.starts_with("# Weather"));
+        assert!(parsed.body.contains("curl wttr.in"));
     }
 
     #[test]
@@ -756,6 +775,17 @@ mod tests {
         assert!(parsed.name.is_empty());
         assert!(parsed.description.is_empty());
         assert_eq!(parsed.preamble, content);
+        // 无 frontmatter 时 body 等于 preamble
+        assert_eq!(parsed.body, content);
+    }
+
+    #[test]
+    fn parse_skill_md_body_strips_crlf_newline() {
+        // 验证 CRLF 行尾下 body 仍能正确剥离 frontmatter
+        let content = "---\r\nname: x\r\n---\r\nbody line";
+        let parsed = parse_skill_md(content);
+        assert_eq!(parsed.name, "x");
+        assert_eq!(parsed.body, "body line");
     }
 
     #[test]

@@ -1413,6 +1413,10 @@ async fn delete_skill(state: tauri::State<'_, AppState>, id: String) -> Result<(
 ///
 /// 工作区注入：若技能配置了 working_dir，且会话级 working_dir 未设置，
 /// 则把技能的 working_dir 写入会话级（会话级优先级更高，可被用户后续覆盖）。
+///
+/// ClawHub 技能回退：若 preamble 为空但 working_dir 中存在 SKILL.md，
+/// 现读现解析其正文作为 preamble。兼容此修复前安装的 ClawHub 技能
+/// （旧版 preamble 持久化为空），并支持用户外部编辑 SKILL.md 后热更新。
 #[tauri::command]
 async fn apply_skill(
     state: tauri::State<'_, AppState>,
@@ -1442,13 +1446,15 @@ async fn apply_skill(
         }
     }
 
-    if skill.preamble.is_empty() {
+    // 解析最终注入的 preamble：优先用持久化值；为空且 working_dir 含 SKILL.md 时回读
+    let preamble = resolve_skill_preamble(&skill).await;
+    if preamble.is_empty() {
         return Ok(());
     }
     let sys_msg = Message::new(
         uuid::Uuid::new_v4().to_string(),
         Role::System,
-        skill.preamble,
+        preamble,
         now_ms(),
     );
     state
@@ -1457,6 +1463,29 @@ async fn apply_skill(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 解析技能最终要注入到会话的 preamble 文本。
+///
+/// 优先级：
+/// 1. `skill.preamble` 非空 → 直接返回（含本地编辑过的自定义技能 / 新版 ClawHub 安装）
+/// 2. `skill.working_dir` 下存在 `SKILL.md` → 现读并返回其正文（兼容旧版 ClawHub 安装）
+/// 3. 否则返回空串，apply_skill 据此跳过注入
+///
+/// 把 IO 与解析拆出 apply_skill 主体，便于单测与未来扩展（如支持 README.md fallback）。
+async fn resolve_skill_preamble(skill: &Skill) -> String {
+    if !skill.preamble.is_empty() {
+        return skill.preamble.clone();
+    }
+    let Some(wd) = skill.working_dir.as_deref() else {
+        return String::new();
+    };
+    let skill_md = std::path::Path::new(wd).join("SKILL.md");
+    let content = match tokio::fs::read_to_string(&skill_md).await {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    effisuite_core::clawhub::parse_skill_md(&content).body
 }
 
 /// 设置/清除会话级工作区路径。
@@ -1570,7 +1599,9 @@ async fn clawhub_get_skill(
 /// 2. 拉取 skill 详情获取 owner/version 元数据
 /// 3. 下载 ZIP（5min 超时）
 /// 4. spawn_blocking 中解压到 `<skills_dir>/<slug>/`，带 zip-slip 防护
-/// 5. 尝试解析 SKILL.md frontmatter 提取 name/description/version
+/// 5. 解析 SKILL.md frontmatter 提取 name/description/version，
+///    同时把正文（去除 frontmatter）写入 `preamble`，
+///    使 apply_skill 能透明注入到 agent 上下文，agent 据此"看到"并"使用"技能
 /// 6. 构造 Skill 记录，写入 skill_store（source="clawhub"）
 ///
 /// 返回新（或已存在）技能 id。
@@ -1624,26 +1655,30 @@ async fn clawhub_install_skill(
     .map_err(|e| format!("解压任务调度失败: {e}"))?
     .map_err(|e| format!("解压失败: {e}"))?;
 
-    // 4. 尝试读取 SKILL.md
+    // 4. 解析 SKILL.md：提取 frontmatter 字段 + 正文作为 preamble
+    // preamble 写入 Skill.preamble，apply_skill 时注入为 System 消息，
+    // agent 据此看到技能指令；working_dir 已指向解压目录，agent 可通过
+    // read_file/list_files/shell 访问技能携带的脚本与资源文件。
     let skill_md_path = dest_dir.join("SKILL.md");
-    let (name, description, parsed_version) = match tokio::fs::read_to_string(&skill_md_path).await {
+    let (name, description, parsed_version, body) = match tokio::fs::read_to_string(&skill_md_path).await {
         Ok(content) => {
             let p = parse_skill_md(&content);
             (
                 if p.name.is_empty() { slug.clone() } else { p.name },
                 if p.description.is_empty() { format!("ClawHub 技能: {}", slug) } else { p.description },
                 if p.version.is_empty() { version.clone() } else { p.version },
+                p.body,
             )
         }
-        Err(_) => (slug.clone(), format!("ClawHub 技能: {}", slug), version.clone()),
+        Err(_) => (slug.clone(), format!("ClawHub 技能: {}", slug), version.clone(), String::new()),
     };
 
-    // 5. 落盘 skill_store
+    // 5. 落盘 skill_store：preamble 为 SKILL.md 正文（无 frontmatter 时为整个文件）
     let skill = Skill {
         id: slug_clone.clone(),
         name,
         description,
-        preamble: String::new(), // ClawHub 技能的 preamble 在 SKILL.md 内，不单独持久化
+        preamble: body,
         tools: Vec::new(),
         working_dir: Some(dest_dir.to_string_lossy().into_owned()),
         created_at: now_ms(),
