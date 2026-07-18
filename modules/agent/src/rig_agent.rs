@@ -31,7 +31,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use effisuite_core::{
-    ConversationStore, CoreError, MemoryIndex, Message, PinnedMemoryStore, Result, Role,
+    ClawHubClient, ConversationStore, CoreError, MemoryIndex, Message, PinnedMemoryStore,
+    Result, Role, SkillIndex, SkillStore,
 };
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -47,9 +48,10 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent, ContextPreview};
 use crate::tools::{
-    DeletePinnedMemoryTool, GetTimeTool, ImageGenConfig, ImageGenTool, ListFilesTool,
-    ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchHistoryTool, SearchMemoryTool,
-    SetTitleTool, ShellTool, WebFetchTool,
+    DeletePinnedMemoryTool, GetSkillDetailTool, GetTimeTool, ImageGenConfig, ImageGenTool,
+    InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool, ListPinnedMemoriesTool,
+    PinMemoryTool, ReadFileTool, SearchClawHubSkillsTool, SearchHistoryTool, SearchMemoryTool,
+    EnableSkillTool, SetTitleTool, ShellTool, WebFetchTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -59,6 +61,11 @@ const MEMORY_AUTO_INJECT_LIMIT: usize = 5;
 const RECENT_HISTORY_WITH_MEMORY: usize = 10;
 /// 单条历史消息截断字符数
 const HISTORY_TRUNCATE_CHARS: usize = 800;
+/// 自动注入的可用技能条数上限（RAG 检索 Top-K）
+/// 仅注入 name + description 摘要，agent 通过 get_skill_detail / enable_skill 深入使用
+const SKILL_AUTO_INJECT_LIMIT: usize = 3;
+/// 跳过过短查询的技能检索阈值（与 memory 一致），避免单字符无意义检索
+const SKILL_SEARCH_MIN_QUERY_LEN: usize = 2;
 
 pub struct RigAgent {
     /// 统一用 CompletionsClient（Chat Completions API），兼容所有 OpenAI 兼容 provider
@@ -75,6 +82,18 @@ pub struct RigAgent {
     /// 永久记忆存储（用户主动要求"记住"的内容）
     /// None 时关闭永久记忆能力；Some 时每轮 prompt 都注入 `[永久记忆]` 段
     pinned_memory: Option<Arc<PinnedMemoryStore>>,
+    /// 已安装技能检索索引（RAG 技能自动注入核心）
+    /// None 时关闭技能自动注入；Some 时每轮 prompt 注入 `[可用技能]` 段
+    /// 并注册 list_installed_skills / get_skill_detail / enable_skill 工具
+    skill_index: Option<Arc<SkillIndex>>,
+    /// 技能存储句柄，GetSkillDetailTool / EnableSkillTool 据此读写
+    /// None 时 skill_index 相关工具不可用
+    skill_store: Option<Arc<SkillStore>>,
+    /// ClawHub 客户端句柄，SearchClawHubSkillsTool / InstallClawHubSkillTool 据此访问远程市场
+    /// None 时 clawhub 相关工具不可用（agent 只能用已安装技能）
+    clawhub_client: Option<Arc<ClawHubClient>>,
+    /// 技能解压根目录，InstallClawHubSkillTool 据此落盘 ZIP 解压结果
+    skills_dir: Option<PathBuf>,
     /// 当前会话 id 句柄，由 Tauri 命令层在每次 send_message 前更新；
     /// search_memory 工具与自动注入都据此排除当前会话
     current_conversation_id: Arc<RwLock<Option<String>>>,
@@ -87,7 +106,7 @@ pub struct RigAgent {
     image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
     /// 附件保存目录（绝对路径），ImageGenTool 把生成图片落盘到此目录。
     attachments_dir: PathBuf,
-    /// 会话存储句柄，SetTitleTool 据此调用 store.rename 持久化标题
+    /// 会话存储句柄，SetTitleTool / EnableSkillTool 据此读写会话
     store: Arc<ConversationStore>,
 }
 
@@ -100,6 +119,9 @@ impl RigAgent {
     /// `image_gen_config` 共享句柄供 ImageGenTool 读取，None 则 image_gen 工具不可用。
     /// `attachments_dir` 为图片落盘目录（绝对路径）。
     /// `store` 共享会话存储句柄，SetTitleTool 据此持久化标题。
+    /// `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后
+    /// 启用技能 RAG 自动注入与 5 个技能管理工具；任一为 None 则相应能力降级。
+    #[allow(clippy::too_many_arguments)]
     pub fn from_env(
         model_name: impl Into<String>,
         preamble: impl Into<String>,
@@ -111,6 +133,10 @@ impl RigAgent {
         image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
         attachments_dir: PathBuf,
         store: Arc<ConversationStore>,
+        skill_index: Option<Arc<SkillIndex>>,
+        skill_store: Option<Arc<SkillStore>>,
+        clawhub_client: Option<Arc<ClawHubClient>>,
+        skills_dir: Option<PathBuf>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -122,6 +148,10 @@ impl RigAgent {
             enable_tools,
             memory,
             pinned_memory,
+            skill_index,
+            skill_store,
+            clawhub_client,
+            skills_dir,
             current_conversation_id,
             working_dir,
             image_gen_config,
@@ -141,7 +171,10 @@ impl RigAgent {
     /// - `image_gen_config` 共享句柄供 ImageGenTool 读取（用户切换到 image_gen 模型时由
     ///   Tauri 命令层更新），None 时 image_gen 工具调用返回错误提示
     /// - `attachments_dir` 为图片落盘目录（绝对路径），ImageGenTool 据此保存生成结果
-    /// - `store` 共享会话存储句柄，SetTitleTool 据此持久化标题
+    /// - `store` 共享会话存储句柄，SetTitleTool / EnableSkillTool 据此读写会话
+    /// - `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后
+    ///   启用技能 RAG 自动注入与 5 个技能管理工具；任一为 None 则相应能力降级
+    #[allow(clippy::too_many_arguments)]
     pub fn from_key(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
@@ -155,6 +188,10 @@ impl RigAgent {
         image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
         attachments_dir: PathBuf,
         store: Arc<ConversationStore>,
+        skill_index: Option<Arc<SkillIndex>>,
+        skill_store: Option<Arc<SkillStore>>,
+        clawhub_client: Option<Arc<ClawHubClient>>,
+        skills_dir: Option<PathBuf>,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -173,6 +210,10 @@ impl RigAgent {
             enable_tools,
             memory,
             pinned_memory,
+            skill_index,
+            skill_store,
+            clawhub_client,
+            skills_dir,
             current_conversation_id,
             working_dir,
             image_gen_config,
@@ -282,6 +323,39 @@ impl RigAgent {
                 b = b.tool(pin).tool(list_pinned).tool(delete_pinned);
             }
 
+            // 技能管理工具：仅在 skill_index + skill_store 同时可用时注册
+            // 让 LLM 自主列出 / 查询 / 启用本地已安装技能（替代旧 apply_skill 命令）
+            if let (Some(idx), Some(store)) = (&self.skill_index, &self.skill_store) {
+                let list_skills = ListInstalledSkillsTool::new(Arc::clone(idx));
+                let get_skill = GetSkillDetailTool::new(Arc::clone(store));
+                let enable_skill = EnableSkillTool::new(
+                    Arc::clone(store),
+                    Arc::clone(&self.store),
+                    Arc::clone(&self.current_conversation_id),
+                );
+                b = b.tool(list_skills).tool(get_skill).tool(enable_skill);
+            }
+
+            // ClawHub 工具：仅在 clawhub_client 可用时注册
+            // 让 LLM 在本地无匹配技能时主动从 ClawHub 搜索 + 安装
+            // install_clawhub_skill 额外依赖 skill_store / skill_index / skills_dir，
+            // 任一缺失则只暴露 search_clawhub_skills（agent 可推荐 slug 但不能直接安装）
+            if let Some(client) = &self.clawhub_client {
+                let search_clawhub = SearchClawHubSkillsTool::new(Arc::clone(client));
+                b = b.tool(search_clawhub);
+                if let (Some(store), Some(idx), Some(dir)) =
+                    (&self.skill_store, &self.skill_index, &self.skills_dir)
+                {
+                    let install_clawhub = InstallClawHubSkillTool::new(
+                        Arc::clone(client),
+                        Arc::clone(store),
+                        Arc::clone(idx),
+                        dir.clone(),
+                    );
+                    b = b.tool(install_clawhub);
+                }
+            }
+
             b.default_max_turns(usize::MAX).build()
         } else {
             builder.build()
@@ -350,29 +424,34 @@ impl RigAgent {
     pub async fn build_context_preview(&self, messages: &[Message]) -> ContextPreview {
         let preamble = self.preamble.clone();
         let memory_enabled = self.memory.is_some();
+        let skill_auto_inject_enabled = self.skill_index.is_some();
 
         match self.build_context_parts(messages).await {
             None => ContextPreview {
                 preamble,
                 pinned_section: String::new(),
                 memory_section: String::new(),
+                skill_section: String::new(),
                 history_section: String::new(),
                 current_question: String::new(),
                 full_prompt: String::new(),
                 pinned_count: 0,
                 memory_hits_count: 0,
+                skill_hits_count: 0,
                 history_keep_count: 0,
                 history_total_count: 0,
                 memory_inject_limit: MEMORY_AUTO_INJECT_LIMIT,
                 recent_history_limit: RECENT_HISTORY_WITH_MEMORY,
                 history_truncate_chars: HISTORY_TRUNCATE_CHARS,
                 memory_enabled,
+                skill_auto_inject_enabled,
             },
             Some(parts) => {
                 // 退化为纯当前问题（与 build_contextual_prompt 保持一致）
                 let full_prompt = if parts.pinned_section.is_empty()
                     && parts.history_section.is_empty()
                     && parts.memory_section.is_empty()
+                    && parts.skill_section.is_empty()
                 {
                     parts.current_question.clone()
                 } else {
@@ -383,17 +462,20 @@ impl RigAgent {
                     preamble,
                     pinned_section: parts.pinned_section,
                     memory_section: parts.memory_section,
+                    skill_section: parts.skill_section,
                     history_section: parts.history_section,
                     current_question: parts.current_question,
                     full_prompt,
                     pinned_count: parts.pinned_count,
                     memory_hits_count: parts.memory_hits_count,
+                    skill_hits_count: parts.skill_hits_count,
                     history_keep_count: parts.history_keep_count,
                     history_total_count: messages.len(),
                     memory_inject_limit: MEMORY_AUTO_INJECT_LIMIT,
                     recent_history_limit: RECENT_HISTORY_WITH_MEMORY,
                     history_truncate_chars: HISTORY_TRUNCATE_CHARS,
                     memory_enabled,
+                    skill_auto_inject_enabled,
                 }
             }
         }
@@ -453,6 +535,26 @@ impl RigAgent {
             (String::new(), 0)
         };
 
+        // 1.5. RAG 技能自动注入：检索与当前问题相关的 Top-K 已安装技能
+        // 仅注入 name + description 摘要让 agent 知道"我能用什么"，
+        // agent 通过 list_installed_skills / get_skill_detail / enable_skill 工具深入使用
+        let (skill_section, skill_hits_count) = if let Some(skill_idx) = &self.skill_index {
+            let query = current_msg.content.trim();
+            if query.len() < SKILL_SEARCH_MIN_QUERY_LEN {
+                (String::new(), 0)
+            } else {
+                let hits = skill_idx.search(query, SKILL_AUTO_INJECT_LIMIT).await;
+                let count = hits.len();
+                if hits.is_empty() {
+                    (String::new(), 0)
+                } else {
+                    (format_skill_section(&hits), count)
+                }
+            }
+        } else {
+            (String::new(), 0)
+        };
+
         // 2. 当前对话历史：启用记忆时只取最近 N 条，否则取全部（旧行为）
         let history_msgs: &[Message] = if self.memory.is_some() {
             let start = last_user_idx.saturating_sub(RECENT_HISTORY_WITH_MEMORY);
@@ -487,6 +589,8 @@ impl RigAgent {
             pinned_count,
             memory_section,
             memory_hits_count,
+            skill_section,
+            skill_hits_count,
             history_section,
             history_keep_count: history_msgs.len(),
             current_question: current_msg.content.clone(),
@@ -500,24 +604,31 @@ impl RigAgent {
 struct ContextParts {
     pinned_section: String,
     memory_section: String,
+    skill_section: String,
     history_section: String,
     current_question: String,
     pinned_count: usize,
     memory_hits_count: usize,
+    skill_hits_count: usize,
     history_keep_count: usize,
 }
 
 impl ContextParts {
-    /// 把各段按 `[永久记忆] → [相关历史记忆] → [当前对话最近] → [当前问题]` 顺序拼装
+    /// 把各段按
+    /// `[永久记忆] → [相关历史记忆] → [可用技能] → [当前对话最近] → [当前问题]`
+    /// 顺序拼装。
     ///
-    /// 与原 `build_contextual_prompt` 第 4 步的拼装逻辑保持一致。
+    /// `[可用技能]` 段位置选择在历史记忆之后、当前对话之前：
+    /// - 不放最前：避免覆盖永久记忆（用户主动要求的高优先级）
+    /// - 不放最后：避免与当前问题抢夺注意力，让 agent 先看到"我能用什么"再读问题
     fn assemble_prompt(&self) -> String {
         let mut prompt = String::with_capacity(
             self.pinned_section.len()
                 + self.memory_section.len()
+                + self.skill_section.len()
                 + self.history_section.len()
                 + self.current_question.len()
-                + 64,
+                + 96,
         );
 
         if !self.pinned_section.is_empty() {
@@ -528,6 +639,10 @@ impl ContextParts {
             prompt.push_str(&self.memory_section);
             prompt.push('\n');
         }
+        if !self.skill_section.is_empty() {
+            prompt.push_str(&self.skill_section);
+            prompt.push('\n');
+        }
         if !self.history_section.is_empty() {
             prompt.push_str(&self.history_section);
             prompt.push('\n');
@@ -535,6 +650,46 @@ impl ContextParts {
         prompt.push_str("[当前问题]\n用户: ");
         prompt.push_str(&self.current_question);
         prompt
+    }
+}
+
+/// 格式化技能自动注入的 `[可用技能]` 段落
+///
+/// 输出格式：
+/// ```text
+/// [可用技能]（已安装技能中与当前问题相关，调用 enable_skill(id) 启用）
+/// 1. [weather] Weather — Get current weather forecast
+/// 2. [translator] Translator — Translate text between languages
+/// ```
+fn format_skill_section(hits: &[effisuite_core::SkillHit]) -> String {
+    let mut s = String::with_capacity(hits.len() * 96 + 64);
+    s.push_str("[可用技能]（已安装技能中与当前问题相关，调用 enable_skill(id) 启用；\
+                调用 get_skill_detail(id) 查看完整说明；\
+                调用 list_installed_skills 查看全部；\
+                调用 search_clawhub_skills / install_clawhub_skill 从 ClawHub 找新技能）\n");
+    for (i, hit) in hits.iter().enumerate() {
+        let tag = if hit.builtin { "[内置]" } else { "" };
+        s.push_str(&format!(
+            "{}. [{}] {}{} — {}\n",
+            i + 1,
+            short_skill_id(&hit.id),
+            tag,
+            hit.name,
+            hit.description
+        ));
+    }
+    s
+}
+
+/// 截断技能 id 用于显示（取前 12 字符，UTF-8 边界安全）。
+/// 比 conversation id 略长，因为技能 id 常是 slug 风格（如 "agent-reach"），
+/// 前 12 字符更易辨识
+#[inline]
+fn short_skill_id(id: &str) -> &str {
+    if id.len() <= 12 {
+        id
+    } else {
+        &id[..id.ceil_char_boundary(12)]
     }
 }
 

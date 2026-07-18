@@ -44,6 +44,9 @@ mod scheduler;
 pub struct AppState {
     /// 技能存储（PathBuf+Arc，4 usize）
     pub skill_store: SkillStore,
+    /// 已安装技能 RAG 检索索引（BM25），与 agent 共享同一份 Arc
+    /// 启动时从 skill_store 全量重建；技能增删后由对应命令 rebuild
+    pub skill_index: Arc<effisuite_core::SkillIndex>,
     /// 定时任务存储（PathBuf+Arc，4 usize）
     pub schedule_store: ScheduledTaskStore,
     /// 已安装插件存储（PathBuf+Arc，4 usize）
@@ -161,7 +164,10 @@ fn save_config(config: &AgentConfig) -> std::result::Result<(), String> {
 /// `working_dir` 注入以启用工作区路径解析（read_file/list_files/shell 据此锚定相对路径）。
 /// `image_gen_config` 注入以启用图像生成工具（LLM 可主动调用 image_gen 为用户作画）。
 /// `attachments_dir` 为图片落盘目录。
+/// `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后启用
+/// 技能 RAG 自动注入与 5 个技能管理工具（list/get/enable + search/install ClawHub）。
 /// MockAgent 后端忽略这些参数。
+#[allow(clippy::too_many_arguments)]
 fn build_agent(
     config: &AgentConfig,
     memory: Arc<MemoryIndex>,
@@ -171,6 +177,10 @@ fn build_agent(
     image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
     attachments_dir: std::path::PathBuf,
     store: Arc<ConversationStore>,
+    skill_index: Arc<effisuite_core::SkillIndex>,
+    skill_store: Arc<SkillStore>,
+    clawhub_client: Arc<ClawHubClient>,
+    skills_dir: std::path::PathBuf,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -187,6 +197,10 @@ fn build_agent(
                 image_gen_config,
                 attachments_dir,
                 store,
+                Some(skill_index),
+                Some(skill_store),
+                Some(clawhub_client),
+                Some(skills_dir),
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -335,6 +349,8 @@ async fn set_config(
     }
 
     // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config / store
+    // 同时注入 skill_index / skill_store / clawhub / skills_dir 以启用技能 RAG 自动注入
+    // 与 5 个技能管理工具（list/get/enable + search/install ClawHub）
     let new_agent = build_agent(
         &config,
         Arc::clone(&state.memory),
@@ -344,6 +360,10 @@ async fn set_config(
         Arc::clone(&state.image_gen_config),
         state.attachments_dir.clone(),
         Arc::clone(&state.store),
+        Arc::clone(&state.skill_index),
+        Arc::new(state.skill_store.clone()),
+        Arc::new(state.clawhub.clone()),
+        skills_dir(),
     );
 
     // 替换 state 中的 agent 和 config
@@ -606,6 +626,10 @@ async fn set_active_model(
                 Arc::clone(&state.image_gen_config),
                 state.attachments_dir.clone(),
                 Arc::clone(&state.store),
+                Arc::clone(&state.skill_index),
+                Arc::new(state.skill_store.clone()),
+                Arc::new(state.clawhub.clone()),
+                skills_dir(),
             );
             {
                 let mut agent_lock = state.agent.write().await;
@@ -897,7 +921,7 @@ async fn send_message(
     *cur_conv.write().await = Some(conversation_id.clone());
 
     // 同步会话级工作区到 agent 句柄：read_file/list_files/shell 据此解析相对路径
-    // 优先级：会话级 working_dir > 技能级（apply_skill 已写入会话） > None
+    // 优先级：会话级 working_dir > 技能级（enable_skill 工具写入会话） > None
     let conv_wd = store
         .load(&conversation_id)
         .await
@@ -985,7 +1009,7 @@ async fn send_message_stream(
     memory.add(&conversation_id, user_msg_for_memory).await;
 
     // 同步会话级工作区到 agent 句柄：read_file/list_files/shell 据此解析相对路径
-    // 优先级：会话级 working_dir > 技能级（apply_skill 已写入会话） > None
+    // 优先级：会话级 working_dir > 技能级（enable_skill 工具写入会话） > None
     let conv_wd = conv
         .working_dir
         .clone()
@@ -1082,6 +1106,11 @@ async fn send_message_stream(
                                     },
                                 );
                             }
+                        } else if name == "install_clawhub_skill" && !is_error {
+                            // agent 主动调用 install_clawhub_skill 工具成功：
+                            // emit 事件让 ClawHubPanel / SkillPanel 同步刷新已安装列表。
+                            // 工具内部已 rebuild SkillIndex，前端只需重新拉取 list_skills。
+                            let _ = handle.emit("clawhub-skill-installed", &());
                         }
                     }
                     let _ = handle.emit(
@@ -1359,6 +1388,7 @@ async fn create_skill(
         .save(&skill)
         .await
         .map_err(|e| e.to_string())?;
+    rebuild_skill_index(&state).await;
     Ok(id)
 }
 
@@ -1385,7 +1415,9 @@ async fn update_skill(
         .skill_store
         .save(&skill)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    rebuild_skill_index(&state).await;
+    Ok(())
 }
 
 /// 删除技能；内置技能不可删除
@@ -1405,87 +1437,23 @@ async fn delete_skill(state: tauri::State<'_, AppState>, id: String) -> Result<(
         .skill_store
         .delete(&id)
         .await
-        .map_err(|e| e.to_string())
-}
-
-/// 在指定会话应用技能：把 preamble 作为系统消息注入会话历史，
-/// 后续 send_message 会把它纳入 agent 上下文。
-///
-/// 工作区注入：若技能配置了 working_dir，且会话级 working_dir 未设置，
-/// 则把技能的 working_dir 写入会话级（会话级优先级更高，可被用户后续覆盖）。
-///
-/// ClawHub 技能回退：若 preamble 为空但 working_dir 中存在 SKILL.md，
-/// 现读现解析其正文作为 preamble。兼容此修复前安装的 ClawHub 技能
-/// （旧版 preamble 持久化为空），并支持用户外部编辑 SKILL.md 后热更新。
-#[tauri::command]
-async fn apply_skill(
-    state: tauri::State<'_, AppState>,
-    conversation_id: String,
-    skill_id: String,
-) -> Result<(), String> {
-    let skill = state
-        .skill_store
-        .get(&skill_id)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("技能 {} 不存在", skill_id))?;
-
-    // 工作区注入：技能级 working_dir 在会话级未设置时写入会话
-    if let Some(skill_wd) = skill.working_dir.clone() {
-        let conv = state.store.load(&conversation_id).await.map_err(|e| e.to_string())?;
-        let need_set = conv
-            .as_ref()
-            .map(|c| c.working_dir.is_none())
-            .unwrap_or(true);
-        if need_set {
-            state
-                .store
-                .set_working_dir(&conversation_id, Some(skill_wd))
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
-    // 解析最终注入的 preamble：优先用持久化值；为空且 working_dir 含 SKILL.md 时回读
-    let preamble = resolve_skill_preamble(&skill).await;
-    if preamble.is_empty() {
-        return Ok(());
-    }
-    let sys_msg = Message::new(
-        uuid::Uuid::new_v4().to_string(),
-        Role::System,
-        preamble,
-        now_ms(),
-    );
-    state
-        .store
-        .append_message(&conversation_id, sys_msg, now_ms())
-        .await
         .map_err(|e| e.to_string())?;
+    rebuild_skill_index(&state).await;
     Ok(())
 }
 
-/// 解析技能最终要注入到会话的 preamble 文本。
+/// 重建技能 RAG 索引：从 SkillStore 全量加载并刷新 SkillIndex。
 ///
-/// 优先级：
-/// 1. `skill.preamble` 非空 → 直接返回（含本地编辑过的自定义技能 / 新版 ClawHub 安装）
-/// 2. `skill.working_dir` 下存在 `SKILL.md` → 现读并返回其正文（兼容旧版 ClawHub 安装）
-/// 3. 否则返回空串，apply_skill 据此跳过注入
+/// 在技能增删（create_skill / update_skill / delete_skill /
+/// clawhub_install_skill / clawhub_uninstall_skill）后调用，确保下一轮
+/// RAG 自动注入与 list_installed_skills 工具看到最新数据。
 ///
-/// 把 IO 与解析拆出 apply_skill 主体，便于单测与未来扩展（如支持 README.md fallback）。
-async fn resolve_skill_preamble(skill: &Skill) -> String {
-    if !skill.preamble.is_empty() {
-        return skill.preamble.clone();
+/// 失败仅记录日志不阻断主流程：索引短暂过期不影响已有技能可用性，
+/// 下次增删或重启时会再次 rebuild 自愈。
+async fn rebuild_skill_index(state: &AppState) {
+    if let Err(e) = state.skill_index.rebuild_from_store(&state.skill_store).await {
+        tracing::warn!(error = %e, "技能索引 rebuild 失败，将在下次增删或重启时重试");
     }
-    let Some(wd) = skill.working_dir.as_deref() else {
-        return String::new();
-    };
-    let skill_md = std::path::Path::new(wd).join("SKILL.md");
-    let content = match tokio::fs::read_to_string(&skill_md).await {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-    effisuite_core::clawhub::parse_skill_md(&content).body
 }
 
 /// 设置/清除会话级工作区路径。
@@ -1601,13 +1569,14 @@ async fn clawhub_get_skill(
 /// 4. spawn_blocking 中解压到 `<skills_dir>/<slug>/`，带 zip-slip 防护
 /// 5. 解析 SKILL.md frontmatter 提取 name/description/version，
 ///    同时把正文（去除 frontmatter）写入 `preamble`，
-///    使 apply_skill 能透明注入到 agent 上下文，agent 据此"看到"并"使用"技能
+///    使 enable_skill 工具能透明注入到 agent 上下文，agent 据此"看到"并"使用"技能
 /// 6. 构造 Skill 记录，写入 skill_store（source="clawhub"）
 ///
 /// 返回新（或已存在）技能 id。
 #[tauri::command]
 async fn clawhub_install_skill(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     slug: String,
 ) -> Result<String, String> {
     use effisuite_core::clawhub::{extract_zip_to, parse_skill_md};
@@ -1619,6 +1588,8 @@ async fn clawhub_install_skill(
         .await
         .map_err(|e| e.to_string())?
     {
+        // 即使是幂等命中也通知前端刷新（用户可能在前端等待状态变化）
+        let _ = app_handle.emit("clawhub-skill-installed", &existing.id);
         return Ok(existing.id);
     }
 
@@ -1656,7 +1627,7 @@ async fn clawhub_install_skill(
     .map_err(|e| format!("解压失败: {e}"))?;
 
     // 4. 解析 SKILL.md：提取 frontmatter 字段 + 正文作为 preamble
-    // preamble 写入 Skill.preamble，apply_skill 时注入为 System 消息，
+    // preamble 写入 Skill.preamble，enable_skill 工具注入为 System 消息，
     // agent 据此看到技能指令；working_dir 已指向解压目录，agent 可通过
     // read_file/list_files/shell 访问技能携带的脚本与资源文件。
     let skill_md_path = dest_dir.join("SKILL.md");
@@ -1692,6 +1663,9 @@ async fn clawhub_install_skill(
         .save(&skill)
         .await
         .map_err(|e| e.to_string())?;
+    rebuild_skill_index(&state).await;
+    // 通知前端：技能已安装，ClawHubPanel / SkillPanel 据此刷新
+    let _ = app_handle.emit("clawhub-skill-installed", &skill.id);
     Ok(skill.id)
 }
 
@@ -1699,13 +1673,18 @@ async fn clawhub_install_skill(
 #[tauri::command]
 async fn clawhub_uninstall_skill(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<(), String> {
     state
         .skill_store
         .delete(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    rebuild_skill_index(&state).await;
+    // 通知前端：技能已卸载，ClawHubPanel / SkillPanel 据此刷新
+    let _ = app_handle.emit("clawhub-skill-uninstalled", &id);
+    Ok(())
 }
 
 /// `GET /api/v1/plugins` - 列出 ClawHub 插件
@@ -1969,18 +1948,6 @@ pub fn run() {
         }
     };
 
-    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir / image_gen_config / store
-    let agent: Arc<dyn ChatAgent> = build_agent(
-        &config,
-        Arc::clone(&memory),
-        Arc::clone(&pinned_memory),
-        Arc::clone(&current_conversation_id),
-        Arc::clone(&working_dir),
-        Arc::clone(&image_gen_config),
-        attachments_root.clone(),
-        Arc::clone(&store),
-    );
-
     let skill_store = match SkillStore::new(skills_dir()) {
         Ok(s) => s,
         Err(e) => {
@@ -1999,6 +1966,29 @@ pub fn run() {
     };
     // ClawHub 客户端：共享单个 reqwest::Client 连接池
     let clawhub_client = ClawHubClient::new();
+
+    // 技能 RAG 索引：启动时从 SkillStore 全量重建，技能增删后由对应命令 rebuild
+    let skill_index = Arc::new(effisuite_core::SkillIndex::new());
+    let skills_root = skills_dir();
+
+    // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
+    // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir
+    // skill_store / clawhub 内部已是 Arc，clone 廉价；为 RigAgent 包成 Arc<SkillStore> /
+    // Arc<ClawHubClient> 以匹配 from_key 签名（共享同一份底层 Arc）
+    let agent: Arc<dyn ChatAgent> = build_agent(
+        &config,
+        Arc::clone(&memory),
+        Arc::clone(&pinned_memory),
+        Arc::clone(&current_conversation_id),
+        Arc::clone(&working_dir),
+        Arc::clone(&image_gen_config),
+        attachments_root.clone(),
+        Arc::clone(&store),
+        Arc::clone(&skill_index),
+        Arc::new(skill_store.clone()),
+        Arc::new(clawhub_client.clone()),
+        skills_root.clone(),
+    );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
         Err(e) => {
@@ -2018,6 +2008,7 @@ pub fn run() {
     let agent_lock = Arc::new(RwLock::new(agent));
     let state = AppState {
         skill_store,
+        skill_index,
         schedule_store,
         plugin_store,
         clawhub: clawhub_client,
@@ -2068,12 +2059,24 @@ pub fn run() {
             // 1. 全量重建 memory index（从 ConversationStore 加载所有历史消息）
             // 2. 应用 embedding provider（若配置了 api_key）
             // 3. 后台批量计算缺失 embedding（直到全部完成或 provider 失效）
+            // 4. 全量重建 skill index（从 SkillStore 加载所有已安装技能，
+            //    用于本轮起 RAG 自动注入 [可用技能] 段与 list_installed_skills 工具）
             let store_clone = Arc::clone(&state.store);
             let memory_clone = Arc::clone(&state.memory);
+            let skill_index_clone = Arc::clone(&state.skill_index);
+            let skill_store_clone = state.skill_store.clone();
             tauri::async_runtime::spawn(async move {
                 rebuild_memory_from_store(&store_clone, &memory_clone).await;
                 apply_embedding_provider(&config_for_setup, &memory_clone).await;
                 spawn_embedding_computation(memory_clone).await;
+                if let Err(e) = skill_index_clone
+                    .rebuild_from_store(&skill_store_clone)
+                    .await
+                {
+                    tracing::warn!(error = %e, "启动时技能索引 rebuild 失败，将在下次技能增删或重启时重试");
+                } else {
+                    tracing::info!("启动时技能索引 rebuild 完成");
+                }
             });
 
             Ok(())
@@ -2131,7 +2134,6 @@ pub fn run() {
             create_skill,
             update_skill,
             delete_skill,
-            apply_skill,
             set_conversation_working_dir,
             get_conversation_working_dir,
             // ClawHub 浏览 / 安装

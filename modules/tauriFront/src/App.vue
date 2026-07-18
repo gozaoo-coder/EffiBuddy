@@ -207,7 +207,6 @@ const modelDisplay = computed(() => {
 
     <SkillPanel
       :open="skillPanelOpen"
-      :conversation-id="currentConversationId"
       @close="skillPanelOpen = false"
       @open-clawhub="openClawHub"
     />

@@ -13,6 +13,9 @@
 //! - [`ListFilesTool`]：列出目录内容（支持工作区相对路径）
 //! - [`ShellTool`]：执行本地 shell 命令（集成 agent-reach / browser-act，支持工作区 cwd）
 //! - [`WebFetchTool`]：抓取网页内容
+//! - [`ListInstalledSkillsTool`] / [`GetSkillDetailTool`] / [`EnableSkillTool`] /
+//!   [`SearchClawHubSkillsTool`] / [`InstallClawHubSkillTool`]：技能管理工具集。
+//!   让 agent 自主发现 / 启用 / 搜索 / 安装技能，替代旧 apply_skill 手动应用命令
 //!
 //! RAG 检索：`SearchMemoryTool` 通过 `MemoryIndex` 提供 BM25 / 向量 / 混合
 //! 三种检索模式，自动排除当前会话避免与已注入上下文重复。
@@ -26,6 +29,7 @@ pub mod search_history;
 pub mod search_memory;
 pub mod set_title;
 pub mod shell;
+pub mod skill_tools;
 pub mod web_fetch;
 
 pub use get_time::GetTimeTool;
@@ -39,6 +43,10 @@ pub use search_history::SearchHistoryTool;
 pub use search_memory::SearchMemoryTool;
 pub use set_title::SetTitleTool;
 pub use shell::ShellTool;
+pub use skill_tools::{
+    GetSkillDetailTool, InstallClawHubSkillTool, ListInstalledSkillsTool,
+    SearchClawHubSkillsTool, EnableSkillTool,
+};
 pub use web_fetch::WebFetchTool;
 
 use std::path::{Path, PathBuf};

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 /**
  * SkillPanel 技能管理面板
- * 列出内置 + 用户技能，支持创建 / 编辑 / 删除 / 应用到当前会话。
+ * 列出内置 + 用户技能，支持创建 / 编辑 / 删除。
+ * 应用方式已迁移为 RAG 自动注入：agent 每轮对话检索 SkillIndex，
+ * 并通过 list_installed_skills / get_skill_detail / enable_skill 工具
+ * 自主选用技能，无需用户手动点击"应用"。
  * 容器复用 BindSheet side="right"。
  */
 import { ref, computed, watch, onMounted } from 'vue'
@@ -19,7 +22,7 @@ import {
 } from './basic'
 import type { Skill } from '../types'
 
-const props = defineProps<{ open: boolean; conversationId: string | null }>()
+const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'open-clawhub'): void
@@ -109,23 +112,6 @@ watch(
 
 const userSkills = computed(() => skills.value.filter((s) => !s.builtin))
 const builtinSkills = computed(() => skills.value.filter((s) => s.builtin))
-
-// ---------- 应用技能 ----------
-async function applySkill(s: Skill) {
-  if (!props.conversationId) {
-    toast({ content: '请先选择或新建一个会话再应用技能', type: 'warn' })
-    return
-  }
-  try {
-    await invoke('apply_skill', {
-      conversationId: props.conversationId,
-      skillId: s.id,
-    })
-    toast({ content: `已应用技能「${s.name}」到当前会话`, type: 'success' })
-  } catch (e) {
-    toast({ content: `应用失败：${e}`, type: 'error' })
-  }
-}
 
 // ---------- 卡片菜单（编辑/删除） ----------
 const menuOpen = ref(false)
@@ -280,7 +266,7 @@ function onClose() {
         <div class="hero-mark"><Icon name="bolt" :size="28" /></div>
         <div class="hero-text">
           <h2 class="hero-title">技能</h2>
-          <p class="hero-sub">点击技能卡片可应用到当前会话；内置技能提供联网与浏览器能力</p>
+          <p class="hero-sub">agent 会自动检索并选用已安装技能；如未命中可让 agent 调用 search_clawhub_skills 在线查找安装</p>
         </div>
       </header>
 
@@ -295,7 +281,6 @@ function onClose() {
             v-for="s in builtinSkills"
             :key="s.id"
             class="skill-card builtin"
-            @click="applySkill(s)"
           >
             <span class="skill-glyph" :style="{ background: accentOf(s) }"><Icon :name="glyphOf(s)" :size="20" /></span>
             <div class="skill-info">
@@ -335,7 +320,6 @@ function onClose() {
             v-for="s in userSkills"
             :key="s.id"
             class="skill-card"
-            @click="applySkill(s)"
           >
             <div class="skill-card-main">
               <span class="skill-glyph" :style="{ background: accentOf(s) }"><Icon :name="glyphOf(s)" :size="20" /></span>
@@ -442,7 +426,7 @@ function onClose() {
               <Icon name="folder" :size="16" />
             </button>
           </div>
-          <p class="field-hint">应用技能时若会话未设置工作区，将自动写入此路径</p>
+          <p class="field-hint">agent 启用技能时若会话未设置工作区，将自动写入此路径</p>
         </div>
         <div class="field">
           <label class="field-label">启用工具</label>

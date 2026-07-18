@@ -17,6 +17,7 @@ pub mod models;
 pub mod pinned_memory;
 pub mod plugin_store;
 pub mod schedule_store;
+pub mod skill_index;
 pub mod skill_store;
 pub mod storage;
 
@@ -26,6 +27,7 @@ pub use config::{
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
+pub use clawhub::ClawHubClient;
 pub use memory::{
     EmbeddingProvider, MemoryEntry, MemoryHit, MemoryIndex, MemoryStats, SearchMode, tokenize,
 };
@@ -36,5 +38,6 @@ pub use models::{
 pub use pinned_memory::{PinnedMemory, PinnedMemorySource, PinnedMemoryStore};
 pub use plugin_store::PluginStore;
 pub use schedule_store::ScheduledTaskStore;
+pub use skill_index::{SkillEntry, SkillHit, SkillIndex};
 pub use skill_store::SkillStore;
 pub use storage::{ConversationMeta, ConversationStore, SearchHit};

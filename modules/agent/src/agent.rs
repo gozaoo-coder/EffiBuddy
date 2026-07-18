@@ -24,6 +24,8 @@ pub struct ContextPreview {
     pub pinned_section: String,
     /// `[相关历史记忆]` 段格式化字符串（含头部说明），空表示无 RAG 命中
     pub memory_section: String,
+    /// `[可用技能]` 段格式化字符串（含头部说明），空表示无技能自动注入
+    pub skill_section: String,
     /// `[当前对话最近]` 段格式化字符串（含头部说明），空表示无历史
     pub history_section: String,
     /// 当前用户问题文本（最后一条 user 消息）
@@ -34,6 +36,8 @@ pub struct ContextPreview {
     pub pinned_count: usize,
     /// RAG 命中条目数
     pub memory_hits_count: usize,
+    /// 技能自动注入命中条目数
+    pub skill_hits_count: usize,
     /// 当前对话历史保留的消息条数（已应用窗口截断）
     pub history_keep_count: usize,
     /// 当前对话总消息条数（包含当前问题）
@@ -46,6 +50,8 @@ pub struct ContextPreview {
     pub history_truncate_chars: usize,
     /// 是否启用了 RAG 跨会话记忆增强
     pub memory_enabled: bool,
+    /// 是否启用了技能 RAG 自动注入
+    pub skill_auto_inject_enabled: bool,
 }
 
 /// 流式事件：把模型输出按语义分类透传给前端

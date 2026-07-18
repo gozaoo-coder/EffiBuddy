@@ -11,8 +11,9 @@
  *
  * 容器复用 BindSheet side="right"，与 SkillPanel 一致。
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { BindSheet, Button, SegmentedButton, IconButton, Icon, useToast, type SegmentedOption } from './basic'
 import type {
   Skill,
@@ -133,6 +134,36 @@ async function refresh() {
 
 onMounted(() => {
   refresh()
+})
+
+// ---------- 监听技能安装/卸载事件 ----------
+// 后端 emit 时机：
+// - clawhub-skill-installed：用户在面板点安装 / agent 调用 install_clawhub_skill 工具成功
+// - clawhub-skill-uninstalled：用户在面板点卸载
+// 收到事件后只需重新拉取 list_skills 同步已安装状态，无需重载 ClawHub 远程列表
+let unlistens: UnlistenFn[] = []
+
+async function setupListeners() {
+  unlistens.push(
+    await listen('clawhub-skill-installed', () => {
+      // 不阻塞事件流，仅刷新已安装状态
+      refreshInstalled().catch((e) => console.warn('clawhub-skill-installed refresh failed', e))
+    }),
+  )
+  unlistens.push(
+    await listen('clawhub-skill-uninstalled', () => {
+      refreshInstalled().catch((e) => console.warn('clawhub-skill-uninstalled refresh failed', e))
+    }),
+  )
+}
+
+onMounted(() => {
+  setupListeners()
+})
+
+onUnmounted(() => {
+  unlistens.forEach((fn) => fn?.())
+  unlistens = []
 })
 
 watch(
