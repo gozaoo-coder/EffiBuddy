@@ -62,80 +62,16 @@ const stickToBottom = ref(true)
 let mutationObserver: MutationObserver | null = null
 let scrollRafId: number | null = null
 
-// ---------- msg-bubble 高度变化动画 ----------
-// 每个气泡挂一个 ResizeObserver：当内容增长导致自然高度变化时，
-// 用 anime.js 平滑过渡 height（取代 height: auto/fit-content 的瞬变）。
-// 采用 FLIP 思路：在 ResizeObserver 回调里（layout 后、paint 前）
-// 立即把高度锁定到旧值（INVERT），再让 anime.js 动画到新值（PLAY），
-// 避免出现"先变大再回缩"的视觉抖动。
-// 生成（spawn）期间禁用观察，避免与 spawn 动画相互触发。
-interface BubbleAnimState {
-  el: HTMLElement
-  observer: ResizeObserver
-  isAnimating: boolean
-  isSpawning: boolean
-  lastHeight: number
-}
-const bubbleAnimMap = new Map<string, BubbleAnimState>()
-
-function setupBubbleAnim(el: HTMLElement, id: string) {
-  // 清理旧观察（若存在）
-  teardownBubbleAnim(id)
-  const state: BubbleAnimState = {
-    el,
-    observer: null as unknown as ResizeObserver,
-    isAnimating: false,
-    isSpawning: true, // spawn 期间禁用
-    lastHeight: 0,
-  }
-  const onResize = () => {
-    if (state.isAnimating || state.isSpawning) return
-    // 此时浏览器已 layout 出新尺寸但尚未 paint，立即用旧值 INVERT 可避免跳变
-    const newHeight = el.offsetHeight
-    // 防护：新高度为0（元素被隐藏或内容为空）时不动画
-    if (newHeight < 1) return
-    // 防护：lastHeight 未初始化或为0时，不锁定 height（避免卡0px）
-    // 直接更新基准，让下一次增长触发动画
-    if (state.lastHeight < 1) {
-      state.lastHeight = newHeight
-      return
-    }
-    if (Math.abs(newHeight - state.lastHeight) < 1) return
-    const fromHeight = state.lastHeight
-    state.isAnimating = true
-    // 锁定到旧值，防止下一帧 paint 出新高度
-    el.style.height = fromHeight + 'px'
-    el.style.overflow = 'hidden'
-    // 动画到新自然高度（PLAY）
-    animate(el, {
-      height: [fromHeight + 'px', newHeight + 'px'],
-      duration: 220,
-      ease: 'out(3)',
-      onComplete: () => {
-        el.style.height = ''
-        el.style.overflow = ''
-        // 释放后重新读取当前自然高度作为下一次基准
-        state.lastHeight = el.offsetHeight
-        state.isAnimating = false
-      },
-    })
-  }
-  const observer = new ResizeObserver(onResize)
-  observer.observe(el)
-  state.observer = observer
-  bubbleAnimMap.set(id, state)
-}
-
-function teardownBubbleAnim(id: string) {
-  const state = bubbleAnimMap.get(id)
-  if (!state) return
-  state.observer.disconnect()
-  bubbleAnimMap.delete(id)
-}
-
-function teardownAllBubbleAnim() {
-  bubbleAnimMap.forEach((_, id) => teardownBubbleAnim(id))
-}
+// ---------- msg-bubble 高度动画 ----------
+// 设计说明：早期版本曾用 ResizeObserver + offsetHeight 实现 FLIP 高度动画，
+// 但在流式追加内容场景下会"抽搐"：
+//   - ResizeObserver 回调中读 offsetHeight 触发强制 reflow，且读到的是被
+//     height 样式锁定后的高度，不是内容自然高度
+//   - 锁定 height 会再次触发自身 observer，形成竞态
+//   - animate 期间内容又增长，结束时清空 height 会瞬间跳变
+// FLIP 适合离散状态切换（展开/折叠），不适合流式追加。
+// 因此这里完全移除高度动画，仅保留 spawn 时的 opacity + scale 过渡，
+// 内容增长交给浏览器原生 reflow + markstream-vue 的 smooth-streaming 处理。
 
 // 每个助手气泡的元数据：reasoning / tool calls / usage（流式期间累积，不持久化）
 interface BubbleMeta {
@@ -302,9 +238,8 @@ function removeMessageFromView(id: string) {
   const idx = messages.value.findIndex((m) => m.id === id)
   if (idx < 0) return
   messages.value.splice(idx, 1)
-  // 同步清理 bubbleMeta / quoteChips / 高度动画观察器
+  // 同步清理 bubbleMeta / quoteChips
   delete bubbleMeta[id]
-  teardownBubbleAnim(id)
   quoteChips.value = quoteChips.value.filter((q) => q.messageId !== id)
   toast({ content: '已从视图移除', type: 'info' })
 }
@@ -364,7 +299,7 @@ function autoResize() {
   // 强制 reflow，确保 animejs 起点正确
   void ta.offsetHeight
   animate(ta, {
-    height: [currentHeight + 'px', targetHeight + 'px'],
+    height:  targetHeight + 'px',
     duration: 200,
     ease: 'out(3)',
   })
@@ -445,9 +380,8 @@ async function loadConversation() {
   const id = activeId.value
   if (!id) {
     messages.value = []
-    // 清空 meta / 附件缓存 / 高度动画观察器
+    // 清空 meta / 附件缓存
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
-    teardownAllBubbleAnim()
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
     // 清空引用块，避免残留上一会话的引用
@@ -459,8 +393,7 @@ async function loadConversation() {
     messages.value = conv?.messages ?? []
     // 历史会话不携带 reasoning/tools 元数据，清空
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
-    // 切换会话时清空旧高度动画观察器与附件缓存，避免上一会话残留
-    teardownAllBubbleAnim()
+    // 切换会话时清空附件缓存，避免上一会话残留
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     // 清空引用块，避免残留上一会话的引用
     quoteChips.value = []
@@ -474,7 +407,6 @@ async function loadConversation() {
     console.warn('get_conversation failed', e)
     messages.value = []
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
-    teardownAllBubbleAnim()
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
   }
@@ -519,8 +451,9 @@ async function clearWorkingDir() {
 }
 
 // ---------- 消息渲染 ----------
-// bubble spawn 动画：scale + opacity + 占位高度 0 → 实际大小
-// 通过 anime.js 同时驱动 height / opacity / scale，使气泡"生长"出现
+// bubble spawn 动画：仅 opacity + scale，不操作 height。
+// 高度变化交给浏览器原生 reflow + markstream-vue 的 smooth-streaming 处理，
+// 避免 ResizeObserver + offsetHeight 在流式场景下的抽搐问题。
 async function addMessage(msg: Message) {
   messages.value.push(msg)
   await nextTick()
@@ -529,73 +462,24 @@ async function addMessage(msg: Message) {
     scrollBottom()
     return
   }
-  // 强制 layout 确保 offsetHeight 准确（流式首帧可能未 layout）
-  void el.offsetHeight
-  const naturalHeight = el.offsetHeight
 
-  // 先挂上高度动画观察器（spawn 期间禁用，避免与 spawn 动画相互触发）
-  setupBubbleAnim(el, msg.id)
-  const state = bubbleAnimMap.get(msg.id)
-
-  // 元素高度为0（内容为空或未渲染）时跳过 spawn 动画
-  // 立即启用 ResizeObserver，让后续内容增长被捕获（不会卡0px）
-  if (naturalHeight < 1) {
-    if (state) {
-      state.lastHeight = 0
-      state.isSpawning = false
-    }
-    scrollBottom()
-    return
-  }
-
-  if (state) state.lastHeight = naturalHeight
-
-  // spawn 期间临时切换 box-sizing 为 content-box
-  // 原因：全局 border-box 下 height=0 时元素仍有 padding+border 撑开（约20px），
-  //       anime.js 动画 height 0→naturalHeight 的前半段（0 到 padding+border）无效，
-  //       元素视觉上"卡住"不动，表现为 box-sizing 不对。
-  // 改为 content-box 后 height 只控制 content，动画线性增长；
-  // 配合 scale(0.85→1) + opacity(0→1) 实现从0生长的视觉效果。
-  el.style.boxSizing = 'content-box'
-  // content-box 下 height 只控制 content，需计算目标 content 高度
-  const computed = getComputedStyle(el)
-  const padTop = parseFloat(computed.paddingTop) || 0
-  const padBottom = parseFloat(computed.paddingBottom) || 0
-  const borderTop = parseFloat(computed.borderTopWidth) || 0
-  const borderBottom = parseFloat(computed.borderBottomWidth) || 0
-  const targetContentHeight = Math.max(
-    0,
-    naturalHeight - padTop - padBottom - borderTop - borderBottom,
-  )
-
-  // 初始状态：content 高度 0 / 透明 / 缩放 0.85（顶部锚点，自上而下生长）
-  el.style.height = '0px'
+  // 初始状态：透明 + 缩放 0.96（轻微，避免大幅缩放导致内容模糊）
+  // 不设置 height/overflow，让内容自然撑开
   el.style.opacity = '0'
-  el.style.transform = 'scale(0.85)'
+  el.style.transform = 'scale(0.96)'
   el.style.transformOrigin = 'center top'
-  el.style.overflow = 'hidden'
   // 强制 reflow 确保 anime.js 起点准确
   void el.offsetHeight
 
   animate(el, {
-    height: ['0px', targetContentHeight + 'px'],
     opacity: [0, 1],
-    scale: [0.85, 1],
-    duration: 380,
+    scale: [0.96, 1],
+    duration: 280,
     ease: 'out(3)',
     onComplete: () => {
-      // 清除内联样式，让后续增长可被 ResizeObserver 自然捕获
-      el.style.boxSizing = ''
-      el.style.height = ''
       el.style.opacity = ''
       el.style.transform = ''
       el.style.transformOrigin = ''
-      el.style.overflow = ''
-      if (state) {
-        // 释放后 reflow，把基准对齐到当前实际高度
-        state.lastHeight = el.offsetHeight
-        state.isSpawning = false
-      }
     },
   })
 
@@ -1121,8 +1005,6 @@ onUnmounted(() => {
     clearTimeout(msgLongPressTimer)
     msgLongPressTimer = null
   }
-  // 清理所有 bubble 高度动画观察器
-  teardownAllBubbleAnim()
   window.removeEventListener('keydown', onPreviewKeydown)
 })
 </script>
