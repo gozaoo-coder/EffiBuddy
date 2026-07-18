@@ -147,6 +147,9 @@ pub struct AvailableModel {
     /// 图像生成专用：默认质量（如 "standard"/"hd"），仅 kind=ImageGen 时有效
     #[serde(default)]
     pub image_quality: Option<String>,
+    /// 模型上下文窗口大小（tokens），供前端显示剩余上下文
+    #[serde(default)]
+    pub context_window_tokens: Option<u32>,
     pub created_at: u64,
 }
 
@@ -313,6 +316,7 @@ mod tests {
                 kind: ModelKind::Chat,
                 image_size: None,
                 image_quality: None,
+                context_window_tokens: Some(128000),
                 created_at: 1000,
             }],
             active_model_id: Some("m1".into()),

@@ -86,6 +86,8 @@ const draft = ref({
   // 图像生成专用字段
   image_size: '' as string,
   image_quality: '' as string,
+  // 上下文窗口大小（tokens）
+  context_window_tokens: 128000 as number,
 })
 // 当前编辑的模型 id（非空表示编辑模式）
 const editingId = ref<string | null>(null)
@@ -252,6 +254,7 @@ function resetDraft() {
     kind: 'chat',
     image_size: '',
     image_quality: '',
+    context_window_tokens: 128000,
   }
   editingId.value = null
   saveLabel.value = ''
@@ -320,6 +323,7 @@ async function saveAsModel() {
         draft.value.kind === 'image_gen' && draft.value.image_quality.trim()
           ? draft.value.image_quality.trim()
           : null,
+      context_window_tokens: draft.value.context_window_tokens || null,
       created_at: Date.now(),
     }
     await invoke('save_model', { model })
@@ -351,6 +355,7 @@ function editModel(m: AvailableModel) {
     kind: m.kind ?? 'chat',
     image_size: m.image_size ?? '',
     image_quality: m.image_quality ?? '',
+    context_window_tokens: m.context_window_tokens ?? 128000,
   }
   editingId.value = m.id
   saveLabel.value = m.label
@@ -803,6 +808,20 @@ function onClose() {
                 </button>
               </div>
             </div>
+          </div>
+
+          <!-- 上下文窗口 -->
+          <div class="field">
+            <label class="field-label">上下文窗口（tokens）</label>
+            <input
+              v-model.number="draft.context_window_tokens"
+              type="number"
+              min="1024"
+              step="1024"
+              placeholder="128000"
+              class="field-input"
+            />
+            <p class="field-hint">用于估算当前对话已用上下文比例</p>
           </div>
 
           <!-- 图像生成专用字段：尺寸与质量 -->
@@ -1639,6 +1658,13 @@ function onClose() {
 .field-row-hint {
   font-size: var(--fs-xs);
   color: var(--muted);
+}
+
+.field-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 /* ---------- 保存区 ---------- */

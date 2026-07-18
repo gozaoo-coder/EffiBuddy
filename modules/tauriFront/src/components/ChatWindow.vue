@@ -249,13 +249,32 @@ const composerFocused = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const composerInnerRef = ref<HTMLElement | null>(null)
 
-// 上下文使用统计：粗略 4 字符 = 1 token，max ~32K tokens = 128K 字符
-const contextMaxChars = 128000
+// 当前激活模型信息（用于真实上下文窗口大小）
+interface ActiveModelInfo {
+  id: string
+  name: string
+  context_window_tokens: number | null
+}
+
+const activeModelInfo = ref<ActiveModelInfo | null>(null)
+
+async function loadActiveModelInfo() {
+  try {
+    activeModelInfo.value = await invoke<ActiveModelInfo>('get_active_model_info')
+  } catch {
+    activeModelInfo.value = null
+  }
+}
+
+// 上下文使用统计：粗略 4 字符 = 1 token
+const fallbackContextTokens = 128000
+const contextMaxTokens = computed(() =>
+  activeModelInfo.value?.context_window_tokens ?? fallbackContextTokens,
+)
 const contextUsedChars = computed(() =>
   messages.value.reduce((sum, m) => sum + (m.content?.length ?? 0), 0),
 )
 const contextUsedTokens = computed(() => Math.ceil(contextUsedChars.value / 4))
-const contextMaxTokens = computed(() => Math.ceil(contextMaxChars / 4))
 
 // 上下文管理 Sheet（含消息压缩按钮，任务 B 并行实现后端命令）
 const contextSheetOpen = ref(false)
@@ -912,6 +931,14 @@ onMounted(async () => {
     await loadConversation()
   }
 
+  // 获取当前激活模型信息，backend 切换时重新加载
+  await loadActiveModelInfo()
+  watch(
+    () => props.backend,
+    () => loadActiveModelInfo(),
+    { immediate: false },
+  )
+
   unlistens.push(
     await listen<StreamTokenPayload>('agent-token', async (e) => {
       const p = e.payload
@@ -1074,7 +1101,7 @@ onUnmounted(() => {
               :final="m.id !== streamingBubbleId"
               :is-dark="isDark"
               :fade="false"
-              smooth-streaming="auto"
+              :smooth-streaming="false"
               :code-block-props="{
                 theme: { light: 'vitesse-light', dark: 'vitesse-dark' },
               }"
@@ -1202,12 +1229,15 @@ onUnmounted(() => {
         <div class="composer-meta">
           <button
             type="button"
-            class="meta-pill"
-            title="上下文使用情况"
+            class="meta-pill meta-pill--context"
+            :title="`上下文使用：${contextUsedTokens} / ${contextMaxTokens} tokens`"
             @click="contextSheetOpen = true"
           >
-            <ContextRing :used="contextUsedChars" :max="contextMaxChars" :size="18" />
-            <span class="meta-pill-text">{{ contextUsedChars }} / {{ contextMaxChars }}</span>
+            <ContextRing :used="contextUsedTokens" :max="contextMaxTokens" :size="18" />
+            <span class="usage-label">tokens</span>
+            <span class="usage-val">{{ contextUsedTokens }}</span>
+            <span class="usage-sep">/</span>
+            <span class="usage-val">{{ contextMaxTokens }}</span>
           </button>
           <button
             type="button"
@@ -1246,12 +1276,12 @@ onUnmounted(() => {
         <!-- 上下文使用统计 -->
         <div class="ctx-stat">
           <div class="ctx-stat-row">
-            <ContextRing :used="contextUsedChars" :max="contextMaxChars" :size="32" />
+            <ContextRing :used="contextUsedTokens" :max="contextMaxTokens" :size="32" />
             <div class="ctx-stat-text">
               <div class="ctx-stat-title">上下文使用</div>
               <div class="ctx-stat-desc">
-                {{ contextUsedChars }} / {{ contextMaxChars }} 字符
-                ·  约 {{ contextUsedTokens }} / {{ contextMaxTokens }} tokens
+                {{ contextUsedTokens }} / {{ contextMaxTokens }} tokens
+                · 约 {{ contextUsedChars }} 字符
               </div>
             </div>
           </div>
@@ -1594,6 +1624,48 @@ onUnmounted(() => {
 .meta-pill-text--ellipsis {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 底部上下文 pill：视觉风格与 .msg-usage 完全一致 */
+.meta-pill--context {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--card-2);
+  font-size: var(--fs-xs, 12px);
+  line-height: 1.5;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+}
+
+.meta-pill--context:hover {
+  background: var(--card-2);
+  color: var(--muted);
+}
+
+.meta-pill--context .usage-label,
+.meta-pill--context .usage-sep,
+.meta-pill--context .usage-val {
+  font-family: inherit;
+}
+
+.meta-pill--context .usage-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.meta-pill--context .usage-val {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.meta-pill--context .usage-sep {
+  color: var(--muted);
+  opacity: 0.6;
 }
 
 /* ---------- 任务 D.6：上下文管理 Sheet ---------- */

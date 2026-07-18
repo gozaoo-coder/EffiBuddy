@@ -343,6 +343,33 @@ async fn get_config(state: tauri::State<'_, AppState>) -> Result<AgentConfig, St
     Ok(state.config.read().await.clone())
 }
 
+#[derive(Debug, serde::Serialize)]
+struct ActiveModelInfo {
+    id: String,
+    name: String,
+    context_window_tokens: Option<u32>,
+}
+
+#[tauri::command]
+async fn get_active_model_info(state: tauri::State<'_, AppState>) -> Result<ActiveModelInfo, String> {
+    let config = state.config.read().await.clone();
+    if let Some(id) = config.active_model_id.as_ref() {
+        if let Some(m) = config.models.iter().find(|m| &m.id == id) {
+            return Ok(ActiveModelInfo {
+                id: m.id.clone(),
+                name: m.model_name.clone(),
+                context_window_tokens: m.context_window_tokens,
+            });
+        }
+    }
+    // 无激活模型时回退到运行时配置
+    Ok(ActiveModelInfo {
+        id: String::new(),
+        name: config.model_name.clone(),
+        context_window_tokens: Some(128000),
+    })
+}
+
 #[tauri::command]
 async fn set_config(
     state: tauri::State<'_, AppState>,
@@ -2452,6 +2479,7 @@ pub fn run() {
             set_config,
             // providers & models
             list_provider_presets,
+            get_active_model_info,
             save_model,
             delete_model,
             set_active_model,

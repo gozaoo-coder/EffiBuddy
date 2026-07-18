@@ -163,6 +163,8 @@ export interface AvailableModel {
   image_size?: string | null
   /** 图像生成专用：默认质量（如 standard/hd），仅 kind=image_gen 时有效 */
   image_quality?: string | null
+  /** 模型上下文窗口大小（tokens），null 表示未设置 */
+  context_window_tokens?: number | null
   created_at: number
 }
 
