@@ -38,15 +38,16 @@ pub struct ContextPreview {
     pub memory_hits_count: usize,
     /// 技能自动注入命中条目数
     pub skill_hits_count: usize,
-    /// 当前对话历史保留的消息条数（已应用窗口截断）
+    /// 当前对话历史保留的消息条数（与 history_total_count 相等：全量不截断）
     pub history_keep_count: usize,
     /// 当前对话总消息条数（包含当前问题）
     pub history_total_count: usize,
     /// 自动注入的相关历史记忆条数上限（MEMORY_AUTO_INJECT_LIMIT）
     pub memory_inject_limit: usize,
-    /// 启用记忆增强时当前对话保留的最近消息条数（RECENT_HISTORY_WITH_MEMORY）
+    /// 当前对话保留的最近消息条数上限。值 0 表示"无限制"（全量保留）。
+    /// 由消息压缩系统维护 token 预算，而非在此层硬截断。
     pub recent_history_limit: usize,
-    /// 单条历史消息截断字符数（HISTORY_TRUNCATE_CHARS）
+    /// 单条历史消息截断字符数。值 0 表示"无限制"（保留完整内容）。
     pub history_truncate_chars: usize,
     /// 是否启用了 RAG 跨会话记忆增强
     pub memory_enabled: bool,

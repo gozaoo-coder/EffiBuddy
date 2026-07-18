@@ -16,14 +16,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use effisuite_agent::{
     AgentStreamItem, ChatAgent, ContextPreview, ImageGenConfig, ImageGenTool, MockAgent,
-    OpenAIEmbeddingProvider, RigAgent, DEFAULT_EMBEDDING_MODEL,
+    OpenAIEmbeddingProvider, RigAgent, call_compression_agent, DEFAULT_EMBEDDING_MODEL,
 };
 use effisuite_core::{
-    AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, Conversation,
-    ConversationMeta, ConversationStore, Device, EventBus, InstalledPlugin, MemoryHit, MemoryIndex,
-    MemoryStats, Message, ModelKind, PinnedMemory, PinnedMemorySource, PinnedMemoryStore,
-    PluginStore, ProviderPreset, Role, ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode,
-    Skill, SkillStore, ThemeMode, builtin_presets,
+    AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, CompressionAction,
+    CompressionState, CompressionStore, Conversation, ConversationMeta, ConversationStore, Device,
+    EventBus, InstalledPlugin, MemoryHit, MemoryIndex, MemoryStats, Message, ModelKind, PinnedMemory,
+    PinnedMemorySource, PinnedMemoryStore, PluginStore, ProviderPreset, Role, ScheduledTask,
+    ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore, ThemeMode, builtin_presets,
+    build_compression_prompt, parse_compression_response,
 };
 use effisuite_core::clawhub::{
     ClawHubClient, PackageListResponse, PackageResponse, PackageSearchResponse,
@@ -51,6 +52,9 @@ pub struct AppState {
     pub schedule_store: ScheduledTaskStore,
     /// 已安装插件存储（PathBuf+Arc，4 usize）
     pub plugin_store: PluginStore,
+    /// 消息压缩状态存储（PathBuf+Arc，4 usize），与 agent 共享同一份 Arc
+    /// 存放每会话的 Keep/Hide/Replace 决策，build_context_parts 据此压缩历史段
+    pub compression_store: CompressionStore,
     /// ClawHub 客户端（Clone 廉价，内部 Arc<reqwest::Client>）
     pub clawhub: ClawHubClient,
     /// 可热替换的 agent：RwLock 写少读多，内层 Arc 让 async 命令可跨 await 持有
@@ -115,6 +119,11 @@ fn plugins_dir() -> std::path::PathBuf {
     appdata_root().join("plugins")
 }
 
+/// 压缩状态存储目录：`<appdata>/compression`
+fn compression_dir() -> std::path::PathBuf {
+    appdata_root().join("compression")
+}
+
 /// 定时任务存储目录：`<appdata>/schedules`
 fn schedules_dir() -> std::path::PathBuf {
     appdata_root().join("schedules")
@@ -166,6 +175,8 @@ fn save_config(config: &AgentConfig) -> std::result::Result<(), String> {
 /// `attachments_dir` 为图片落盘目录。
 /// `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后启用
 /// 技能 RAG 自动注入与 5 个技能管理工具（list/get/enable + search/install ClawHub）。
+/// `compression_store` 注入后启用消息压缩（build_context_parts 对历史段应用
+/// Keep/Hide/Replace 决策，当前问题不压缩）。
 /// MockAgent 后端忽略这些参数。
 #[allow(clippy::too_many_arguments)]
 fn build_agent(
@@ -181,6 +192,7 @@ fn build_agent(
     skill_store: Arc<SkillStore>,
     clawhub_client: Arc<ClawHubClient>,
     skills_dir: std::path::PathBuf,
+    compression_store: Arc<CompressionStore>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -201,6 +213,7 @@ fn build_agent(
                 Some(skill_store),
                 Some(clawhub_client),
                 Some(skills_dir),
+                Some(compression_store),
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -351,6 +364,7 @@ async fn set_config(
     // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config / store
     // 同时注入 skill_index / skill_store / clawhub / skills_dir 以启用技能 RAG 自动注入
     // 与 5 个技能管理工具（list/get/enable + search/install ClawHub）
+    // compression_store 注入以启用消息压缩
     let new_agent = build_agent(
         &config,
         Arc::clone(&state.memory),
@@ -364,6 +378,7 @@ async fn set_config(
         Arc::new(state.skill_store.clone()),
         Arc::new(state.clawhub.clone()),
         skills_dir(),
+        Arc::new(state.compression_store.clone()),
     );
 
     // 替换 state 中的 agent 和 config
@@ -630,6 +645,7 @@ async fn set_active_model(
                 Arc::new(state.skill_store.clone()),
                 Arc::new(state.clawhub.clone()),
                 skills_dir(),
+                Arc::new(state.compression_store.clone()),
             );
             {
                 let mut agent_lock = state.agent.write().await;
@@ -897,6 +913,107 @@ async fn get_context_preview(
         Vec::new()
     };
     Ok(agent.context_preview(&messages).await)
+}
+
+// =========================================================
+// 命令：消息压缩
+// =========================================================
+
+/// 触发消息压缩：调用压缩 agent 分析指定会话，返回压缩操作列表并持久化
+///
+/// 流程：
+/// 1. 从 store 加载会话（不存在则返回 Err）
+/// 2. 构造压缩 prompt（每条消息标注 id + 角色 + 内容）
+/// 3. 调用压缩 agent（复用主 agent 的 api_key/base_url/model_name + 压缩专用 preamble）
+/// 4. 解析 `<act>` 块为 `Vec<CompressionAction>`
+/// 5. 持久化 `CompressionState` 到 `<appdata>/compression/<conversation_id>.json`
+/// 6. 返回 actions（前端可展示压缩报告）
+///
+/// 压缩对用户透明：UI 仍显示原始消息，仅后续 prompt 的历史段应用压缩决策。
+/// 当前问题（最后一条用户消息）不参与压缩。
+#[tauri::command]
+async fn compress_messages(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Vec<CompressionAction>, String> {
+    // 1. 加载会话
+    let conv = state
+        .store
+        .load(&conversation_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("会话 {conversation_id} 不存在"))?;
+
+    if conv.messages.is_empty() {
+        return Err("会话无消息，无需压缩".to_string());
+    }
+
+    // 2. 读取配置快照（锁临界区极短：仅 clone）
+    let config = state.config.read().await.clone();
+    if !config.is_rig_ready() {
+        return Err("未配置 api_key 或 backend 非 openai，无法调用压缩 agent".to_string());
+    }
+
+    // 3. 构造压缩 prompt
+    let prompt = build_compression_prompt(&conv.messages);
+
+    // 4. 调用压缩 agent（非流式）
+    let reply = call_compression_agent(
+        &config.api_key,
+        &config.base_url,
+        &config.model_name,
+        &prompt,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 5. 解析 <act> 块
+    let actions = parse_compression_response(&reply).map_err(|e| e.to_string())?;
+    let action_count = actions.len();
+
+    // 6. 持久化压缩状态
+    let comp_state = CompressionState {
+        actions: actions.clone(),
+        updated_at: now_ms(),
+    };
+    state
+        .compression_store
+        .save(&conversation_id, &comp_state)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    tracing::info!(
+        conversation_id = %conversation_id,
+        action_count,
+        "消息压缩完成并已持久化"
+    );
+    Ok(actions)
+}
+
+/// 获取指定会话的压缩状态（前端用于展示压缩报告）
+#[tauri::command]
+async fn get_compression_state(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Option<CompressionState>, String> {
+    state
+        .compression_store
+        .load(&conversation_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 清除指定会话的压缩状态（恢复全量历史注入）
+#[tauri::command]
+async fn clear_compression_state(
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    state
+        .compression_store
+        .delete(&conversation_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // =========================================================
@@ -1967,14 +2084,25 @@ pub fn run() {
     // ClawHub 客户端：共享单个 reqwest::Client 连接池
     let clawhub_client = ClawHubClient::new();
 
+    // 消息压缩状态存储：与 agent 共享同一份 Arc，build_context_parts 据此压缩历史段
+    let compression_store = match CompressionStore::new(compression_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "CompressionStore 初始化失败，回退到临时目录");
+            CompressionStore::new(std::env::temp_dir().join("effisuite-compression"))
+                .expect("临时目录 CompressionStore 必须成功")
+        }
+    };
+
     // 技能 RAG 索引：启动时从 SkillStore 全量重建，技能增删后由对应命令 rebuild
     let skill_index = Arc::new(effisuite_core::SkillIndex::new());
     let skills_root = skills_dir();
 
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
-    // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir
-    // skill_store / clawhub 内部已是 Arc，clone 廉价；为 RigAgent 包成 Arc<SkillStore> /
-    // Arc<ClawHubClient> 以匹配 from_key 签名（共享同一份底层 Arc）
+    // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir / compression_store
+    // skill_store / clawhub / compression_store 内部已是 Arc，clone 廉价；为 RigAgent 包成
+    // Arc<SkillStore> / Arc<ClawHubClient> / Arc<CompressionStore> 以匹配 from_key 签名
+    // （共享同一份底层 Arc）
     let agent: Arc<dyn ChatAgent> = build_agent(
         &config,
         Arc::clone(&memory),
@@ -1988,6 +2116,7 @@ pub fn run() {
         Arc::new(skill_store.clone()),
         Arc::new(clawhub_client.clone()),
         skills_root.clone(),
+        Arc::new(compression_store.clone()),
     );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
@@ -2011,6 +2140,7 @@ pub fn run() {
         skill_index,
         schedule_store,
         plugin_store,
+        compression_store,
         clawhub: clawhub_client,
         agent: Arc::clone(&agent_lock),
         store: Arc::clone(&store),
@@ -2116,6 +2246,10 @@ pub fn run() {
             clear_pinned_memories,
             // 上下文注入预览
             get_context_preview,
+            // 消息压缩
+            compress_messages,
+            get_compression_state,
+            clear_compression_state,
             // chat
             send_message,
             send_message_stream,

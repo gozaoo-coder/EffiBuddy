@@ -9,6 +9,7 @@
 //! 直接复用，避免在 agent crate 中引入额外耦合。
 
 pub mod clawhub;
+pub mod compression;
 pub mod config;
 pub mod error;
 pub mod events;
@@ -21,6 +22,10 @@ pub mod skill_index;
 pub mod skill_store;
 pub mod storage;
 
+pub use compression::{
+    CompressionAction, CompressionState, CompressionStore, apply_compression,
+    build_compression_prompt, parse_compression_response,
+};
 pub use config::{
     AgentConfig, AvailableModel, BackendKind, ModelKind, ProviderPreset, ThemeMode,
     builtin_presets,

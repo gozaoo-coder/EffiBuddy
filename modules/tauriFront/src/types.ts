@@ -32,6 +32,19 @@ export interface Message {
   attachments?: Attachment[]
 }
 
+// 引用块 chip：composer 顶部展示被引用消息的摘要
+// send() 时把所有 chips 的内容拼接到用户输入前面，作为上下文交给后端
+export interface QuoteChip {
+  /** 被引用消息的 id（用于点击 chip 跳转高亮） */
+  messageId: string
+  /** 摘要文本（前 40 字符 + …），用于 chip 显示 */
+  snippet: string
+  /** 被引用消息的完整内容，发送时拼接用 */
+  content: string
+  /** 被引用消息的 role，用于拼接 "[引用消息] 用户(id:xxx): ..." */
+  role: Role
+}
+
 export interface Device {
   id: string
   name: string

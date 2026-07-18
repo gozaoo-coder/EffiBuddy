@@ -26,13 +26,14 @@
 //!   `AgentStreamItem`（Text/Reasoning/ToolCallStart/ToolResult），
 //!   让前端能分别渲染推理框、工具调用提示框与正文。
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use effisuite_core::{
-    ClawHubClient, ConversationStore, CoreError, MemoryIndex, Message, PinnedMemoryStore,
-    Result, Role, SkillIndex, SkillStore,
+    ClawHubClient, CompressionStore, ConversationStore, CoreError, MemoryIndex, Message,
+    PinnedMemoryStore, Result, Role, SkillIndex, SkillStore, apply_compression,
 };
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -56,11 +57,14 @@ use crate::tools::{
 
 /// 自动注入的相关历史记忆条数上限
 const MEMORY_AUTO_INJECT_LIMIT: usize = 5;
-/// 当启用记忆增强时，当前对话保留在 prompt 中的最近消息条数
-/// （更早的消息由 RAG 检索覆盖，避免 token 爆炸）
-const RECENT_HISTORY_WITH_MEMORY: usize = 10;
-/// 单条历史消息截断字符数
-const HISTORY_TRUNCATE_CHARS: usize = 800;
+/// 历史段不再按条数截断：保留所有当前对话消息。
+/// 此常量仅用于 ContextPreview.recent_history_limit 字段，值 0 表示"无限制"。
+const RECENT_HISTORY_WITH_MEMORY: usize = 0;
+/// 历史段不再按字符截断：每条消息保留完整内容。
+/// 此常量仅用于 ContextPreview.history_truncate_chars 字段，值 0 表示"无限制"。
+/// 长会话的 token 预算由消息压缩系统（compress_message 命令）维护，
+/// 而非在 prompt 拼装层硬截断。
+const HISTORY_TRUNCATE_CHARS: usize = 0;
 /// 自动注入的可用技能条数上限（RAG 检索 Top-K）
 /// 仅注入 name + description 摘要，agent 通过 get_skill_detail / enable_skill 深入使用
 const SKILL_AUTO_INJECT_LIMIT: usize = 3;
@@ -108,6 +112,11 @@ pub struct RigAgent {
     attachments_dir: PathBuf,
     /// 会话存储句柄，SetTitleTool / EnableSkillTool 据此读写会话
     store: Arc<ConversationStore>,
+    /// 消息压缩状态存储句柄。
+    /// Some 时 `build_context_parts` 会加载当前会话的压缩状态并对历史段
+    /// （`messages[..last_user_idx]`）应用 Keep/Hide/Replace 决策。
+    /// 当前问题（最后一条用户消息）不压缩。None 时退化为不压缩。
+    compression_store: Option<Arc<CompressionStore>>,
 }
 
 impl RigAgent {
@@ -121,6 +130,8 @@ impl RigAgent {
     /// `store` 共享会话存储句柄，SetTitleTool 据此持久化标题。
     /// `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后
     /// 启用技能 RAG 自动注入与 5 个技能管理工具；任一为 None 则相应能力降级。
+    /// `compression_store` 注入后启用消息压缩（build_context_parts 对历史段应用
+    /// Keep/Hide/Replace 决策）；None 时退化为不压缩。
     #[allow(clippy::too_many_arguments)]
     pub fn from_env(
         model_name: impl Into<String>,
@@ -137,6 +148,7 @@ impl RigAgent {
         skill_store: Option<Arc<SkillStore>>,
         clawhub_client: Option<Arc<ClawHubClient>>,
         skills_dir: Option<PathBuf>,
+        compression_store: Option<Arc<CompressionStore>>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -157,6 +169,7 @@ impl RigAgent {
             image_gen_config,
             attachments_dir,
             store,
+            compression_store,
         })
     }
 
@@ -174,6 +187,8 @@ impl RigAgent {
     /// - `store` 共享会话存储句柄，SetTitleTool / EnableSkillTool 据此读写会话
     /// - `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后
     ///   启用技能 RAG 自动注入与 5 个技能管理工具；任一为 None 则相应能力降级
+    /// - `compression_store` 注入后启用消息压缩（build_context_parts 对历史段应用
+    ///   Keep/Hide/Replace 决策）；None 时退化为不压缩
     #[allow(clippy::too_many_arguments)]
     pub fn from_key(
         api_key: impl Into<String>,
@@ -192,6 +207,7 @@ impl RigAgent {
         skill_store: Option<Arc<SkillStore>>,
         clawhub_client: Option<Arc<ClawHubClient>>,
         skills_dir: Option<PathBuf>,
+        compression_store: Option<Arc<CompressionStore>>,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -219,6 +235,7 @@ impl RigAgent {
             image_gen_config,
             attachments_dir,
             store,
+            compression_store,
         })
     }
 
@@ -483,9 +500,12 @@ impl RigAgent {
 
     /// 拆分 `build_contextual_prompt` 的内部逻辑为可复用结构
     ///
-    /// 把"获取永久记忆 / RAG 检索 / 截取历史窗口 / 截断单条消息"四步拆开，
+    /// 把"获取永久记忆 / RAG 检索 / 当前对话历史全量格式化"三步拆开，
     /// 既给 `build_contextual_prompt` 用，也给 `build_context_preview` 用，
     /// 避免预览面板与实际 prompt 出现实现分叉。
+    ///
+    /// 历史段不再做条数 / 字符截断：保留所有消息完整内容。
+    /// 长会话的 token 预算由消息压缩系统（compress_message）维护。
     ///
     /// 返回 `None` 表示 `messages` 为空（与原 `build_contextual_prompt` 的早退分支一致）。
     async fn build_context_parts(&self, messages: &[Message]) -> Option<ContextParts> {
@@ -555,18 +575,45 @@ impl RigAgent {
             (String::new(), 0)
         };
 
-        // 2. 当前对话历史：启用记忆时只取最近 N 条，否则取全部（旧行为）
-        let history_msgs: &[Message] = if self.memory.is_some() {
-            let start = last_user_idx.saturating_sub(RECENT_HISTORY_WITH_MEMORY);
-            &messages[start..last_user_idx]
-        } else {
-            &messages[..last_user_idx]
+        // 2. 当前对话历史：全量注入（不截断条数，不截断单条字符）
+        // 旧逻辑：启用 RAG 时只取最近 RECENT_HISTORY_WITH_MEMORY 条，单条截断到
+        //         HISTORY_TRUNCATE_CHARS 字符。新逻辑：保留所有消息完整内容，
+        //         让 LLM 拥有完整的当前对话上下文，避免重要细节被截断丢失。
+        //         长会话的 token 预算由消息压缩系统（compress_message）维护，
+        //         而非在 build_context_parts 这一层硬截断。
+        //
+        // 压缩：若注入了 compression_store，加载当前会话的压缩状态并对历史段
+        // （messages[..last_user_idx]）应用 Keep/Hide/Replace 决策。
+        // 当前问题（最后一条用户消息）不压缩。
+        // 用 Cow 避免无压缩状态时的整段克隆（零成本退化）。
+        let history_slice: &[Message] = &messages[..last_user_idx];
+        let compressed_history: Cow<'_, [Message]> = match &self.compression_store {
+            Some(store) => {
+                // 读 current_conversation_id 后立即释放锁（临界区极短）
+                let conv_id = self.current_conversation_id.read().await.clone();
+                match conv_id {
+                    Some(id) => match store.load(&id).await {
+                        Ok(Some(state)) if !state.actions.is_empty() => {
+                            Cow::Owned(apply_compression(history_slice, &state))
+                        }
+                        Ok(_) => Cow::Borrowed(history_slice),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "加载压缩状态失败，使用未压缩历史");
+                            Cow::Borrowed(history_slice)
+                        }
+                    },
+                    None => Cow::Borrowed(history_slice),
+                }
+            }
+            None => Cow::Borrowed(history_slice),
         };
+        let history_msgs: &[Message] = compressed_history.as_ref();
 
-        // 3. 格式化历史段（含 `[当前对话最近]` 头部）
+        // 3. 格式化历史段（含 `[当前对话最近]` 头部，全量不截断）
         let history_section = if history_msgs.is_empty() {
             String::new()
         } else {
+            // 预估容量：每条平均 128 字节；宁多勿少，避免多次扩容
             let mut s = String::with_capacity(history_msgs.len() * 128 + 32);
             s.push_str("[当前对话最近]\n");
             for m in history_msgs {
@@ -575,10 +622,9 @@ impl RigAgent {
                     Role::Assistant => "助手",
                     Role::System => "系统",
                 };
-                let content = truncate_for_context(&m.content, HISTORY_TRUNCATE_CHARS);
                 s.push_str(role_label);
                 s.push_str(": ");
-                s.push_str(&content);
+                s.push_str(&m.content);
                 s.push('\n');
             }
             s
@@ -731,20 +777,6 @@ fn short_conv_id(id: &str) -> &str {
     }
 }
 
-/// 截断过长消息以控制上下文 token 数
-///
-/// 在字符边界处截断，避免截断多字节 UTF-8 字符导致 panic。
-/// 截断后追加 "…" 提示内容被省略。
-fn truncate_for_context(content: &str, max_chars: usize) -> String {
-    if content.len() <= max_chars {
-        return content.to_string();
-    }
-    let boundary = content.ceil_char_boundary(max_chars);
-    let mut s = String::with_capacity(boundary + 3);
-    s.push_str(&content[..boundary]);
-    s.push('…');
-    s
-}
 
 /// 从 `OneOrMany<ToolResultContent>` 提取可读文本
 ///
@@ -882,4 +914,69 @@ impl ChatAgent for RigAgent {
     async fn context_preview(&self, messages: &[Message]) -> Option<ContextPreview> {
         Some(self.build_context_preview(messages).await)
     }
+}
+
+// =========================================================
+// 消息压缩 agent
+// =========================================================
+
+/// 压缩 agent 专用 preamble：说明三种 method 与 XML 输出格式
+pub const COMPRESSION_PREAMBLE: &str = "\
+你是一个对话历史压缩助手。你的任务是分析一段聊天记录，给出压缩决策以减少 token 占用，同时保留关键信息。\n\
+\n\
+规则：\n\
+1. 每条消息（completion）都有一个 id。你需要对消息 id 做出三种决策之一：\n\
+   - 保持：内容仍然需要（后续会引用、任务追踪、代码上下文等）\n\
+   - 隐藏：与当前话题无关、已完成的工具调用、用户已离开的话题\n\
+   - 替换：内容冗长或语义混乱，用更简短准确的表述替代\n\
+2. 一次回复可以包含多个 <act> 决策，每个 act 可以同时处理多个 completionId\n\
+3. 输出格式（严格遵守）：\n\
+\n\
+<act>\n\
+  <reason>简短理由</reason>\n\
+  <method>保持|隐藏|替换</method>\n\
+  <completionId>[id1,id2]</completionId>\n\
+</act>\n\
+\n\
+<act>\n\
+  <reason>简短理由</reason>\n\
+  <method>替换</method>\n\
+  <completionId>[id3]</completionId>\n\
+  <newContent>压缩后的新内容</newContent>\n\
+</act>\n\
+\n\
+注意：\n\
+- method 必须是 保持/隐藏/替换 三者之一\n\
+- completionId 是 JSON 数组格式 [id1,id2,...]\n\
+- 只有 method=替换 时才需要 <newContent>\n\
+- 不需要压缩的消息可以不输出 act（默认保持）";
+
+/// 调用压缩 agent 分析对话历史，返回原始文本回复（含 `<act>` 块）
+///
+/// 复用主对话 agent 的 `api_key` / `base_url` / `model_name`，但使用压缩专用
+/// preamble（[`COMPRESSION_PREAMBLE`]）。非流式调用，适合后台压缩任务。
+///
+/// 调用方负责把返回的文本交给 [`effisuite_core::parse_compression_response`] 解析。
+pub async fn call_compression_agent(
+    api_key: &str,
+    base_url: &str,
+    model_name: &str,
+    prompt: &str,
+) -> Result<String> {
+    let mut builder = openai::CompletionsClient::builder().api_key(api_key);
+    if !base_url.trim().is_empty() {
+        builder = builder.base_url(base_url);
+    }
+    let client = builder
+        .build()
+        .map_err(|e| CoreError::Agent(format!("compression client init: {e}")))?;
+    let agent = client
+        .agent(model_name)
+        .preamble(COMPRESSION_PREAMBLE)
+        .build();
+    let resp = agent
+        .prompt(prompt)
+        .await
+        .map_err(|e| CoreError::Agent(format!("compression prompt: {e}")))?;
+    Ok(resp)
 }

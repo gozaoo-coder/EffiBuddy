@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
-import { Button, IconButton, BindSheet, Chips, Icon, useToast } from './basic'
+import { Button, IconButton, BindSheet, Chips, Icon, Menu, ContextRing, useToast, type MenuItemOption } from './basic'
 import ReasoningBox from './ReasoningBox.vue'
 import ToolCallGroup from './ToolCallGroup.vue'
 import type {
@@ -20,6 +20,7 @@ import type {
   AgentAttachmentPayload,
   ToolCallRecord,
   PickedFile,
+  QuoteChip,
 } from '../types'
 
 // 后端名称（来自 App.vue 顶部模型药丸）+ 当前会话 id（由 App 传入）
@@ -97,6 +98,197 @@ const toolSheetOpen = ref(false)
 // 优先级：会话级 > 技能级（apply_skill 写入） > 进程默认 cwd
 const workingDir = ref<string | null>(null)
 const workingDirSheetOpen = ref(false)
+
+// ---------- 引用块（任务 C）----------
+// composer 顶部展示的被引用消息 chip 列表，支持多条
+// 点击 chip 主体 → 滚动到原消息并高亮闪烁；点击 x → 移除该引用
+const quoteChips = ref<QuoteChip[]>([])
+
+// 把消息摘要截断为前 40 字符 + …
+function makeSnippet(text: string): string {
+  const t = (text ?? '').trim().replace(/\s+/g, ' ')
+  if (t.length <= 40) return t
+  return t.slice(0, 40) + '…'
+}
+
+// 添加引用：去重（同 messageId 不重复添加）
+function addQuote(m: Message) {
+  if (quoteChips.value.some((q) => q.messageId === m.id)) {
+    toast({ content: '已引用该消息', type: 'info' })
+    return
+  }
+  quoteChips.value.push({
+    messageId: m.id,
+    snippet: makeSnippet(m.content),
+    content: m.content,
+    role: m.role,
+  })
+}
+
+// 移除指定引用
+function removeQuote(messageId: string) {
+  quoteChips.value = quoteChips.value.filter((q) => q.messageId !== messageId)
+}
+
+// 滚动到原消息并用 animejs 做黄色边框闪烁（duration 1200ms）
+function scrollToMessage(id: string) {
+  const el = document.getElementById('msg-' + id)
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  // animejs 闪烁：透明 → 黄色 → 透明
+  animate(el, {
+    boxShadow: [
+      '0 0 0 0px rgba(255,213,79,0)',
+      '0 0 0 3px rgba(255,213,79,0.9)',
+      '0 0 0 0px rgba(255,213,79,0)',
+    ],
+    duration: 1200,
+    ease: 'outQuad',
+  })
+}
+
+// ---------- 消息长按 / 右键菜单（任务 C）----------
+// 触摸长按 500ms 触发，鼠标用 contextmenu（参考 SideNav.vue 实现）
+const msgMenuVisible = ref(false)
+const msgMenuPosition = ref<{ x: number; y: number } | null>(null)
+const msgMenuTarget = ref<Message | null>(null)
+let msgLongPressTimer: number | null = null
+
+function onMsgPointerDown(e: PointerEvent, m: Message) {
+  // 鼠标用 contextmenu，触摸用长按
+  if (e.pointerType === 'mouse') return
+  msgLongPressTimer = window.setTimeout(() => {
+    openMsgMenu(m, e.clientX, e.clientY)
+  }, 500)
+}
+
+function onMsgPointerUp() {
+  if (msgLongPressTimer) {
+    clearTimeout(msgLongPressTimer)
+    msgLongPressTimer = null
+  }
+}
+
+function onMsgContextMenu(e: MouseEvent, m: Message) {
+  e.preventDefault()
+  openMsgMenu(m, e.clientX, e.clientY)
+}
+
+function openMsgMenu(m: Message, x: number, y: number) {
+  msgMenuPosition.value = { x, y }
+  msgMenuTarget.value = m
+  msgMenuVisible.value = true
+}
+
+// Menu 项：引用、复制、删除（删除 danger + divided 分隔）
+const msgMenuItems = computed<MenuItemOption[]>(() => {
+  const m = msgMenuTarget.value
+  if (!m) return []
+  return [
+    { key: 'quote', label: '引用', icon: 'quote' },
+    { key: 'copy', label: '复制', icon: 'file' },
+    { key: 'delete', label: '删除', icon: 'delete', danger: true, divided: true },
+  ]
+})
+
+function onMsgMenuSelect(item: MenuItemOption) {
+  const m = msgMenuTarget.value
+  msgMenuTarget.value = null
+  if (!m) return
+  switch (item.key) {
+    case 'quote':
+      addQuote(m)
+      break
+    case 'copy':
+      void copyMessage(m)
+      break
+    case 'delete':
+      removeMessageFromView(m.id)
+      break
+  }
+}
+
+// 复制消息内容到剪贴板
+async function copyMessage(m: Message) {
+  try {
+    await navigator.clipboard.writeText(m.content)
+    toast({ content: '已复制', type: 'success' })
+  } catch (e) {
+    toast({ content: `复制失败：${e}`, type: 'error' })
+  }
+}
+
+// 从视图移除消息（仅前端 UI，不调用后端）
+function removeMessageFromView(id: string) {
+  const idx = messages.value.findIndex((m) => m.id === id)
+  if (idx < 0) return
+  messages.value.splice(idx, 1)
+  // 同步清理 bubbleMeta 与 quoteChips
+  delete bubbleMeta[id]
+  quoteChips.value = quoteChips.value.filter((q) => q.messageId !== id)
+  toast({ content: '已从视图移除', type: 'info' })
+}
+
+// ---------- composer 升级（任务 D）----------
+const composerFocused = ref(false)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const composerInnerRef = ref<HTMLElement | null>(null)
+
+// 上下文使用统计：粗略 4 字符 = 1 token，max ~32K tokens = 128K 字符
+const contextMaxChars = 128000
+const contextUsedChars = computed(() =>
+  messages.value.reduce((sum, m) => sum + (m.content?.length ?? 0), 0),
+)
+const contextUsedTokens = computed(() => Math.ceil(contextUsedChars.value / 4))
+const contextMaxTokens = computed(() => Math.ceil(contextMaxChars / 4))
+
+// 上下文管理 Sheet（含消息压缩按钮，任务 B 并行实现后端命令）
+const contextSheetOpen = ref(false)
+const compressing = ref(false)
+
+// 触发消息压缩：调用后端 compress_messages 命令（任务 B 实现）
+// 前端代码先写好，vue-tsc 不检查 invoke 命令是否存在
+async function triggerCompress() {
+  const id = activeId.value
+  if (!id) {
+    toast({ content: '请先选择会话', type: 'warn' })
+    return
+  }
+  if (compressing.value) return
+  compressing.value = true
+  try {
+    await invoke('compress_messages', { conversationId: id })
+    toast({ content: '压缩完成', type: 'success' })
+    await loadConversation()
+    contextSheetOpen.value = false
+  } catch (e) {
+    toast({ content: `压缩失败：${e}`, type: 'error' })
+  } finally {
+    compressing.value = false
+  }
+}
+
+// composer-inner 高度动画（关键：禁止 height: fit-content，用 animejs 动画）
+function autoResize() {
+  const ta = textareaRef.value
+  if (!ta) return
+  // 当前高度（animejs 动画起点）
+  const currentHeight = ta.offsetHeight
+  // 临时设为 auto 测量自然内容高度（同步操作，不触发重绘）
+  ta.style.height = 'auto'
+  const naturalHeight = ta.scrollHeight
+  // 立即恢复当前高度，避免视觉跳变
+  ta.style.height = currentHeight + 'px'
+  // 目标高度：不超过 120px
+  const targetHeight = Math.min(naturalHeight, 120)
+  // 强制 reflow，确保 animejs 起点正确
+  void ta.offsetHeight
+  animate(ta, {
+    height: [currentHeight + 'px', targetHeight + 'px'],
+    duration: 200,
+    ease: 'out(3)',
+  })
+}
 
 let unlistens: UnlistenFn[] = []
 
@@ -177,6 +369,8 @@ async function loadConversation() {
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
+    // 清空引用块，避免残留上一会话的引用
+    quoteChips.value = []
     return
   }
   try {
@@ -186,6 +380,8 @@ async function loadConversation() {
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
     // 切换会话时清空旧附件缓存，避免上一会话的 data URL 残留占用内存
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
+    // 清空引用块，避免残留上一会话的引用
+    quoteChips.value = []
     // 加载会话级工作区
     workingDir.value = conv?.working_dir ?? null
     // 历史消息可能携带 attachments（如历史 image_gen 结果），回填 base64
@@ -444,6 +640,25 @@ async function send() {
   const content = input.value.trim()
   if (!content || sending.value) return
 
+  // 拼接引用上下文到 content 前面（任务 C.3）
+  // 格式：
+  //   [引用消息]
+  //   用户(id:xxx): 引用内容
+  //   助手(id:yyy): 引用内容
+  //
+  //   用户实际输入
+  let finalContent = content
+  const chips = quoteChips.value
+  if (chips.length > 0) {
+    const quoteBlock = chips
+      .map((q) => {
+        const roleLabel = q.role === 'user' ? '用户' : q.role === 'assistant' ? '助手' : '系统'
+        return `${roleLabel}(id:${q.messageId}): ${q.content}`
+      })
+      .join('\n')
+    finalContent = `[引用消息]\n${quoteBlock}\n\n${content}`
+  }
+
   // 用户主动发送：强制跟随到底部
   stickToBottom.value = true
 
@@ -463,7 +678,19 @@ async function send() {
 
   sending.value = true
   input.value = ''
+  // 清空引用块（发送后）
+  quoteChips.value = []
+  // 重置 textarea 高度
+  await nextTick()
+  if (textareaRef.value) {
+    animate(textareaRef.value, {
+      height: [textareaRef.value.offsetHeight + 'px', '40px'],
+      duration: 200,
+      ease: 'out(3)',
+    })
+  }
 
+  // 用户气泡展示纯 content（不含引用前缀，引用前缀仅发给后端）
   await addMessage({
     id: newId(),
     role: 'user',
@@ -474,7 +701,7 @@ async function send() {
   try {
     await invoke('send_message_stream', {
       conversationId: id,
-      content,
+      content: finalContent,
     })
   } catch (e) {
     sending.value = false
@@ -640,6 +867,10 @@ onUnmounted(() => {
     cancelAnimationFrame(scrollRafId)
     scrollRafId = null
   }
+  if (msgLongPressTimer) {
+    clearTimeout(msgLongPressTimer)
+    msgLongPressTimer = null
+  }
   window.removeEventListener('keydown', onPreviewKeydown)
 })
 </script>
@@ -679,9 +910,15 @@ onUnmounted(() => {
       <div v-else ref="scroller" class="msg-list">
         <div
           v-for="m in messages"
+          :id="'msg-' + m.id"
           :key="m.id"
           class="msg-bubble"
           :class="[`role-${m.role}`, { streaming: m.id === streamingBubbleId }]"
+          @pointerdown="onMsgPointerDown($event, m)"
+          @pointerup="onMsgPointerUp"
+          @pointerleave="onMsgPointerUp"
+          @pointercancel="onMsgPointerUp"
+          @contextmenu="onMsgContextMenu($event, m)"
         >
           <template v-if="m.role === 'assistant'">
             <!-- 推理折叠框：仅在存在 reasoning 时渲染 -->
@@ -740,51 +977,167 @@ onUnmounted(() => {
       </div>
 
       <!-- Kimi 风格底部输入栏 -->
-      <div class="composer-kimi">
-        <div class="composer-inner">
-          <IconButton
-            size="md"
-            container
-            title="附件"
-            @click="toolSheetOpen = true"
+      <div class="composer-kimi" :class="{ focused: composerFocused }">
+        <!-- 引用块区（任务 C.2）-->
+        <div v-if="quoteChips.length" class="quote-chips">
+          <div
+            v-for="q in quoteChips"
+            :key="q.messageId"
+            class="quote-chip"
+            @click="scrollToMessage(q.messageId)"
           >
-            <Icon name="plus" :size="22" />
-          </IconButton>
-          <textarea
-            v-model="input"
-            class="composer-input"
-            :placeholder="sending ? '生成中…' : '尽管问，带图也行'"
-            :disabled="sending"
-            rows="1"
-            @keydown="onKeydown"
-          ></textarea>
-          <Button
-            v-if="!input.trim()"
-            icon-only
-            shape="circle"
-            size="md"
-            variant="normal"
-            title="语音输入"
-            @click="toast({ content: '语音输入即将上线', type: 'info' })"
-          >
-            <template #icon><Icon name="mic" :size="22" /></template>
-          </Button>
-          <Button
-            v-else
-            icon-only
-            shape="circle"
-            size="md"
-            variant="primary"
-            :disabled="!input.trim()"
-            title="发送"
-            @click="send"
-          >
-            <template #icon><Icon name="arrow-up" :size="22" /></template>
-          </Button>
+            <Icon name="quote" :size="14" />
+            <span class="quote-chip-text">{{ q.snippet }}</span>
+            <button
+              type="button"
+              class="quote-chip-close"
+              title="移除引用"
+              @click.stop="removeQuote(q.messageId)"
+            >
+              <Icon name="close" :size="14" />
+            </button>
+          </div>
         </div>
-        <div class="composer-footer">内容由 AI 生成</div>
+
+        <!-- composer-container 包裹层（任务 D.1）-->
+        <div class="composer-container">
+          <div ref="composerInnerRef" class="composer-inner">
+            <IconButton
+              size="md"
+              container
+              title="附件"
+              @click="toolSheetOpen = true"
+            >
+              <Icon name="plus" :size="22" />
+            </IconButton>
+            <textarea
+              ref="textareaRef"
+              v-model="input"
+              class="composer-input"
+              :placeholder="sending ? '生成中…' : '尽管问，带图也行'"
+              :disabled="sending"
+              rows="1"
+              @keydown="onKeydown"
+              @focus="composerFocused = true"
+              @blur="composerFocused = false"
+              @input="autoResize"
+            ></textarea>
+            <Button
+              v-if="!input.trim()"
+              icon-only
+              shape="circle"
+              size="md"
+              variant="normal"
+              title="语音输入"
+              @click="toast({ content: '语音输入即将上线', type: 'info' })"
+            >
+              <template #icon><Icon name="mic" :size="22" /></template>
+            </Button>
+            <Button
+              v-else
+              icon-only
+              shape="circle"
+              size="md"
+              variant="primary"
+              :disabled="!input.trim()"
+              title="发送"
+              @click="send"
+            >
+              <template #icon><Icon name="arrow-up" :size="22" /></template>
+            </Button>
+          </div>
+        </div>
+
+        <!-- 上下文 ring + 工作区（任务 D.7）-->
+        <div class="composer-meta">
+          <button
+            type="button"
+            class="meta-pill"
+            title="上下文使用情况"
+            @click="contextSheetOpen = true"
+          >
+            <ContextRing :used="contextUsedChars" :max="contextMaxChars" :size="18" />
+            <span class="meta-pill-text">{{ contextUsedChars }} / {{ contextMaxChars }}</span>
+          </button>
+          <button
+            type="button"
+            class="meta-pill meta-pill--wd"
+            :title="workingDir ?? '未设置'"
+            @click="workingDirSheetOpen = true"
+          >
+            <Icon name="folder" :size="14" />
+            <span class="meta-pill-text meta-pill-text--ellipsis">
+              {{ workingDir ? workingDir : '默认工作区' }}
+            </span>
+          </button>
+        </div>
       </div>
     </section>
+
+    <!-- 消息长按 / 右键菜单（任务 C.1）-->
+    <Menu
+      v-model:visible="msgMenuVisible"
+      :items="msgMenuItems"
+      :position="msgMenuPosition"
+      @select="onMsgMenuSelect"
+    />
+
+    <!-- 上下文管理 Sheet（任务 D.6）-->
+    <BindSheet
+      v-model:visible="contextSheetOpen"
+      title="上下文管理"
+      side="bottom"
+      :height="'auto'"
+    >
+      <div class="ctx-sheet">
+        <!-- 上下文使用统计 -->
+        <div class="ctx-stat">
+          <div class="ctx-stat-row">
+            <ContextRing :used="contextUsedChars" :max="contextMaxChars" :size="32" />
+            <div class="ctx-stat-text">
+              <div class="ctx-stat-title">上下文使用</div>
+              <div class="ctx-stat-desc">
+                {{ contextUsedChars }} / {{ contextMaxChars }} 字符
+                ·  约 {{ contextUsedTokens }} / {{ contextMaxTokens }} tokens
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 消息压缩按钮（任务 B 并行实现后端命令）-->
+        <Button
+          variant="primary"
+          block
+          :loading="compressing"
+          :disabled="compressing"
+          @click="triggerCompress"
+        >
+          <template #icon><Icon name="merge" :size="18" /></template>
+          {{ compressing ? '压缩中…' : '压缩消息' }}
+        </Button>
+
+        <!-- 工作区显示（点击调出 workingDirSheet）-->
+        <div
+          class="tool-list-item"
+          :title="workingDir ?? '未设置'"
+          @click="contextSheetOpen = false; workingDirSheetOpen = true"
+        >
+          <span class="tool-list-icon"><Icon name="folder" :size="20" /></span>
+          <div class="tool-list-text">
+            <div class="tool-list-title">工作区</div>
+            <div class="tool-list-desc">
+              {{ workingDir ? workingDir : '未设置，相对路径以默认目录为准' }}
+            </div>
+          </div>
+          <span class="tool-list-status">{{ workingDir ? '已设置' : '默认' }}</span>
+          <span class="tool-list-arrow"><Icon name="chevron-right" :size="16" /></span>
+        </div>
+
+        <p class="ctx-hint">
+          压缩消息会合并历史对话以释放上下文空间。工作区决定 read_file / list_files / shell 的相对路径基准。
+        </p>
+      </div>
+    </BindSheet>
 
     <!-- 底部工具/附件 Sheet -->
     <BindSheet v-model:visible="toolSheetOpen" title="工具" side="bottom" :height="'auto'">
@@ -934,6 +1287,182 @@ onUnmounted(() => {
 .composer-input:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* ---------- 任务 C：引用块 ---------- */
+.quote-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.quote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+  /* contenteditable=false 防止误编辑 */
+  user-select: none;
+}
+
+.quote-chip:hover {
+  background: var(--border);
+  border-color: var(--primary);
+}
+
+.quote-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.quote-chip-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.quote-chip-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---------- 任务 D：composer 升级 ---------- */
+/* focus 上抬：用 transform 避免 layout reflow，配合 transition 平滑 */
+.composer-kimi {
+  transition: transform 0.25s var(--ease-standard, ease);
+}
+
+.composer-kimi.focused {
+  transform: translateY(-12px);
+}
+
+/* composer-container 包裹层：亮色 #CFCFCF，暗色用 --card-2 */
+.composer-container {
+  background: var(--card-2);
+  border-radius: var(--radius-full);
+  padding: 4px;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+[data-theme='light'] .composer-container {
+  background: #cfcfcf;
+}
+
+/* composer-inner 高度跟随 textarea；overflow hidden 防止超出时溢出 */
+.composer-inner {
+  overflow: hidden;
+  max-height: 160px;
+}
+
+/* 上下文 ring + 工作区 meta 行 */
+.composer-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.meta-pill:hover {
+  background: var(--card-2);
+  color: var(--text);
+}
+
+.meta-pill--wd {
+  flex: 1;
+  min-width: 0;
+}
+
+.meta-pill-text {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.meta-pill-text--ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 任务 D.6：上下文管理 Sheet ---------- */
+.ctx-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0;
+}
+
+.ctx-stat {
+  padding: 14px;
+  border-radius: var(--radius-md, 12px);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+}
+
+.ctx-stat-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ctx-stat-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ctx-stat-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.ctx-stat-desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.ctx-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 /* Kimi 风格空状态首页 */

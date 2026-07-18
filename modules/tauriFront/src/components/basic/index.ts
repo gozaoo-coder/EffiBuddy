@@ -39,3 +39,6 @@ export type { MenuItemOption, MenuPlacement, MenuSubMenuMode } from './Menu.vue'
 export { useContextMenu } from './Menu.vue'
 export { default as Dialog } from './Dialog.vue'
 export { default as BindSheet } from './BindSheet.vue'
+
+// 指示器
+export { default as ContextRing } from './ContextRing.vue'
