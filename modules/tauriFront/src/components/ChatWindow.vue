@@ -357,6 +357,146 @@ const compressActionStats = computed(() => {
   return stats
 })
 
+// 底栏压缩徽章：展示当前会话已压缩的消息条数（无需打开浮窗即可感知）
+// 基于已加载的 compressExistingState；若未加载，徽章不显示
+const compressBadgeInfo = computed(() => {
+  const state = compressExistingState.value
+  if (!state || state.actions.length === 0) return null
+  // 涉及消息总数（去重，避免同一 id 被多次决策时重复计数）
+  const ids = new Set<string>()
+  for (const a of state.actions) {
+    for (const id of a.message_ids) ids.add(id)
+  }
+  return { count: ids.size, actionCount: state.actions.length }
+})
+
+// Token 节省量估算：基于 actions + 当前会话 messages 计算字符节省量
+// 估算规则：4 字符 ≈ 1 token（OpenAI 通用经验值）
+// - hide：节省 = content.length
+// - replace：节省 = max(0, content.length - new_content.length)
+// - keep：节省 = 0
+// 返回 null 表示无法计算（如 messages 未加载或无节省）
+const compressSavedInfo = computed(() => {
+  const actions = compressStage.value === 'done'
+    ? compressActions.value
+    : (compressExistingState.value?.actions ?? [])
+  if (actions.length === 0) return null
+
+  // 构建 id → message 索引（O(n)），用 Map 加速查表
+  const msgMap = new Map<string, typeof messages.value[number]>()
+  for (const m of messages.value) msgMap.set(m.id, m)
+
+  let savedChars = 0
+  let totalChars = 0
+  const counted = new Set<string>() // 同一 id 只计一次（后出现的 act 覆盖）
+  // 反向遍历，先记录每个 id 的最终决策，再正向计算
+  const finalAction = new Map<string, typeof actions[number]>()
+  for (let i = actions.length - 1; i >= 0; i--) {
+    const a = actions[i]
+    for (const id of a.message_ids) {
+      if (!finalAction.has(id)) finalAction.set(id, a)
+    }
+  }
+  for (const [id, a] of finalAction) {
+    const msg = msgMap.get(id)
+    if (!msg) continue
+    const origLen = msg.content?.length ?? 0
+    totalChars += origLen
+    if (counted.has(id)) continue
+    counted.add(id)
+    if (a.method === 'hide') savedChars += origLen
+    else if (a.method === 'replace' && a.new_content != null) {
+      savedChars += Math.max(0, origLen - a.new_content.length)
+    }
+  }
+
+  if (savedChars === 0) return { savedChars: 0, savedTokens: 0, percent: 0, totalChars }
+  const savedTokens = Math.round(savedChars / 4)
+  const percent = totalChars > 0 ? Math.round((savedChars / totalChars) * 100) : 0
+  return { savedChars, savedTokens, percent, totalChars }
+})
+
+// 前端轻量 XML 解析器：从流式文本中提取已闭合的 <act>...</act> 块
+// 与后端 parse_compression_response 逻辑一致，容错策略一致：
+// - 未闭合的 <act> 跳过（仍在流式增长中）
+// - 缺少必要标签的块跳过
+// - method 未知跳过
+// 返回已成功解析的 actions（按出现顺序）
+function parseStreamActs(text: string): CompressionAction[] {
+  const actions: CompressionAction[] = []
+  let pos = 0
+  while (pos < text.length) {
+    const relOpen = text.indexOf('<act>', pos)
+    if (relOpen < 0) break
+    const contentStart = relOpen + '<act>'.length
+    const relClose = text.indexOf('</act>', contentStart)
+    if (relClose < 0) break // 未闭合，等更多 token
+    const block = text.slice(contentStart, relClose)
+    pos = relClose + '</act>'.length
+    const action = parseSingleAct(block)
+    if (action) actions.push(action)
+  }
+  return actions
+}
+
+function parseSingleAct(block: string): CompressionAction | null {
+  const reason = extractTag(block, 'reason')
+  const method = extractTag(block, 'method')
+  const idRaw = extractTag(block, 'completionId')
+  if (!reason || !method || !idRaw) return null
+
+  const messageIds = idRaw
+    .replace(/^\[/, '').replace(/\]$/, '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  if (messageIds.length === 0) return null
+
+  const m = method.trim()
+  if (m === '保持') return { method: 'keep', reason: reason.trim(), message_ids: messageIds }
+  if (m === '隐藏') return { method: 'hide', reason: reason.trim(), message_ids: messageIds }
+  if (m === '替换') {
+    const newContent = extractTag(block, 'newContent')
+    if (!newContent) return null
+    return { method: 'replace', reason: reason.trim(), message_ids: messageIds, new_content: newContent.trim() }
+  }
+  return null
+}
+
+function extractTag(block: string, tag: string): string | null {
+  const open = `<${tag}>`
+  const close = `</${tag}>`
+  const start = block.indexOf(open)
+  if (start < 0) return null
+  const end = block.indexOf(close, start + open.length)
+  if (end < 0) return null
+  return block.slice(start + open.length, end)
+}
+
+// 流式实时解析的 actions（streaming 阶段使用，done 后用 compressActions 覆盖）
+const streamParsedActions = ref<CompressionAction[]>([])
+
+// 决策卡片展开状态：Set<key>，key = `${stage}-${index}`（区分 done/streaming/existing）
+const expandedActions = ref<Set<string>>(new Set())
+function toggleActionExpand(key: string) {
+  const s = new Set(expandedActions.value)
+  if (s.has(key)) s.delete(key)
+  else s.add(key)
+  expandedActions.value = s
+}
+// 根据 message_ids 在当前 messages 中查找原消息内容
+function findMessagesByIds(ids: string[]): { id: string; role: string; content: string }[] {
+  const map = new Map(messages.value.map((m) => [m.id, m]))
+  return ids
+    .map((id) => map.get(id))
+    .filter((m): m is NonNullable<typeof m> => !!m)
+    .map((m) => ({
+      id: m.id,
+      role: m.role === 'user' ? '用户' : m.role === 'assistant' ? '助手' : '系统',
+      content: m.content ?? '',
+    }))
+}
+
 // 重置压缩浮窗状态
 function resetCompressState() {
   compressStage.value = 'idle'
@@ -365,6 +505,8 @@ function resetCompressState() {
   compressActions.value = []
   compressError.value = ''
   compressElapsedMs.value = 0
+  streamParsedActions.value = []
+  expandedActions.value = new Set()
 }
 
 // 触发消息压缩：打开浮窗 + 调用流式命令 + 监听事件
@@ -1169,6 +1311,8 @@ onMounted(async () => {
       const p = e.payload
       if (activeId.value && p.conversation_id !== activeId.value) return
       compressRawText.value += p.token
+      // 实时解析已闭合的 <act> 块，让用户在 streaming 阶段就能看到决策
+      streamParsedActions.value = parseStreamActs(compressRawText.value)
     }),
     await listen<CompressDonePayload>('agent-compress-done', (e) => {
       const p = e.payload
@@ -1177,8 +1321,25 @@ onMounted(async () => {
       compressRawText.value = p.raw_text
       compressElapsedMs.value = p.elapsed_ms
       compressStage.value = 'done'
+      // 清空流式解析（displayActions 会自动切换到 compressActions）
+      streamParsedActions.value = []
       // 同步刷新已存在状态（用于"上次压缩"展示）
       loadExistingCompression(p.conversation_id)
+      // 完成 toast：让用户在关闭浮窗后也有反馈
+      const stats = { keep: 0, hide: 0, replace: 0 }
+      for (const a of p.actions) {
+        if (a.method === 'keep') stats.keep++
+        else if (a.method === 'hide') stats.hide++
+        else if (a.method === 'replace') stats.replace++
+      }
+      const saved = compressSavedInfo.value
+      const savedText = saved && saved.savedTokens > 0
+        ? ` · 节省约 ${saved.savedTokens} tokens (${saved.percent}%)`
+        : ''
+      toast({
+        content: `压缩完成：保持 ${stats.keep} / 隐藏 ${stats.hide} / 替换 ${stats.replace}${savedText}`,
+        type: 'success',
+      })
     }),
     await listen<CompressErrorPayload>('agent-compress-error', (e) => {
       const p = e.payload
@@ -1440,6 +1601,17 @@ onUnmounted(() => {
               {{ workingDir ? workingDir : '默认工作区' }}
             </span>
           </button>
+          <!-- 压缩状态徽章：仅当当前会话已有压缩状态时显示，点击跳到压缩浮窗 -->
+          <button
+            v-if="compressBadgeInfo"
+            type="button"
+            class="meta-pill meta-pill--compress"
+            :title="`当前会话已压缩 ${compressBadgeInfo.count} 条消息（${compressBadgeInfo.actionCount} 条决策）· 点击查看`"
+            @click="compressionSheetOpen = true"
+          >
+            <Icon name="merge" :size="14" />
+            <span class="meta-pill-text">已压缩 {{ compressBadgeInfo.count }}</span>
+          </button>
         </div>
         </div>
 
@@ -1603,6 +1775,25 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- Token 节省量卡片：基于 actions + messages 估算（4 字符 ≈ 1 token）-->
+        <div
+          v-if="compressSavedInfo && compressSavedInfo.savedTokens > 0"
+          class="compress-saved"
+          :class="{ 'is-done': compressStage === 'done' }"
+        >
+          <div class="compress-saved-icon">
+            <Icon name="check" :size="14" />
+          </div>
+          <div class="compress-saved-text">
+            <div class="compress-saved-title">
+              节省约 <span class="compress-saved-num">{{ compressSavedInfo.savedTokens }}</span> tokens
+            </div>
+            <div class="compress-saved-desc">
+              {{ compressSavedInfo.savedChars }} 字符 · 占历史 {{ compressSavedInfo.percent }}%
+            </div>
+          </div>
+        </div>
+
         <!-- 流式输出区（streaming 阶段实时增长；done 后展示完整 raw_text）-->
         <div
           v-if="compressRawText"
@@ -1616,23 +1807,24 @@ onUnmounted(() => {
           <MarkdownRender :content="compressRawText" />
         </div>
 
-        <!-- 决策列表（done 阶段或已有压缩状态展开）-->
+        <!-- 流式实时解析的决策（streaming 阶段）-->
         <div
-          v-if="compressStage === 'done' && compressActions.length > 0"
-          class="compress-actions"
+          v-if="compressStage === 'streaming' && streamParsedActions.length > 0"
+          class="compress-actions compress-actions-stream"
         >
-          <div class="compress-actions-title">压缩决策（{{ compressActions.length }} 条）</div>
+          <div class="compress-actions-title">
+            实时决策（{{ streamParsedActions.length }} 条）
+            <span class="compress-actions-hint">· 已解析</span>
+          </div>
           <div
-            v-for="(a, i) in compressActions"
-            :key="i"
+            v-for="(a, i) in streamParsedActions"
+            :key="`stream-${i}`"
             class="compress-action-item"
             :class="`method-${a.method}`"
           >
             <div class="compress-action-head">
               <span class="compress-action-method">{{ a.method === 'keep' ? '保持' : a.method === 'hide' ? '隐藏' : '替换' }}</span>
-              <span class="compress-action-ids">
-                {{ a.message_ids.length }} 条消息
-              </span>
+              <span class="compress-action-ids">{{ a.message_ids.length }} 条消息</span>
             </div>
             <div class="compress-action-reason">{{ a.reason }}</div>
             <div v-if="a.method === 'replace' && a.new_content" class="compress-action-new">
@@ -1642,7 +1834,57 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 已有压缩状态展示（idle 阶段且后端有持久化结果）-->
+        <!-- 决策列表（done 阶段，支持展开查看被压缩消息原文）-->
+        <div
+          v-if="compressStage === 'done' && compressActions.length > 0"
+          class="compress-actions"
+        >
+          <div class="compress-actions-title">压缩决策（{{ compressActions.length }} 条 · 点击展开查看原文）</div>
+          <div
+            v-for="(a, i) in compressActions"
+            :key="`done-${i}`"
+            class="compress-action-item"
+            :class="`method-${a.method}`"
+          >
+            <div
+              class="compress-action-head"
+              role="button"
+              tabindex="0"
+              @click="toggleActionExpand(`done-${i}`)"
+              @keydown.enter.prevent="toggleActionExpand(`done-${i}`)"
+            >
+              <span class="compress-action-method">{{ a.method === 'keep' ? '保持' : a.method === 'hide' ? '隐藏' : '替换' }}</span>
+              <span class="compress-action-ids">{{ a.message_ids.length }} 条消息</span>
+              <span class="compress-action-toggle" :class="{ 'is-open': expandedActions.has(`done-${i}`) }">
+                <Icon name="chevron-down" :size="14" />
+              </span>
+            </div>
+            <div class="compress-action-reason">{{ a.reason }}</div>
+            <div v-if="a.method === 'replace' && a.new_content" class="compress-action-new">
+              <span class="compress-action-new-label">替换为：</span>
+              <div class="compress-action-new-content">{{ a.new_content }}</div>
+            </div>
+            <!-- 展开内容：列出被压缩的原消息 -->
+            <div v-if="expandedActions.has(`done-${i}`)" class="compress-action-expand">
+              <div
+                v-for="msg in findMessagesByIds(a.message_ids)"
+                :key="msg.id"
+                class="compress-action-msg"
+              >
+                <div class="compress-action-msg-head">
+                  <span class="compress-action-msg-role">{{ msg.role }}</span>
+                  <span class="compress-action-msg-id">[id:{{ msg.id.slice(0, 8) }}]</span>
+                </div>
+                <div class="compress-action-msg-content">{{ msg.content }}</div>
+              </div>
+              <div v-if="findMessagesByIds(a.message_ids).length === 0" class="compress-action-empty">
+                消息不在当前会话中（可能已被删除）
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 已有压缩状态展示（idle 阶段且后端有持久化结果，同样支持展开）-->
         <div
           v-if="compressStage === 'idle' && compressExistingState && compressExistingState.actions.length > 0"
           class="compress-existing"
@@ -1655,18 +1897,43 @@ onUnmounted(() => {
           </div>
           <div
             v-for="(a, i) in compressExistingState.actions"
-            :key="i"
+            :key="`existing-${i}`"
             class="compress-action-item"
             :class="`method-${a.method}`"
           >
-            <div class="compress-action-head">
+            <div
+              class="compress-action-head"
+              role="button"
+              tabindex="0"
+              @click="toggleActionExpand(`existing-${i}`)"
+              @keydown.enter.prevent="toggleActionExpand(`existing-${i}`)"
+            >
               <span class="compress-action-method">{{ a.method === 'keep' ? '保持' : a.method === 'hide' ? '隐藏' : '替换' }}</span>
               <span class="compress-action-ids">{{ a.message_ids.length }} 条消息</span>
+              <span class="compress-action-toggle" :class="{ 'is-open': expandedActions.has(`existing-${i}`) }">
+                <Icon name="chevron-down" :size="14" />
+              </span>
             </div>
             <div class="compress-action-reason">{{ a.reason }}</div>
             <div v-if="a.method === 'replace' && a.new_content" class="compress-action-new">
               <span class="compress-action-new-label">替换为：</span>
               <div class="compress-action-new-content">{{ a.new_content }}</div>
+            </div>
+            <div v-if="expandedActions.has(`existing-${i}`)" class="compress-action-expand">
+              <div
+                v-for="msg in findMessagesByIds(a.message_ids)"
+                :key="msg.id"
+                class="compress-action-msg"
+              >
+                <div class="compress-action-msg-head">
+                  <span class="compress-action-msg-role">{{ msg.role }}</span>
+                  <span class="compress-action-msg-id">[id:{{ msg.id.slice(0, 8) }}]</span>
+                </div>
+                <div class="compress-action-msg-content">{{ msg.content }}</div>
+              </div>
+              <div v-if="findMessagesByIds(a.message_ids).length === 0" class="compress-action-empty">
+                消息不在当前会话中（可能已被删除）
+              </div>
             </div>
           </div>
         </div>
@@ -2019,6 +2286,32 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+/* 压缩状态徽章：仅当会话已压缩时显示，配色用 success 收敛色 */
+.meta-pill--compress {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid rgba(16, 163, 127, 0.4);
+  border-radius: var(--radius-full);
+  background: rgba(16, 163, 127, 0.1);
+  color: var(--success, #10a37f);
+  font-size: var(--fs-xs, 12px);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.meta-pill--compress:hover {
+  background: rgba(16, 163, 127, 0.18);
+  border-color: rgba(16, 163, 127, 0.6);
+}
+
+[data-theme='light'] .meta-pill--compress {
+  background: rgba(16, 163, 127, 0.08);
+}
+
 .meta-pill-text {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2133,7 +2426,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 4px 0 8px;
+  padding: 14px;
   max-height: calc(85vh - 60px);
   overflow-y: auto;
 }
@@ -2301,6 +2594,66 @@ onUnmounted(() => {
 .compress-stat-item.replace .compress-stat-num { color: var(--warn, #d97757); }
 .compress-stat-item.total .compress-stat-num { color: var(--text); }
 
+/* Token 节省量卡片：横排图标 + 标题 + 描述，配色用 success */
+.compress-saved {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(16, 163, 127, 0.08);
+  border: 1px solid rgba(16, 163, 127, 0.25);
+  transition: all 0.3s ease;
+}
+
+.compress-saved.is-done {
+  animation: compress-saved-pop 0.4s ease;
+}
+
+@keyframes compress-saved-pop {
+  0% { transform: scale(0.96); opacity: 0; }
+  60% { transform: scale(1.02); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.compress-saved-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--success, #10a37f);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.compress-saved-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compress-saved-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.compress-saved-num {
+  color: var(--success, #10a37f);
+  font-variant-numeric: tabular-nums;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-weight: 700;
+}
+
+.compress-saved-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 流式输出区 */
 .compress-output {
   border: 1px solid var(--border);
@@ -2354,6 +2707,27 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--muted);
   margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compress-actions-hint {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 流式实时决策区：带"流式中"指示 */
+.compress-actions-stream .compress-action-item {
+  border-style: dashed;
+  animation: compress-action-fade-in 0.3s ease;
+}
+
+@keyframes compress-action-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .compress-existing-time {
@@ -2377,11 +2751,117 @@ onUnmounted(() => {
 .compress-action-item.method-hide { border-left-color: var(--muted); }
 .compress-action-item.method-replace { border-left-color: var(--warn, #d97757); }
 
+/* 可点击的头部：cursor + hover 反馈 */
+.compress-action-head[role='button'] {
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  border-radius: var(--radius-sm);
+  margin: -2px -4px;
+  padding: 2px 4px;
+  transition: background 0.15s ease;
+}
+
+.compress-action-head[role='button']:hover {
+  background: var(--card);
+}
+
+.compress-action-head[role='button']:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent, #4a7eff);
+}
+
 .compress-action-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+/* 展开切换图标：默认朝下，展开后旋转 180° */
+.compress-action-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+}
+
+.compress-action-toggle.is-open {
+  transform: rotate(180deg);
+}
+
+/* 展开内容：被压缩消息原文列表 */
+.compress-action-expand {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--card);
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: compress-expand-fade 0.2s ease;
+}
+
+@keyframes compress-expand-fade {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 400px; }
+}
+
+.compress-action-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compress-action-msg:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.compress-action-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compress-action-msg-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #4a7eff);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--card-2);
+}
+
+.compress-action-msg-id {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.compress-action-msg-content {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.9;
+  /* 限高 + 滚动，避免长消息撑爆浮窗 */
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.compress-action-empty {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+  padding: 8px 0;
 }
 
 .compress-action-method {
