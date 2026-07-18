@@ -40,6 +40,12 @@ impl PluginStore {
         })
     }
 
+    /// 返回存储根目录，供安装流程把解压目录与元数据放在同一位置
+    #[inline]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// 将插件 id（`<owner>/<name>`）转换为安全文件名。
     ///
     /// 规则：将所有 `/` 替换为 `__`。对于已含 `__` 的合法 id

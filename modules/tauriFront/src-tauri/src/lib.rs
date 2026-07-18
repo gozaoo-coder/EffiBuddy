@@ -2357,6 +2357,7 @@ async fn clawhub_get_package(
 #[tauri::command]
 async fn clawhub_install_plugin(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     name: String,
 ) -> Result<String, String> {
     use effisuite_core::clawhub::extract_zip_to;
@@ -2373,7 +2374,9 @@ async fn clawhub_install_plugin(
 
     let client = state.clawhub.clone();
     let plugin_store = state.plugin_store.clone();
-    let plugins_root = plugins_dir();
+    // 使用 plugin_store 自身的 root，避免初始化回退到临时目录时
+    // 元数据 JSON 与实际解压目录分离。
+    let plugins_root = plugin_store.root().to_path_buf();
 
     // 1. 拉取包详情
     let detail = client
@@ -2428,6 +2431,7 @@ async fn clawhub_install_plugin(
         .save(&plugin)
         .await
         .map_err(|e| e.to_string())?;
+    let _ = app_handle.emit("plugins-changed", ());
     Ok(plugin.id)
 }
 
@@ -2435,13 +2439,16 @@ async fn clawhub_install_plugin(
 #[tauri::command]
 async fn clawhub_uninstall_plugin(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<(), String> {
     state
         .plugin_store
         .delete(&id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = app_handle.emit("plugins-changed", ());
+    Ok(())
 }
 
 /// 列出本地已安装插件（按 installed_at 降序）

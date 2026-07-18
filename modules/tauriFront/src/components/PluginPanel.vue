@@ -4,8 +4,9 @@
  * 仅展示本地已安装插件，支持卸载（删除）。
  * 容器复用 BindSheet side="right"，风格与 SkillPanel 保持一致。
  */
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { BindSheet, Button, Dialog, IconButton, Icon, useToast } from './basic'
 import type { InstalledPlugin } from '../types'
 
@@ -33,8 +34,17 @@ async function refresh() {
   }
 }
 
-onMounted(() => {
-  refresh()
+let unlisten: UnlistenFn | null = null
+
+onMounted(async () => {
+  await refresh()
+  unlisten = await listen<void>('plugins-changed', () => {
+    if (props.open) refresh()
+  })
+})
+
+onUnmounted(() => {
+  unlisten?.()
 })
 
 watch(
