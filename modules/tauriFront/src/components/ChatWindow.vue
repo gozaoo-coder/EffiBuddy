@@ -276,6 +276,9 @@ const contextUsedChars = computed(() =>
 )
 const contextUsedTokens = computed(() => Math.ceil(contextUsedChars.value / 4))
 
+// 最后一次 completion 的 token 使用统计（底栏与最新气泡统一显示）
+const lastUsage = ref<AgentUsagePayload | null>(null)
+
 // 上下文管理 Sheet（含消息压缩按钮，任务 B 并行实现后端命令）
 const contextSheetOpen = ref(false)
 const compressing = ref(false)
@@ -405,6 +408,8 @@ async function loadConversation() {
     workingDir.value = null
     // 清空引用块，避免残留上一会话的引用
     quoteChips.value = []
+    // 清空上次 completion 统计
+    lastUsage.value = null
     return
   }
   try {
@@ -416,6 +421,8 @@ async function loadConversation() {
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     // 清空引用块，避免残留上一会话的引用
     quoteChips.value = []
+    // 切换会话时清空上次 completion 统计（历史消息不携带 usage）
+    lastUsage.value = null
     // 加载会话级工作区
     workingDir.value = conv?.working_dir ?? null
     // 历史消息可能携带 attachments（如历史 image_gen 结果），回填 base64
@@ -428,6 +435,7 @@ async function loadConversation() {
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
+    lastUsage.value = null
   }
 }
 
@@ -665,6 +673,8 @@ async function onUsage(p: AgentUsagePayload) {
   if (!targetId) return
   const meta = ensureMeta(targetId)
   meta.usage = p
+  // 同时更新底栏显示的最后一次 completion 统计
+  lastUsage.value = p
 }
 
 // ---------- 图片预览 ----------
@@ -1234,10 +1244,24 @@ onUnmounted(() => {
             @click="contextSheetOpen = true"
           >
             <ContextRing :used="contextUsedTokens" :max="contextMaxTokens" :size="18" />
-            <span class="usage-label">tokens</span>
-            <span class="usage-val">{{ contextUsedTokens }}</span>
-            <span class="usage-sep">/</span>
-            <span class="usage-val">{{ contextMaxTokens }}</span>
+            <template v-if="lastUsage">
+              <span class="usage-label">tokens</span>
+              <span class="usage-val">{{ lastUsage.input_tokens }}</span>
+              <span class="usage-sep">/</span>
+              <span class="usage-val">{{ lastUsage.output_tokens }}</span>
+              <span
+                v-if="lastUsage.reasoning_tokens > 0"
+                class="usage-val usage-reasoning"
+              >+{{ lastUsage.reasoning_tokens }}</span>
+              <span class="usage-sep">·</span>
+              <span class="usage-cumulative">累计 {{ lastUsage.cumulative_total }}</span>
+            </template>
+            <template v-else>
+              <span class="usage-label">tokens</span>
+              <span class="usage-val">--</span>
+              <span class="usage-sep">/</span>
+              <span class="usage-val">--</span>
+            </template>
           </button>
           <button
             type="button"
@@ -1666,6 +1690,15 @@ onUnmounted(() => {
 .meta-pill--context .usage-sep {
   color: var(--muted);
   opacity: 0.6;
+}
+
+.meta-pill--context .usage-reasoning {
+  color: var(--muted);
+}
+
+.meta-pill--context .usage-cumulative {
+  color: var(--muted);
+  font-family: inherit;
 }
 
 /* ---------- 任务 D.6：上下文管理 Sheet ---------- */
