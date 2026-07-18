@@ -1188,24 +1188,18 @@ onUnmounted(() => {
               v-if="getMeta(m.id)?.usage"
               class="msg-usage"
               :class="{ streaming: m.id === streamingBubbleId }"
+              :title="`本次：输入 ${getMeta(m.id)!.usage!.input_tokens} · 输出 ${getMeta(m.id)!.usage!.output_tokens}${getMeta(m.id)!.usage!.reasoning_tokens > 0 ? ' · 推理 ' + getMeta(m.id)!.usage!.reasoning_tokens : ''}\n累计：输入 ${getMeta(m.id)!.usage!.cumulative_input} · 输出 ${getMeta(m.id)!.usage!.cumulative_output} · 合计 ${getMeta(m.id)!.usage!.cumulative_total}`"
             >
-              <span class="usage-item input" title="本次输入 tokens">
-                ↓{{ getMeta(m.id)!.usage!.input_tokens }}
-              </span>
-              <span class="usage-item output" title="本次输出 tokens">
-                ↑{{ getMeta(m.id)!.usage!.output_tokens }}
-              </span>
+              <span class="usage-label">tokens</span>
+              <span class="usage-val">{{ getMeta(m.id)!.usage!.input_tokens }}</span>
+              <span class="usage-sep">/</span>
+              <span class="usage-val">{{ getMeta(m.id)!.usage!.output_tokens }}</span>
               <span
                 v-if="getMeta(m.id)!.usage!.reasoning_tokens > 0"
-                class="usage-item reasoning"
-                title="推理 tokens"
-              >
-                ✦{{ getMeta(m.id)!.usage!.reasoning_tokens }}
-              </span>
+                class="usage-val usage-reasoning"
+              >+{{ getMeta(m.id)!.usage!.reasoning_tokens }}</span>
               <span class="usage-sep">·</span>
-              <span class="usage-item cumulative" title="本轮累计 tokens">
-                累计 {{ getMeta(m.id)!.usage!.cumulative_total }}
-              </span>
+              <span class="usage-cumulative">累计 {{ getMeta(m.id)!.usage!.cumulative_total }}</span>
             </div>
           </template>
           <template v-else>{{ m.content }}</template>
@@ -1988,53 +1982,59 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-/* token 使用统计：assistant 气泡底部小标签 */
+/* token 使用统计：assistant 气泡底部小标签
+ * 视觉风格对齐 .meta-pill / .ctx-stat-desc：
+ * - 中性 var(--muted) 颜色，无彩色箭头
+ * - 数字使用 SFMono-Regular + tabular-nums，与 char-badge / stat-value 一致
+ * - · 作为分隔符，与 ctx-stat-desc（"X / Y 字符 · 约 X / Y tokens"）保持一致
+ * - 边框使用 var(--border) 实线（不用 dashed），与 .meta-pill 一致
+ */
 .msg-usage {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
-  font-size: 11px;
-  line-height: 1.4;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--card-2);
+  font-size: var(--fs-xs, 12px);
+  line-height: 1.5;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  font-family: 'SFMono-Regular', Consolas, monospace;
   user-select: none;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .msg-usage.streaming {
-  opacity: 0.85;
+  opacity: 0.8;
 }
 
-.msg-usage .usage-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
+.msg-usage .usage-label {
+  color: var(--muted);
+  font-family: inherit;
   font-weight: 500;
 }
 
-.msg-usage .usage-item.input {
-  color: var(--accent, #4a7eff);
+.msg-usage .usage-val {
+  color: var(--text);
+  font-weight: 500;
 }
 
-.msg-usage .usage-item.output {
-  color: var(--success, #10a37f);
-}
-
-.msg-usage .usage-item.reasoning {
-  color: var(--warn, #d97757);
+.msg-usage .usage-reasoning {
+  color: var(--muted);
 }
 
 .msg-usage .usage-sep {
-  opacity: 0.5;
-  margin: 0 2px;
+  color: var(--muted);
+  opacity: 0.6;
 }
 
-.msg-usage .usage-item.cumulative {
+.msg-usage .usage-cumulative {
   color: var(--muted);
-  font-weight: 400;
-  margin-left: auto;
+  font-family: inherit;
 }
 </style>
 
