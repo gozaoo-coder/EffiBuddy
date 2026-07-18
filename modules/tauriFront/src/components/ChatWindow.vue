@@ -18,6 +18,7 @@ import type {
   AgentToolCallPayload,
   AgentToolResultPayload,
   AgentAttachmentPayload,
+  AgentUsagePayload,
   ToolCallRecord,
   PickedFile,
   QuoteChip,
@@ -61,11 +62,80 @@ const stickToBottom = ref(true)
 let mutationObserver: MutationObserver | null = null
 let scrollRafId: number | null = null
 
-// 每个助手气泡的元数据：reasoning / tool calls（流式期间累积，不持久化）
+// ---------- msg-bubble 高度变化动画 ----------
+// 每个气泡挂一个 ResizeObserver：当内容增长导致自然高度变化时，
+// 用 anime.js 平滑过渡 height（取代 height: auto/fit-content 的瞬变）。
+// 采用 FLIP 思路：在 ResizeObserver 回调里（layout 后、paint 前）
+// 立即把高度锁定到旧值（INVERT），再让 anime.js 动画到新值（PLAY），
+// 避免出现"先变大再回缩"的视觉抖动。
+// 生成（spawn）期间禁用观察，避免与 spawn 动画相互触发。
+interface BubbleAnimState {
+  el: HTMLElement
+  observer: ResizeObserver
+  isAnimating: boolean
+  isSpawning: boolean
+  lastHeight: number
+}
+const bubbleAnimMap = new Map<string, BubbleAnimState>()
+
+function setupBubbleAnim(el: HTMLElement, id: string) {
+  // 清理旧观察（若存在）
+  teardownBubbleAnim(id)
+  const state: BubbleAnimState = {
+    el,
+    observer: null as unknown as ResizeObserver,
+    isAnimating: false,
+    isSpawning: true, // spawn 期间禁用
+    lastHeight: 0,
+  }
+  const onResize = () => {
+    if (state.isAnimating || state.isSpawning) return
+    // 此时浏览器已 layout 出新尺寸但尚未 paint，立即用旧值 INVERT 可避免跳变
+    const newHeight = el.offsetHeight
+    if (Math.abs(newHeight - state.lastHeight) < 1) return
+    const fromHeight = state.lastHeight
+    state.isAnimating = true
+    // 锁定到旧值，防止下一帧 paint 出新高度
+    el.style.height = fromHeight + 'px'
+    el.style.overflow = 'hidden'
+    // 动画到新自然高度（PLAY）
+    animate(el, {
+      height: [fromHeight + 'px', newHeight + 'px'],
+      duration: 220,
+      ease: 'out(3)',
+      onComplete: () => {
+        el.style.height = ''
+        el.style.overflow = ''
+        // 释放后重新读取当前自然高度作为下一次基准
+        state.lastHeight = el.offsetHeight
+        state.isAnimating = false
+      },
+    })
+  }
+  const observer = new ResizeObserver(onResize)
+  observer.observe(el)
+  state.observer = observer
+  bubbleAnimMap.set(id, state)
+}
+
+function teardownBubbleAnim(id: string) {
+  const state = bubbleAnimMap.get(id)
+  if (!state) return
+  state.observer.disconnect()
+  bubbleAnimMap.delete(id)
+}
+
+function teardownAllBubbleAnim() {
+  bubbleAnimMap.forEach((_, id) => teardownBubbleAnim(id))
+}
+
+// 每个助手气泡的元数据：reasoning / tool calls / usage（流式期间累积，不持久化）
 interface BubbleMeta {
   reasoning: string
   isThinking: boolean
   toolCalls: ToolCallRecord[]
+  /** token 使用统计：仅在 agent-usage 事件到达后赋值，流式结束保留显示 */
+  usage: AgentUsagePayload | null
 }
 const bubbleMeta = reactive<Record<string, BubbleMeta>>({})
 
@@ -86,6 +156,7 @@ function ensureMeta(id: string): BubbleMeta {
       reasoning: '',
       isThinking: false,
       toolCalls: [],
+      usage: null,
     }
   }
   return bubbleMeta[id]
@@ -223,8 +294,9 @@ function removeMessageFromView(id: string) {
   const idx = messages.value.findIndex((m) => m.id === id)
   if (idx < 0) return
   messages.value.splice(idx, 1)
-  // 同步清理 bubbleMeta 与 quoteChips
+  // 同步清理 bubbleMeta / quoteChips / 高度动画观察器
   delete bubbleMeta[id]
+  teardownBubbleAnim(id)
   quoteChips.value = quoteChips.value.filter((q) => q.messageId !== id)
   toast({ content: '已从视图移除', type: 'info' })
 }
@@ -365,8 +437,9 @@ async function loadConversation() {
   const id = activeId.value
   if (!id) {
     messages.value = []
-    // 清空 meta 与附件缓存
+    // 清空 meta / 附件缓存 / 高度动画观察器
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    teardownAllBubbleAnim()
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
     // 清空引用块，避免残留上一会话的引用
@@ -378,7 +451,8 @@ async function loadConversation() {
     messages.value = conv?.messages ?? []
     // 历史会话不携带 reasoning/tools 元数据，清空
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
-    // 切换会话时清空旧附件缓存，避免上一会话的 data URL 残留占用内存
+    // 切换会话时清空旧高度动画观察器与附件缓存，避免上一会话残留
+    teardownAllBubbleAnim()
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     // 清空引用块，避免残留上一会话的引用
     quoteChips.value = []
@@ -392,6 +466,7 @@ async function loadConversation() {
     console.warn('get_conversation failed', e)
     messages.value = []
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    teardownAllBubbleAnim()
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
   }
@@ -436,15 +511,54 @@ async function clearWorkingDir() {
 }
 
 // ---------- 消息渲染 ----------
+// bubble spawn 动画：scale + opacity + 占位高度 0 → 实际大小
+// 通过 anime.js 同时驱动 height / opacity / scale，使气泡"生长"出现
 async function addMessage(msg: Message) {
   messages.value.push(msg)
   await nextTick()
-  animate('.msg-bubble:last-child', {
+  const el = document.getElementById('msg-' + msg.id)
+  if (!el) {
+    scrollBottom()
+    return
+  }
+  // 先挂上高度动画观察器（spawn 期间禁用，避免与 spawn 动画相互触发）
+  setupBubbleAnim(el, msg.id)
+  const state = bubbleAnimMap.get(msg.id)
+
+  // 测量自然高度（在设置显式 height 之前）
+  const naturalHeight = el.offsetHeight
+  if (state) state.lastHeight = naturalHeight
+
+  // 初始状态：高度 0 / 透明 / 缩放 0.85（顶部锚点，自上而下生长）
+  el.style.height = '0px'
+  el.style.opacity = '0'
+  el.style.transform = 'scale(0.85)'
+  el.style.transformOrigin = 'center top'
+  el.style.overflow = 'hidden'
+  // 强制 reflow 确保 anime.js 起点准确
+  void el.offsetHeight
+
+  animate(el, {
+    height: [0, naturalHeight + 'px'],
     opacity: [0, 1],
-    translateY: [10, 0],
-    duration: 400,
-    easing: 'easeOutQuad',
+    scale: [0.85, 1],
+    duration: 380,
+    ease: 'out(3)',
+    onComplete: () => {
+      // 清除内联样式，让后续增长可被 ResizeObserver 自然捕获
+      el.style.height = ''
+      el.style.opacity = ''
+      el.style.transform = ''
+      el.style.transformOrigin = ''
+      el.style.overflow = ''
+      if (state) {
+        // 释放后 reflow，把基准对齐到当前实际高度
+        state.lastHeight = el.offsetHeight
+        state.isSpawning = false
+      }
+    },
   })
+
   scrollBottom()
 }
 
@@ -586,6 +700,28 @@ async function onAttachment(payload: AgentAttachmentPayload) {
   await loadAttachmentDataUrl(payload.attachment)
   await nextTick()
   scrollBottom()
+}
+
+// ---------- token 使用统计 ----------
+// agent-usage 事件在每次 CompletionCall 结束时 emit 一次：
+//   - 单次值（input_tokens/output_tokens/total_tokens/reasoning_tokens）：本次 completion
+//   - 累计值（cumulative_*）：本轮会话所有 completion 的累加
+// 写入"当前 streamingBubbleId"对应的 meta.usage；若介于两段 completion 之间
+// （streamingBubbleId 已被清空但新 token 未到达），回退到最近一条 assistant 消息。
+async function onUsage(p: AgentUsagePayload) {
+  let targetId = streamingBubbleId.value
+  if (!targetId) {
+    // 回退：找最后一条 assistant 消息
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].role === 'assistant') {
+        targetId = messages.value[i].id
+        break
+      }
+    }
+  }
+  if (!targetId) return
+  const meta = ensureMeta(targetId)
+  meta.usage = p
 }
 
 // ---------- 图片预览 ----------
@@ -894,6 +1030,14 @@ onMounted(async () => {
   )
 
   unlistens.push(
+    await listen<AgentUsagePayload>('agent-usage', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onUsage(p)
+    }),
+  )
+
+  unlistens.push(
     await listen<StreamTokenPayload>('agent-done', async (e) => {
       const p = e.payload
       if (activeId.value && p.conversation_id !== activeId.value) return
@@ -937,6 +1081,8 @@ onUnmounted(() => {
     clearTimeout(msgLongPressTimer)
     msgLongPressTimer = null
   }
+  // 清理所有 bubble 高度动画观察器
+  teardownAllBubbleAnim()
   window.removeEventListener('keydown', onPreviewKeydown)
 })
 </script>
@@ -1036,6 +1182,30 @@ onUnmounted(() => {
                 </div>
                 <div class="msg-attachment-meta">{{ att.name }}</div>
               </div>
+            </div>
+            <!-- token 使用统计：每次 CompletionCall 结束后实时显示 -->
+            <div
+              v-if="getMeta(m.id)?.usage"
+              class="msg-usage"
+              :class="{ streaming: m.id === streamingBubbleId }"
+            >
+              <span class="usage-item input" title="本次输入 tokens">
+                ↓{{ getMeta(m.id)!.usage!.input_tokens }}
+              </span>
+              <span class="usage-item output" title="本次输出 tokens">
+                ↑{{ getMeta(m.id)!.usage!.output_tokens }}
+              </span>
+              <span
+                v-if="getMeta(m.id)!.usage!.reasoning_tokens > 0"
+                class="usage-item reasoning"
+                title="推理 tokens"
+              >
+                ✦{{ getMeta(m.id)!.usage!.reasoning_tokens }}
+              </span>
+              <span class="usage-sep">·</span>
+              <span class="usage-item cumulative" title="本轮累计 tokens">
+                累计 {{ getMeta(m.id)!.usage!.cumulative_total }}
+              </span>
             </div>
           </template>
           <template v-else>{{ m.content }}</template>
@@ -1365,7 +1535,6 @@ onUnmounted(() => {
   color: var(--text);
   background: transparent;
   border: none;
-  border-radius: var(--radius-full);
   outline: none;
   line-height: 1.4;
 }
@@ -1451,7 +1620,7 @@ onUnmounted(() => {
 /* composer-container 包裹层：亮色 #CFCFCF，暗色用 --card-2 */
 .composer-container {
   background: var(--card-2);
-  border-radius: 30px;
+  border-radius: 32px;
   padding: 5px;
   transition: background var(--duration-fast) var(--ease-standard);
 }
@@ -1472,6 +1641,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   padding: 4px 4px;
+  /* margin-bottom: 5px; */
 }
 
 .meta-pill {
@@ -1816,6 +1986,55 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* token 使用统计：assistant 气泡底部小标签 */
+.msg-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.msg-usage.streaming {
+  opacity: 0.85;
+}
+
+.msg-usage .usage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 500;
+}
+
+.msg-usage .usage-item.input {
+  color: var(--accent, #4a7eff);
+}
+
+.msg-usage .usage-item.output {
+  color: var(--success, #10a37f);
+}
+
+.msg-usage .usage-item.reasoning {
+  color: var(--warn, #d97757);
+}
+
+.msg-usage .usage-sep {
+  opacity: 0.5;
+  margin: 0 2px;
+}
+
+.msg-usage .usage-item.cumulative {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: auto;
 }
 </style>
 

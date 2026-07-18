@@ -34,7 +34,7 @@ import {
   useSnackbar,
 } from './basic'
 import { useAnimeTransition } from '../composables/useAnimeTransition'
-import type { AgentConfig, AvailableModel, ProviderPreset, BackendKind, ModelKind } from '../types'
+import type { AgentConfig, AvailableModel, ProviderPreset, RemoteModelInfo, BackendKind, ModelKind } from '../types'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', backend: string): void }>()
@@ -139,13 +139,57 @@ const recommendedModels: Record<string, string[]> = {
   moonshot: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
 }
 
+// 从 API 实际拉取的可用模型列表（用户点"从 API 获取"按钮触发）
+// 优先级高于 recommendedModels：有值时 Dropdown 显示 API 列表
+const remoteModels = ref<RemoteModelInfo[]>([])
+const fetchingModels = ref(false)
+
 const modelDropdownOptions = computed<DropdownOption[]>(() => {
+  // 优先用 API 拉取的列表
+  if (remoteModels.value.length > 0) {
+    return remoteModels.value.map((m) => ({
+      label: m.id + (m.owned_by ? ` · ${m.owned_by}` : ''),
+      value: m.id,
+    }))
+  }
+  // 退回到硬编码推荐列表
   const list = recommendedModels[draft.value.provider_id]
   if (!list) return []
   return list.map((m) => ({ label: m, value: m }))
 })
 
 const hasModelRecommendations = computed(() => modelDropdownOptions.value.length > 0)
+
+// 从 API 拉取可用模型列表
+// 要求用户已填 base_url 与 api_key，否则提示
+async function fetchRemoteModels() {
+  if (!draft.value.base_url.trim()) {
+    toast({ content: '请先填写 Base URL', type: 'warn' })
+    return
+  }
+  if (!draft.value.api_key.trim()) {
+    toast({ content: '请先填写 API Key', type: 'warn' })
+    return
+  }
+  fetchingModels.value = true
+  try {
+    const list = await invoke<RemoteModelInfo[]>('list_remote_models', {
+      baseUrl: draft.value.base_url,
+      apiKey: draft.value.api_key,
+    })
+    remoteModels.value = list
+    if (list.length === 0) {
+      toast({ content: 'API 返回空列表', type: 'warn' })
+    } else {
+      toast({ content: `已获取 ${list.length} 个可用模型`, type: 'success' })
+    }
+  } catch (e) {
+    toast({ content: `拉取模型失败：${e}`, type: 'error' })
+    remoteModels.value = []
+  } finally {
+    fetchingModels.value = false
+  }
+}
 
 // ---------- 数据加载 ----------
 onMounted(async () => {
@@ -213,6 +257,8 @@ function resetDraft() {
   saveLabel.value = ''
   showApiKey.value = false
   preambleExpanded.value = false
+  // 清空 API 拉取的模型列表，避免残留
+  remoteModels.value = []
 }
 
 // ---------- provider 选择 ----------
@@ -224,6 +270,8 @@ function selectPreset(p: ProviderPreset) {
   }
   draft.value.backend = 'openai'
   editingId.value = null
+  // 切换 provider 后清空 API 拉取列表（不同 provider 模型不同）
+  remoteModels.value = []
 }
 
 function onModelNameDropdownChange(v: string | number, _opt: DropdownOption) {
@@ -716,23 +764,44 @@ function onClose() {
               />
             </div>
             <div class="field">
-              <label class="field-label">模型名</label>
-              <Dropdown
-                v-if="hasModelRecommendations && !isImageGen"
-                :model-value="draft.model_name"
-                :options="modelDropdownOptions"
-                :searchable="true"
-                placeholder="选择或搜索推荐模型..."
-                size="md"
-                @change="onModelNameDropdownChange"
-              />
-              <input
-                v-else
-                v-model="draft.model_name"
-                type="text"
-                :placeholder="isImageGen ? 'dall-e-3 / flux-pro / sd3' : 'gpt-4o-mini'"
-                class="field-input"
-              />
+              <label class="field-label">
+                模型名
+                <span
+                  v-if="remoteModels.length > 0"
+                  class="api-source-badge"
+                  :title="`来自 API（${remoteModels.length} 个可用模型）`"
+                >API</span>
+              </label>
+              <div class="model-name-row">
+                <Dropdown
+                  v-if="hasModelRecommendations && !isImageGen"
+                  :model-value="draft.model_name"
+                  :options="modelDropdownOptions"
+                  :searchable="true"
+                  :placeholder="remoteModels.length > 0 ? '搜索 API 模型...' : '选择或搜索推荐模型...'"
+                  size="md"
+                  class="model-name-dropdown"
+                  @change="onModelNameDropdownChange"
+                />
+                <input
+                  v-else
+                  v-model="draft.model_name"
+                  type="text"
+                  :placeholder="isImageGen ? 'dall-e-3 / flux-pro / sd3' : 'gpt-4o-mini'"
+                  class="field-input"
+                />
+                <button
+                  type="button"
+                  class="fetch-models-btn"
+                  :disabled="fetchingModels || isImageGen"
+                  :title="isImageGen ? '图像生成模型不支持拉取列表' : '从 API 拉取可用模型'"
+                  @click="fetchRemoteModels"
+                >
+                  <span v-if="fetchingModels" class="fetch-spinner"></span>
+                  <Icon v-else name="refresh" :size="16" />
+                  <span class="fetch-btn-text">{{ fetchingModels ? '拉取中' : '从 API 获取' }}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1230,6 +1299,85 @@ function onClose() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+/* ---------- 模型名行：Dropdown + 从 API 获取按钮 ---------- */
+.model-name-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.model-name-dropdown {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-name-row .field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* API 来源徽标 */
+.api-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #4a7eff, #6c5ce7);
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+/* 从 API 获取按钮 */
+.fetch-models-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.1));
+  border-radius: 8px;
+  background: var(--bg-elevated, rgba(0, 0, 0, 0.04));
+  color: var(--text-secondary, inherit);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.fetch-models-btn:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(74, 126, 255, 0.1));
+  border-color: var(--accent, #4a7eff);
+  color: var(--accent, #4a7eff);
+}
+
+.fetch-models-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fetch-btn-text {
+  line-height: 1;
+}
+
+/* 加载旋转动画 */
+.fetch-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: fetch-spin 0.8s linear infinite;
+}
+
+@keyframes fetch-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .input-with-action {

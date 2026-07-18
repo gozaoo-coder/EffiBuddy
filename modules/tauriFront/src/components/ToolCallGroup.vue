@@ -59,6 +59,10 @@ function expandGroup() {
       opacity: [0, 1],
       duration: 280,
       ease: 'out(3)',
+      onComplete: () => {
+        // 释放显式 maxHeight，让后续新增 tool 项可自然撑高并触发动画
+        el.style.maxHeight = ''
+      },
     })
   })
 }
@@ -73,12 +77,45 @@ function collapseGroup() {
       ease: 'inOut(2)',
       onComplete: () => {
         groupCollapsed.value = true
+        el.style.maxHeight = ''
       },
     })
   } else {
     groupCollapsed.value = true
   }
 }
+
+// 监听 calls 长度变化：新增 tool 项时，对 group-body 高度变化做 anime.js 动画
+// 用 flush:'pre' 在 DOM 更新前捕获旧高度并锁定，nextTick 后测量新自然高度并动画过渡
+watch(
+  () => props.calls.length,
+  (n, old) => {
+    if (n <= old) return
+    if (groupCollapsed.value) return // 折叠状态下不可见，无需动画
+    const el = groupBodyRef.value
+    if (!el) return
+    // DOM 更新前：当前渲染高度即为旧高度，锁住防止更新时跳变
+    const oldHeight = el.offsetHeight
+    el.style.maxHeight = oldHeight + 'px'
+    nextTick(() => {
+      void el.offsetHeight // 强制 reflow，确保 scrollHeight 反映新 DOM
+      const newHeight = el.scrollHeight
+      if (Math.abs(newHeight - oldHeight) < 1) {
+        el.style.maxHeight = ''
+        return
+      }
+      animate(el, {
+        maxHeight: [oldHeight + 'px', newHeight + 'px'],
+        duration: 220,
+        ease: 'out(3)',
+        onComplete: () => {
+          el.style.maxHeight = ''
+        },
+      })
+    })
+  },
+  { flush: 'pre' },
+)
 
 // 点击单条 tool call → 弹出详情
 function openDetail(idx: number) {

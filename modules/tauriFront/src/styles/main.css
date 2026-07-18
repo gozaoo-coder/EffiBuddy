@@ -584,7 +584,7 @@ button:disabled {
   padding: 6px 8px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: 27px;
   box-shadow: var(--shadow-sm);
 }
 

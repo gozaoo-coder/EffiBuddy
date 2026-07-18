@@ -893,9 +893,17 @@ impl ChatAgent for RigAgent {
                         // rig 执行工具前的事件，与 ToolCall 重复，跳过
                         continue;
                     }
-                    Ok(MultiTurnStreamItem::CompletionCall(_)) => {
-                        // 单次 completion 请求的 usage 统计，暂不透传
-                        continue;
+                    Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                        // 透传单次 completion 请求的 usage 统计：
+                        // 前端累计所有 Usage 事件得到本轮对话的总 token 消耗。
+                        // provider 未返回 usage 时所有字段为 0（rig 的零值哨兵），
+                        // 前端可据此判断是否展示 token 统计。
+                        yield Ok(AgentStreamItem::Usage {
+                            input_tokens: call.usage.input_tokens,
+                            output_tokens: call.usage.output_tokens,
+                            total_tokens: call.usage.total_tokens,
+                            reasoning_tokens: call.usage.reasoning_tokens,
+                        });
                     }
                     Ok(MultiTurnStreamItem::FinalResponse(_)) => {
                         // 流结束

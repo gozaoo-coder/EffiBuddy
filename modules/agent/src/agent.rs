@@ -61,11 +61,13 @@ pub struct ContextPreview {
 /// - `Reasoning`：推理/思考链增量（DeepSeek-R1 / o1 等模型产生）
 /// - `ToolCallStart`：模型决定调用工具，携带工具名与参数
 /// - `ToolResult`：工具执行完成，携带返回内容
+/// - `Usage`：单次 completion 请求的 token 使用统计（透传 rig 的 CompletionCall.usage）
 ///
 /// 设计要点：
 /// - 用 `serde_json::Value` 携带工具参数，避免 agent 模块依赖 rig 的 ToolCall 类型
 /// - 枚举本身 provider 无关，可被任何 ChatAgent 实现复用
 /// - `call_id` 用于前端关联 "调用开始" 与 "执行结果"
+/// - `Usage` 累计所有 completion 调用的 token 消耗，前端据此显示实际成本
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentStreamItem {
@@ -94,6 +96,21 @@ pub enum AgentStreamItem {
         output: String,
         /// 是否为错误结果
         is_error: bool,
+    },
+    /// 单次 completion 请求的 token 使用统计
+    ///
+    /// rig 在每次调用 LLM 时 emit `CompletionCall(usage)`，agent 透传给前端。
+    /// 前端累计所有 Usage 事件得到本轮对话的总 token 消耗。
+    /// provider 未返回 usage 时所有字段为 0（rig 的零值哨兵）。
+    Usage {
+        /// 输入（prompt）token 数
+        input_tokens: u64,
+        /// 输出（completion）token 数
+        output_tokens: u64,
+        /// 总 token 数（部分 provider 仅返回总数）
+        total_tokens: u64,
+        /// 推理 token 数（o1 / DeepSeek-R1 等模型的思考链）
+        reasoning_tokens: u64,
     },
 }
 

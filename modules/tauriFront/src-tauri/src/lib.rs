@@ -31,6 +31,7 @@ use effisuite_core::clawhub::{
     SkillListResponse, SkillResponse, SearchResponse,
 };
 use effisuite_p2p::P2pManager;
+use serde::Deserialize;
 use futures::StreamExt;
 use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
@@ -673,6 +674,177 @@ async fn set_theme(
 }
 
 // =========================================================
+// 远程模型列表：调用 OpenAI 兼容 /v1/models 接口
+// =========================================================
+
+/// 远程模型条目（OpenAI /v1/models 响应中的 data 元素）
+///
+/// 字段对齐 OpenAI 官方 API；id 为模型标识（如 gpt-4o-mini），
+/// owned_by 为归属（openai / organization-owner / ...）。
+/// permission 字段对前端无用，直接丢弃避免反序列化失败。
+#[derive(Debug, serde::Serialize)]
+struct RemoteModelInfo {
+    id: String,
+    object: String,
+    owned_by: String,
+    /// 模型创建时间（Unix 秒），部分 provider 不返回，留 None
+    created: Option<u64>,
+}
+
+/// /v1/models 响应
+#[derive(Deserialize)]
+struct RemoteModelsResponse {
+    data: Vec<RemoteModelData>,
+}
+
+#[derive(Deserialize)]
+struct RemoteModelData {
+    id: String,
+    #[serde(default)]
+    object: Option<String>,
+    #[serde(default)]
+    owned_by: Option<String>,
+    #[serde(default)]
+    created: Option<u64>,
+}
+
+/// /v1/models/{model} 响应：单个模型
+#[derive(Deserialize)]
+struct RemoteModelDetailResponse {
+    id: String,
+    #[serde(default)]
+    object: Option<String>,
+    #[serde(default)]
+    owned_by: Option<String>,
+    #[serde(default)]
+    created: Option<u64>,
+}
+
+/// 列出 API 可用模型
+///
+/// 调用 OpenAI 兼容 `GET {base_url}/models` 接口，返回模型列表。
+/// 用于在 ModelConfigPanel 中让用户从 API 实际可用模型中选择，
+/// 而不是硬编码推荐列表。
+///
+/// 参数：
+/// - `base_url`：API 基地址（如 https://api.openai.com/v1）
+/// - `api_key`：Bearer token
+#[tauri::command]
+async fn list_remote_models(
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<RemoteModelInfo>, String> {
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空，无法拉取模型列表".into());
+    }
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败: {e}"))?;
+    let resp = client
+        .get(&url)
+        .bearer_auth(&api_key)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {}", truncate_str(&body, 300)));
+    }
+    // 手动用 serde_json 解析，避免依赖 reqwest 的 json feature
+    let body_bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应体失败: {e}"))?;
+    let parsed: RemoteModelsResponse = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+    // 按 id 排序，便于前端展示
+    let mut list: Vec<_> = parsed
+        .data
+        .into_iter()
+        .map(|d| RemoteModelInfo {
+            id: d.id,
+            object: d.object.unwrap_or_else(|| "model".to_string()),
+            owned_by: d.owned_by.unwrap_or_default(),
+            created: d.created,
+        })
+        .collect();
+    list.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(list)
+}
+
+/// 检索单个模型详情
+///
+/// 调用 OpenAI 兼容 `GET {base_url}/models/{model}` 接口。
+#[tauri::command]
+async fn get_remote_model(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<RemoteModelInfo, String> {
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空".into());
+    }
+    let url = format!(
+        "{}/models/{}",
+        base_url.trim_end_matches('/'),
+        urlencoding_encode(&model)
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("构造 HTTP 客户端失败: {e}"))?;
+    let resp = client
+        .get(&url)
+        .bearer_auth(&api_key)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {}", truncate_str(&body, 300)));
+    }
+    let body_bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应体失败: {e}"))?;
+    let parsed: RemoteModelDetailResponse = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+    Ok(RemoteModelInfo {
+        id: parsed.id,
+        object: parsed.object.unwrap_or_else(|| "model".to_string()),
+        owned_by: parsed.owned_by.unwrap_or_default(),
+        created: parsed.created,
+    })
+}
+
+/// URL 路径段编码（model id 含 `:` `/` 等需转义）
+fn urlencoding_encode(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u8)
+            }
+        })
+        .collect()
+}
+
+/// 截断字符串到最大字符数（按 char 边界），附加 … 省略号
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut s = s.chars().take(max_chars).collect::<String>();
+    s.push('…');
+    s
+}
+
+// =========================================================
 // 命令：会话管理
 // =========================================================
 
@@ -1148,6 +1320,8 @@ async fn send_message_stream(
             std::collections::HashMap::new();
         // 收集 image_gen 工具生成的图片附件，流结束后注入到助手消息
         let mut image_attachments: Vec<Attachment> = Vec::new();
+        // 累计本轮所有 completion 的 token 使用统计，agent-done 时一并下发
+        let mut usage_summary = UsageSummary::default();
 
         while let Some(chunk) = stream.next().await {
             match chunk {
@@ -1241,6 +1415,35 @@ async fn send_message_stream(
                         },
                     );
                 }
+                Ok(AgentStreamItem::Usage {
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    reasoning_tokens,
+                }) => {
+                    // 透传单次 completion 的 token 使用统计。
+                    // 前端累计所有 Usage 事件得到本轮总消耗，显示在气泡底部。
+                    // 累计到 usage_summary 供 agent-done 时一并返回（前端可在 done 后仍更新）。
+                    usage_summary.input_tokens += input_tokens;
+                    usage_summary.output_tokens += output_tokens;
+                    usage_summary.total_tokens += total_tokens;
+                    usage_summary.reasoning_tokens += reasoning_tokens;
+                    let _ = handle.emit(
+                        "agent-usage",
+                        &AgentUsagePayload {
+                            conversation_id: &conv_id,
+                            input_tokens,
+                            output_tokens,
+                            total_tokens,
+                            reasoning_tokens,
+                            // 累计值一并下发，前端可直接用累计值显示
+                            cumulative_input: usage_summary.input_tokens,
+                            cumulative_output: usage_summary.output_tokens,
+                            cumulative_total: usage_summary.total_tokens,
+                            cumulative_reasoning: usage_summary.reasoning_tokens,
+                        },
+                    );
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "stream error");
                     let _ = handle.emit(
@@ -1319,6 +1522,35 @@ struct AgentToolCallPayload<'a> {
     tool_name: &'a str,
     /// JSON 字符串形式的参数
     arguments: &'a str,
+}
+
+/// 本轮对话累计 token 使用统计（agent-usage 事件携带单次 + 累计值）
+#[derive(Debug, Default, Clone, Copy)]
+struct UsageSummary {
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    reasoning_tokens: u64,
+}
+
+/// token 使用统计 payload（agent-usage 事件）
+///
+/// 同时下发"本次单次"与"本轮累计"两组数据：
+/// - 单次值：当前 completion 的 token 消耗
+/// - 累计值：本轮所有 completion 的总和，前端可直接显示
+#[derive(Debug, serde::Serialize)]
+struct AgentUsagePayload<'a> {
+    conversation_id: &'a str,
+    // 本次单次值
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    reasoning_tokens: u64,
+    // 本轮累计值
+    cumulative_input: u64,
+    cumulative_output: u64,
+    cumulative_total: u64,
+    cumulative_reasoning: u64,
 }
 
 /// 工具执行结果 payload（agent-tool-result 事件）
@@ -2224,6 +2456,8 @@ pub fn run() {
             delete_model,
             set_active_model,
             set_image_gen_model,
+            list_remote_models,
+            get_remote_model,
             generate_image,
             read_attachment,
             // theme

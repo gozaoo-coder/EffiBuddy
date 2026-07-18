@@ -10,8 +10,10 @@
  * - 思考完成（isThinking: true → false）时自动折叠
  * - 标题栏可点击切换展开/折叠
  * - 展开/折叠使用 anime.js v4 动画（max-height + opacity）
+ * - 流式期间：内容每增长 200px 用 anime.js 平滑滚动到底端；
+ *   用户手动上滑后停止自动跟随，滑回底部时恢复跟随
  */
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { animate } from 'animejs'
 import { Icon } from './basic'
 
@@ -35,6 +37,16 @@ const bodyRef = ref<HTMLElement | null>(null)
 const thinkStart = ref<number>(Date.now())
 const thinkDuration = ref<number>(0)
 
+// ---------- 自动跟随滚动 ----------
+// 阈值：内容每增长 200px 触发一次自动下滑
+const AUTO_SCROLL_DELTA = 200
+// 阈值：距底部小于此值视为"用户在底部"，恢复跟随
+const NEAR_BOTTOM = 80
+// 用户是否手动上滑离开底部
+let userScrolled = false
+// 上次自动滚动后记录的 scrollHeight 基准
+let lastAutoScrollHeight = 0
+
 watch(
   () => props.isThinking,
   (thinking, was) => {
@@ -42,11 +54,60 @@ watch(
       // 开始思考
       thinkStart.value = Date.now()
       collapsed.value = false
+      // 新一轮思考：重置滚动跟随状态
+      userScrolled = false
+      lastAutoScrollHeight = 0
     } else if (!thinking && was) {
       // 思考结束：记录时长，自动折叠
       thinkDuration.value = Math.max(1, Math.round((Date.now() - thinkStart.value) / 1000))
       collapseNow()
     }
+  },
+)
+
+// 滚动事件：用户上滑超过阈值时停止跟随；滑回底部时恢复
+function onBodyScroll() {
+  const el = bodyRef.value
+  if (!el) return
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (distance > NEAR_BOTTOM) {
+    userScrolled = true
+  } else {
+    // 用户回到底部：恢复跟随，并以当前高度为新基准
+    userScrolled = false
+    lastAutoScrollHeight = el.scrollHeight
+  }
+}
+
+// 检查是否需要自动滚动：内容累计增长 >= 200px 时下滑到底
+function checkAutoScroll() {
+  const el = bodyRef.value
+  if (!el) return
+  if (userScrolled) return
+  if (collapsed.value) return
+  const newHeight = el.scrollHeight
+  if (lastAutoScrollHeight === 0) {
+    // 首次初始化基准
+    lastAutoScrollHeight = newHeight
+    return
+  }
+  if (newHeight - lastAutoScrollHeight >= AUTO_SCROLL_DELTA) {
+    // 用 anime.js 平滑下滑到底端
+    animate(el, {
+      scrollTop: newHeight,
+      duration: 320,
+      ease: 'out(3)',
+    })
+    lastAutoScrollHeight = newHeight
+  }
+}
+
+// 监听内容变化：在 DOM 更新后检查是否需要自动下滑
+watch(
+  () => props.content,
+  () => {
+    if (collapsed.value) return
+    nextTick(() => checkAutoScroll())
   },
 )
 
@@ -93,6 +154,20 @@ const titleText = computed(() => {
   if (props.isThinking) return '思考中…'
   if (thinkDuration.value > 0) return `已思考 ${thinkDuration.value} 秒`
   return '推理过程'
+})
+
+// 挂载时绑定滚动监听；卸载时解绑
+onMounted(() => {
+  const el = bodyRef.value
+  if (!el) return
+  el.addEventListener('scroll', onBodyScroll, { passive: true })
+  // 初始化基准高度
+  lastAutoScrollHeight = el.scrollHeight
+})
+
+onUnmounted(() => {
+  const el = bodyRef.value
+  if (el) el.removeEventListener('scroll', onBodyScroll)
 })
 </script>
 

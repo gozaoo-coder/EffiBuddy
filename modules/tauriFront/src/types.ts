@@ -176,6 +176,30 @@ export interface ProviderPreset {
   openai_compat: boolean
 }
 
+/** 远程模型条目（OpenAI 兼容 /v1/models 响应） */
+export interface RemoteModelInfo {
+  id: string
+  object: string
+  owned_by: string
+  /** 模型创建时间（Unix 秒），部分 provider 不返回 */
+  created: number | null
+}
+
+/** 单次/累计 token 使用统计（agent-usage 事件 payload） */
+export interface AgentUsagePayload {
+  conversation_id: string
+  // 本次单次值
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  reasoning_tokens: number
+  // 本轮累计值
+  cumulative_input: number
+  cumulative_output: number
+  cumulative_total: number
+  cumulative_reasoning: number
+}
+
 // =========================================================
 // 流式事件 payload（与 tauriFront/src-tauri/src/lib.rs 中
 // StreamTokenPayload / StreamErrorPayload 对齐）
