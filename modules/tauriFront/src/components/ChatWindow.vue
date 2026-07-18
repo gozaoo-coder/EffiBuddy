@@ -92,6 +92,14 @@ function setupBubbleAnim(el: HTMLElement, id: string) {
     if (state.isAnimating || state.isSpawning) return
     // 此时浏览器已 layout 出新尺寸但尚未 paint，立即用旧值 INVERT 可避免跳变
     const newHeight = el.offsetHeight
+    // 防护：新高度为0（元素被隐藏或内容为空）时不动画
+    if (newHeight < 1) return
+    // 防护：lastHeight 未初始化或为0时，不锁定 height（避免卡0px）
+    // 直接更新基准，让下一次增长触发动画
+    if (state.lastHeight < 1) {
+      state.lastHeight = newHeight
+      return
+    }
     if (Math.abs(newHeight - state.lastHeight) < 1) return
     const fromHeight = state.lastHeight
     state.isAnimating = true
@@ -521,15 +529,46 @@ async function addMessage(msg: Message) {
     scrollBottom()
     return
   }
+  // 强制 layout 确保 offsetHeight 准确（流式首帧可能未 layout）
+  void el.offsetHeight
+  const naturalHeight = el.offsetHeight
+
   // 先挂上高度动画观察器（spawn 期间禁用，避免与 spawn 动画相互触发）
   setupBubbleAnim(el, msg.id)
   const state = bubbleAnimMap.get(msg.id)
 
-  // 测量自然高度（在设置显式 height 之前）
-  const naturalHeight = el.offsetHeight
+  // 元素高度为0（内容为空或未渲染）时跳过 spawn 动画
+  // 立即启用 ResizeObserver，让后续内容增长被捕获（不会卡0px）
+  if (naturalHeight < 1) {
+    if (state) {
+      state.lastHeight = 0
+      state.isSpawning = false
+    }
+    scrollBottom()
+    return
+  }
+
   if (state) state.lastHeight = naturalHeight
 
-  // 初始状态：高度 0 / 透明 / 缩放 0.85（顶部锚点，自上而下生长）
+  // spawn 期间临时切换 box-sizing 为 content-box
+  // 原因：全局 border-box 下 height=0 时元素仍有 padding+border 撑开（约20px），
+  //       anime.js 动画 height 0→naturalHeight 的前半段（0 到 padding+border）无效，
+  //       元素视觉上"卡住"不动，表现为 box-sizing 不对。
+  // 改为 content-box 后 height 只控制 content，动画线性增长；
+  // 配合 scale(0.85→1) + opacity(0→1) 实现从0生长的视觉效果。
+  el.style.boxSizing = 'content-box'
+  // content-box 下 height 只控制 content，需计算目标 content 高度
+  const computed = getComputedStyle(el)
+  const padTop = parseFloat(computed.paddingTop) || 0
+  const padBottom = parseFloat(computed.paddingBottom) || 0
+  const borderTop = parseFloat(computed.borderTopWidth) || 0
+  const borderBottom = parseFloat(computed.borderBottomWidth) || 0
+  const targetContentHeight = Math.max(
+    0,
+    naturalHeight - padTop - padBottom - borderTop - borderBottom,
+  )
+
+  // 初始状态：content 高度 0 / 透明 / 缩放 0.85（顶部锚点，自上而下生长）
   el.style.height = '0px'
   el.style.opacity = '0'
   el.style.transform = 'scale(0.85)'
@@ -539,13 +578,14 @@ async function addMessage(msg: Message) {
   void el.offsetHeight
 
   animate(el, {
-    height: [0, naturalHeight + 'px'],
+    height: ['0px', targetContentHeight + 'px'],
     opacity: [0, 1],
     scale: [0.85, 1],
     duration: 380,
     ease: 'out(3)',
     onComplete: () => {
       // 清除内联样式，让后续增长可被 ResizeObserver 自然捕获
+      el.style.boxSizing = ''
       el.style.height = ''
       el.style.opacity = ''
       el.style.transform = ''
