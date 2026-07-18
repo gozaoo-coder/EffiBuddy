@@ -8,6 +8,7 @@ import DevicePanel from './components/DevicePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
+import PluginPanel from './components/PluginPanel.vue'
 import ClawHubPanel from './components/ClawHubPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
 import { IconButton, Icon, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
@@ -23,6 +24,7 @@ const settingsOpen = ref(false)
 const modelConfigOpen = ref(false)
 const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
+const pluginPanelOpen = ref(false)
 const clawhubPanelOpen = ref(false)
 // 当前选中的会话 id（由 SideNav 选择或 ChatWindow 新建时更新）
 const currentConversationId = ref<string | null>(null)
@@ -115,7 +117,13 @@ function openSkills() {
 function openClawHub() {
   sideNavOpen.value = false
   skillPanelOpen.value = false
+  pluginPanelOpen.value = false
   clawhubPanelOpen.value = true
+}
+
+function openPluginPanel() {
+  sideNavOpen.value = false
+  pluginPanelOpen.value = true
 }
 
 // 顶部药丸导航中显示的当前模型名称
@@ -189,6 +197,7 @@ const modelDisplay = computed(() => {
       @open-model-config="openModelConfig"
       @open-scheduled-tasks="openScheduledTasks"
       @open-skills="openSkills"
+      @open-plugin-panel="openPluginPanel"
       @open-clawhub="openClawHub"
       @select-conversation="handleSelectConv"
     />
@@ -208,6 +217,12 @@ const modelDisplay = computed(() => {
     <SkillPanel
       :open="skillPanelOpen"
       @close="skillPanelOpen = false"
+      @open-clawhub="openClawHub"
+    />
+
+    <PluginPanel
+      :open="pluginPanelOpen"
+      @close="pluginPanelOpen = false"
       @open-clawhub="openClawHub"
     />
 
