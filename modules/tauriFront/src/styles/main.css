@@ -90,12 +90,14 @@
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.16);
 
-  /* z-index 层级（toast > dialog > sheet > menu > popup > dropdown > default） */
+  /* z-index 层级（toast > menu > dialog > sheet > popup > dropdown > default）
+     menu 作为临时弹出操作层，需要覆盖 sheet/dialog 等容器，
+     但低于 toast。 */
   --z-dropdown: 100;
   --z-popup: 200;
-  --z-menu: 300;
-  --z-sheet: 400;
-  --z-dialog: 500;
+  --z-sheet: 300;
+  --z-dialog: 400;
+  --z-menu: 500;
   --z-toast: 1000;
 }
 
