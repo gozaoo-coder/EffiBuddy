@@ -79,7 +79,7 @@ const draft = ref({
   api_key: '',
   base_url: '',
   model_name: '',
-  preamble: '你是 EffiSuite 的 AI 助手，简洁友好地回答用户问题。',
+  preamble: '你是 EffiSuite 的 AI 助手。遵守以下准则：\n【回答】简短直接，不重复用户问题，不堆砌铺垫与废话。\n【执行】调用工具前，先用 1-3 句话简述最优实现路径（含关键步骤/文件/技术选型），再发起工具调用。\n【原则】优先最短路径，避免试错；工具失败时给出明确下一步，不空谈。',
   enable_tools: true,
   // 模型能力类型：chat（对话）/ image_gen（图像生成）
   kind: 'chat' as ModelKind,
@@ -249,7 +249,7 @@ function resetDraft() {
     api_key: '',
     base_url: '',
     model_name: '',
-    preamble: '你是 EffiSuite 的 AI 助手，简洁友好地回答用户问题。',
+    preamble: '你是 EffiSuite 的 AI 助手。遵守以下准则：\n【回答】简短直接，不重复用户问题，不堆砌铺垫与废话。\n【执行】调用工具前，先用 1-3 句话简述最优实现路径（含关键步骤/文件/技术选型），再发起工具调用。\n【原则】优先最短路径，避免试错；工具失败时给出明确下一步，不空谈。',
     enable_tools: true,
     kind: 'chat',
     image_size: '',

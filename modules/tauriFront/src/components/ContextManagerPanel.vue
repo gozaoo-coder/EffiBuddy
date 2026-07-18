@@ -264,7 +264,7 @@ async function copyFullPrompt() {
             v-model="preambleDraft"
             rows="6"
             class="preamble-textarea"
-            placeholder="例如：你是 EffiSuite 的 AI 助手，简洁友好地回答用户问题。"
+            placeholder="例如：你是 EffiSuite 的 AI 助手。简短回答；调用工具前先用 1-3 句话简述最优实现路径，再发起调用。"
           ></textarea>
 
           <div class="preamble-actions">
