@@ -939,6 +939,25 @@ impl ChatAgent for RigAgent {
                         continue;
                     }
                     Err(e) => {
+                        let err_str = e.to_string();
+                        // skill 的 preamble 可能提到未在 agent 中注册的工具，
+                        // 直接报错会中断整个流。这里把 UnknownToolCall 转换为
+                        // 一条可读的 assistant 文本，让前端正常显示并结束本轮。
+                        if err_str.contains("UnknownToolCall") {
+                            let tool_name = err_str
+                                .split('`')
+                                .nth(1)
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or("unknown");
+                            yield Ok(AgentStreamItem::Text {
+                                content: format!(
+                                    "⚠️ 我尝试调用工具 `{tool_name}`，但它未在当前 agent 中注册。\
+                                     这通常是因为某个 skill 的说明里提到了未实现的工具。\
+                                     请检查该 skill 是否完整安装，或让我改用 shell / 其他可用工具继续。"
+                                ),
+                            });
+                            return;
+                        }
                         yield Err(CoreError::Agent(format!("rig stream item: {e}")));
                         return;
                     }
