@@ -10,6 +10,7 @@
 //!   永久注入到每轮 prompt 的 `[永久记忆]` 段（不依赖检索相关性）
 //! - [`GetTimeTool`]：获取当前时间，便于 LLM 回答时间相关问题
 //! - [`ReadFileTool`]：读取本地文件内容（支持工作区相对路径）
+//! - [`WriteFileTool`]：写入本地文件（XML/CDATA 包裹避免转义，支持工作区相对路径）
 //! - [`ListFilesTool`]：列出目录内容（支持工作区相对路径）
 //! - [`ShellTool`]：执行本地 shell 命令（集成 agent-reach / browser-act，支持工作区 cwd）
 //! - [`WebFetchTool`]：抓取网页内容
@@ -31,6 +32,7 @@ pub mod set_title;
 pub mod shell;
 pub mod skill_tools;
 pub mod web_fetch;
+pub mod write_file;
 
 pub use get_time::GetTimeTool;
 pub use image_gen::{ImageGenConfig, ImageGenTool};
@@ -48,6 +50,7 @@ pub use skill_tools::{
     SearchClawHubSkillsTool, EnableSkillTool,
 };
 pub use web_fetch::WebFetchTool;
+pub use write_file::WriteFileTool;
 
 use std::path::{Path, PathBuf};
 

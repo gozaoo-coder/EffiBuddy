@@ -8,7 +8,7 @@
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
 //! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`SearchMemoryTool`、
-//!   `GetTimeTool`、`ReadFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`，
+//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`，
 //!   LLM 可主动调用以检索历史、跨会话记忆、获取时间、读写本地文件、
 //!   执行 shell 命令（集成 agent-reach / browser-act）、抓取网页
 //! - **RAG 记忆增强**：每次对话前自动通过 `MemoryIndex` 检索相关跨会话历史，
@@ -52,7 +52,7 @@ use crate::tools::{
     DeletePinnedMemoryTool, GetSkillDetailTool, GetTimeTool, ImageGenConfig, ImageGenTool,
     InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool, ListPinnedMemoriesTool,
     PinMemoryTool, ReadFileTool, SearchClawHubSkillsTool, SearchHistoryTool, SearchMemoryTool,
-    EnableSkillTool, SetTitleTool, ShellTool, WebFetchTool,
+    EnableSkillTool, SetTitleTool, ShellTool, WebFetchTool, WriteFileTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -286,6 +286,10 @@ impl RigAgent {
                 Some(p) => ReadFileTool::with_cwd(p.clone()),
                 None => ReadFileTool::new(),
             };
+            let write_file = match &cwd {
+                Some(p) => WriteFileTool::with_cwd(p.clone()),
+                None => WriteFileTool::new(),
+            };
             let list_files = match &cwd {
                 Some(p) => ListFilesTool::with_cwd(p.clone()),
                 None => ListFilesTool::new(),
@@ -313,6 +317,7 @@ impl RigAgent {
                 .tool(search)
                 .tool(time)
                 .tool(read_file)
+                .tool(write_file)
                 .tool(list_files)
                 .tool(shell)
                 .tool(web_fetch)
