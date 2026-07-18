@@ -589,17 +589,33 @@ async function onAttachment(payload: AgentAttachmentPayload) {
 }
 
 // ---------- 图片预览 ----------
-// 点击消息内图片打开全屏预览（Teleport 到 body），再次点击遮罩或按 Esc 关闭
+// 点击消息内图片打开全屏预览（Teleport 到 body）。
+// 支持缩放（滚轮/按钮）、平移（拖拽）、旋转（按钮）、双击复位。
+// Esc 关闭，再次点击遮罩关闭。
 const previewState = reactive({
   visible: false,
   url: '',
   name: '',
+  scale: 1,
+  rotate: 0,
+  tx: 0,
+  ty: 0,
 })
+// 拖拽状态：pointerdown 记录起点，pointermove 更新 tx/ty
+const previewDrag = reactive({ active: false, startX: 0, startY: 0, baseTx: 0, baseTy: 0 })
+
+function resetPreviewTransform() {
+  previewState.scale = 1
+  previewState.rotate = 0
+  previewState.tx = 0
+  previewState.ty = 0
+}
 
 function openImagePreview(url: string, name: string) {
   if (!url) return
   previewState.url = url
   previewState.name = name
+  resetPreviewTransform()
   previewState.visible = true
 }
 
@@ -607,10 +623,60 @@ function closeImagePreview() {
   previewState.visible = false
   previewState.url = ''
   previewState.name = ''
+  resetPreviewTransform()
+}
+
+function previewZoomIn() {
+  previewState.scale = Math.min(previewState.scale * 1.25, 8)
+}
+function previewZoomOut() {
+  previewState.scale = Math.max(previewState.scale / 1.25, 0.2)
+}
+function previewRotate() {
+  previewState.rotate = (previewState.rotate + 90) % 360
+}
+
+function onPreviewWheel(e: WheelEvent) {
+  e.preventDefault()
+  if (e.deltaY < 0) previewZoomIn()
+  else previewZoomOut()
+}
+
+function onPreviewPointerDown(e: PointerEvent) {
+  // 仅主键（左键 / 触摸）触发拖拽
+  if (e.button !== 0 && e.pointerType === 'mouse') return
+  previewDrag.active = true
+  previewDrag.startX = e.clientX
+  previewDrag.startY = e.clientY
+  previewDrag.baseTx = previewState.tx
+  previewDrag.baseTy = previewState.ty
+  ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+}
+
+function onPreviewPointerMove(e: PointerEvent) {
+  if (!previewDrag.active) return
+  previewState.tx = previewDrag.baseTx + (e.clientX - previewDrag.startX)
+  previewState.ty = previewDrag.baseTy + (e.clientY - previewDrag.startY)
+}
+
+function onPreviewPointerUp(e: PointerEvent) {
+  previewDrag.active = false
+  ;(e.target as HTMLElement).releasePointerCapture?.(e.pointerId)
+}
+
+function onPreviewDblClick() {
+  // 双击复位缩放与平移（保留旋转）
+  previewState.scale = 1
+  previewState.tx = 0
+  previewState.ty = 0
 }
 
 function onPreviewKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') closeImagePreview()
+  else if (e.key === '+' || e.key === '=') previewZoomIn()
+  else if (e.key === '-') previewZoomOut()
+  else if (e.key === '0') { previewState.scale = 1; previewState.tx = 0; previewState.ty = 0 }
+  else if (e.key === 'r') previewRotate()
 }
 
 async function finalizeStream(full: string) {
@@ -1046,9 +1112,7 @@ onUnmounted(() => {
               <template #icon><Icon name="arrow-up" :size="22" /></template>
             </Button>
           </div>
-        </div>
-
-        <!-- 上下文 ring + 工作区（任务 D.7）-->
+                  <!-- 上下文 ring + 工作区（任务 D.7）-->
         <div class="composer-meta">
           <button
             type="button"
@@ -1071,6 +1135,9 @@ onUnmounted(() => {
             </span>
           </button>
         </div>
+        </div>
+
+
       </div>
     </section>
 
@@ -1234,28 +1301,51 @@ onUnmounted(() => {
     </BindSheet>
 
     <!-- 图片全屏预览：Teleport 到 body，避免被 scoped 样式和层级影响 -->
+    <!-- 支持滚轮缩放、拖拽平移、按钮旋转、双击复位、Esc 关闭 -->
     <Teleport to="body">
       <Transition name="img-preview-fade">
         <div
           v-if="previewState.visible"
           class="img-preview-overlay"
           @click="closeImagePreview"
+          @wheel="onPreviewWheel"
         >
           <img
             :src="previewState.url"
             :alt="previewState.name"
             class="img-preview-img"
+            :style="{ transform: `translate(${previewState.tx}px, ${previewState.ty}px) scale(${previewState.scale}) rotate(${previewState.rotate}deg)` }"
             @click.stop
+            @pointerdown="onPreviewPointerDown"
+            @pointermove="onPreviewPointerMove"
+            @pointerup="onPreviewPointerUp"
+            @pointercancel="onPreviewPointerUp"
+            @dblclick="onPreviewDblClick"
+            draggable="false"
           />
           <div class="img-preview-name">{{ previewState.name }}</div>
-          <button
-            type="button"
-            class="img-preview-close"
-            title="关闭（Esc）"
-            @click.stop="closeImagePreview"
-          >
-            <Icon name="close" :size="22" />
-          </button>
+
+          <!-- 工具栏：放大 / 缩小 / 旋转 / 复位 / 关闭 -->
+          <div class="img-preview-toolbar" @click.stop>
+            <button type="button" class="img-preview-tool-btn" title="放大（+）" @click="previewZoomIn">
+              <Icon name="plus" :size="20" />
+            </button>
+            <span class="img-preview-zoom-label">{{ Math.round(previewState.scale * 100) }}%</span>
+            <button type="button" class="img-preview-tool-btn" title="缩小（-）" @click="previewZoomOut">
+              <Icon name="minus" :size="20" />
+            </button>
+            <span class="img-preview-tool-divider"></span>
+            <button type="button" class="img-preview-tool-btn" title="旋转 90°（R）" @click="previewRotate">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" fill-rule="evenodd"><path d="M4 12C4 7.6 7.6 4 12 4C14.5 4 16.7 5.1 18.2 6.9M20 4V9H15M20 12C20 16.4 16.4 20 12 20C9.5 20 7.3 18.9 5.8 17.1M4 20V15H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button type="button" class="img-preview-tool-btn" title="复位（0）" @click="resetPreviewTransform">
+              <Icon name="refresh" :size="20" />
+            </button>
+            <span class="img-preview-tool-divider"></span>
+            <button type="button" class="img-preview-tool-btn img-preview-tool-btn--close" title="关闭（Esc）" @click="closeImagePreview">
+              <Icon name="close" :size="20" />
+            </button>
+          </div>
         </div>
       </Transition>
     </Teleport>
@@ -1361,13 +1451,13 @@ onUnmounted(() => {
 /* composer-container 包裹层：亮色 #CFCFCF，暗色用 --card-2 */
 .composer-container {
   background: var(--card-2);
-  border-radius: var(--radius-full);
-  padding: 4px;
+  border-radius: 30px;
+  padding: 5px;
   transition: background var(--duration-fast) var(--ease-standard);
 }
 
 [data-theme='light'] .composer-container {
-  background: #cfcfcf;
+  background: #eeeeee;
 }
 
 /* composer-inner 高度跟随 textarea；overflow hidden 防止超出时溢出 */
@@ -1381,7 +1471,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 4px;
+  padding: 4px 4px;
 }
 
 .meta-pill {
@@ -1395,6 +1485,7 @@ onUnmounted(() => {
   color: var(--muted);
   font-size: 12px;
   cursor: pointer;
+  width: fit-content;
   transition: background var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
 }
@@ -1405,7 +1496,7 @@ onUnmounted(() => {
 }
 
 .meta-pill--wd {
-  flex: 1;
+  /* flex: 1; */
   min-width: 0;
 }
 
@@ -1424,7 +1515,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 4px 0;
+  padding: 16px;
 }
 
 .ctx-stat {
@@ -1742,6 +1833,7 @@ onUnmounted(() => {
   gap: 16px;
   padding: 32px;
   cursor: zoom-out;
+  user-select: none;
 }
 
 .img-preview-img {
@@ -1750,7 +1842,15 @@ onUnmounted(() => {
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
-  cursor: default;
+  cursor: grab;
+  /* transform 由 Vue 内联 style 控制；transition 让缩放/旋转/平移平滑 */
+  transition: transform 0.15s ease-out;
+  will-change: transform;
+  touch-action: none; /* 让 pointer 事件不被浏览器手势抢占 */
+}
+
+.img-preview-img:active {
+  cursor: grabbing;
 }
 
 .img-preview-name {
@@ -1762,25 +1862,55 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
-.img-preview-close {
-  position: absolute;
-  top: 20px;
-  right: 24px;
-  width: 40px;
-  height: 40px;
+/* 工具栏：放大 / 缩小 / 旋转 / 复位 / 关闭 */
+.img-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.img-preview-tool-btn {
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
+  background: transparent;
   color: #fff;
   cursor: pointer;
   transition: background 0.15s ease;
+  padding: 0;
 }
 
-.img-preview-close:hover {
-  background: rgba(255, 255, 255, 0.22);
+.img-preview-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.img-preview-tool-btn--close:hover {
+  background: rgba(232, 65, 65, 0.5);
+}
+
+.img-preview-zoom-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  text-align: center;
+  user-select: none;
+}
+
+.img-preview-tool-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.18);
+  margin: 0 4px;
 }
 
 .img-preview-fade-enter-active,

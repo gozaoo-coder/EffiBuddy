@@ -1192,11 +1192,12 @@ async fn send_message_stream(
                     );
                 }
                 Ok(AgentStreamItem::ToolResult { call_id, output, is_error }) => {
-                    // 若为 image_gen 工具结果，解析 JSON 提取图片信息并收集为附件
+                    // 若为 image_gen / display_image 工具结果，解析 JSON 提取图片信息并收集为附件。
+                    // 两者输出格式兼容（id/path/name），display_image 额外有 source 字段不影响解析。
                     if let Some(name) = tool_call_names.get(&call_id) {
-                        if name == "image_gen" && !is_error {
+                        if (name == "image_gen" || name == "display_image") && !is_error {
                             if let Some(att) = parse_image_gen_output(&output) {
-                                // 实时通知前端有新图片生成，可立即渲染
+                                // 实时通知前端有新图片，可立即渲染
                                 let _ = handle.emit(
                                     "agent-attachment",
                                     &AgentAttachmentPayload {

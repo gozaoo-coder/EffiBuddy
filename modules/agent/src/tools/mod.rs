@@ -21,6 +21,7 @@
 //! RAG 检索：`SearchMemoryTool` 通过 `MemoryIndex` 提供 BM25 / 向量 / 混合
 //! 三种检索模式，自动排除当前会话避免与已注入上下文重复。
 
+pub mod display_image;
 pub mod get_time;
 pub mod image_gen;
 pub mod list_files;
@@ -34,6 +35,7 @@ pub mod skill_tools;
 pub mod web_fetch;
 pub mod write_file;
 
+pub use display_image::{DisplayImageOutput, DisplayImageTool};
 pub use get_time::GetTimeTool;
 pub use image_gen::{ImageGenConfig, ImageGenTool};
 pub use list_files::ListFilesTool;

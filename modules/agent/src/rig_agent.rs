@@ -8,9 +8,11 @@
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
 //! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`SearchMemoryTool`、
-//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`，
+//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`、
+//!   `ImageGenTool`、`DisplayImageTool`，
 //!   LLM 可主动调用以检索历史、跨会话记忆、获取时间、读写本地文件、
-//!   执行 shell 命令（集成 agent-reach / browser-act）、抓取网页
+//!   执行 shell 命令（集成 agent-reach / browser-act）、抓取网页、
+//!   生成图片、把已有图片推送到聊天框展示
 //! - **RAG 记忆增强**：每次对话前自动通过 `MemoryIndex` 检索相关跨会话历史，
 //!   注入到 prompt 的 `[相关历史记忆]` 区段（"自动提供上文"）
 //!
@@ -49,10 +51,11 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent, ContextPreview};
 use crate::tools::{
-    DeletePinnedMemoryTool, GetSkillDetailTool, GetTimeTool, ImageGenConfig, ImageGenTool,
-    InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool, ListPinnedMemoriesTool,
-    PinMemoryTool, ReadFileTool, SearchClawHubSkillsTool, SearchHistoryTool, SearchMemoryTool,
-    EnableSkillTool, SetTitleTool, ShellTool, WebFetchTool, WriteFileTool,
+    DeletePinnedMemoryTool, DisplayImageTool, GetSkillDetailTool, GetTimeTool, ImageGenConfig,
+    ImageGenTool, InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool,
+    ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchClawHubSkillsTool,
+    SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, WebFetchTool,
+    WriteFileTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -306,6 +309,12 @@ impl RigAgent {
                 Arc::clone(&self.image_gen_config),
                 self.attachments_dir.clone(),
             );
+            // 图片展示工具：让 LLM 把已有图片（本地路径或 URL）推送到聊天框。
+            // 与 image_gen（生成新图）互补，复用 attachments_dir 落盘。
+            let display_image = match &cwd {
+                Some(p) => DisplayImageTool::with_cwd(p.clone(), self.attachments_dir.clone()),
+                None => DisplayImageTool::new(self.attachments_dir.clone()),
+            };
             // 会话标题设置工具：LLM 据此为会话生成/更新标题（≤25 字）
             // 共享 store 与 current_conversation_id 句柄，调用时直接落盘
             let set_title = SetTitleTool::new(
@@ -322,6 +331,7 @@ impl RigAgent {
                 .tool(shell)
                 .tool(web_fetch)
                 .tool(image_gen)
+                .tool(display_image)
                 .tool(set_title);
 
             // 跨会话记忆检索工具：仅在 MemoryIndex 可用时注册
