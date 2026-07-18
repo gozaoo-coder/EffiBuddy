@@ -259,29 +259,29 @@ impl PairingService for P2pManager {
 #[inline]
 fn generate_mock_devices() -> Vec<Device> {
     let now = current_timestamp();
-    let mut devices = Vec::with_capacity(3);
-    devices.push(Device {
-        id: "office-pc-001".to_string(),
-        name: "Office-PC".to_string(),
-        address: "192.168.1.20".to_string(),
-        last_seen: now,
-        status: DeviceStatus::Discovered,
-    });
-    devices.push(Device {
-        id: "laptop-002".to_string(),
-        name: "Laptop".to_string(),
-        address: "192.168.1.35".to_string(),
-        last_seen: now,
-        status: DeviceStatus::Discovered,
-    });
-    devices.push(Device {
-        id: "phone-003".to_string(),
-        name: "Phone".to_string(),
-        address: "192.168.1.42".to_string(),
-        last_seen: now,
-        status: DeviceStatus::Discovered,
-    });
-    devices
+    vec![
+        Device {
+            id: "office-pc-001".to_string(),
+            name: "Office-PC".to_string(),
+            address: "192.168.1.20".to_string(),
+            last_seen: now,
+            status: DeviceStatus::Discovered,
+        },
+        Device {
+            id: "laptop-002".to_string(),
+            name: "Laptop".to_string(),
+            address: "192.168.1.35".to_string(),
+            last_seen: now,
+            status: DeviceStatus::Discovered,
+        },
+        Device {
+            id: "phone-003".to_string(),
+            name: "Phone".to_string(),
+            address: "192.168.1.42".to_string(),
+            last_seen: now,
+            status: DeviceStatus::Discovered,
+        },
+    ]
 }
 
 /// 当前 Unix 时间戳（秒）

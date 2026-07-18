@@ -11,6 +11,7 @@
 //! - [`GetTimeTool`]：获取当前时间，便于 LLM 回答时间相关问题
 //! - [`ReadFileTool`]：读取本地文件内容（支持工作区相对路径）
 //! - [`WriteFileTool`]：写入本地文件（XML/CDATA 包裹避免转义，支持工作区相对路径）
+//! - [`DeleteFileTool`]：删除本地文件或目录（支持工作区相对路径）
 //! - [`ListFilesTool`]：列出目录内容（支持工作区相对路径）
 //! - [`ShellTool`]：执行本地 shell 命令（集成 agent-reach / browser-act，支持工作区 cwd）
 //! - [`WebFetchTool`]：抓取网页内容
@@ -21,11 +22,13 @@
 //! RAG 检索：`SearchMemoryTool` 通过 `MemoryIndex` 提供 BM25 / 向量 / 混合
 //! 三种检索模式，自动排除当前会话避免与已注入上下文重复。
 
+pub mod delete_file;
 pub mod display_image;
 pub mod get_time;
 pub mod image_gen;
 pub mod list_files;
 pub mod pin_memory;
+pub mod plugin_tools;
 pub mod read_file;
 pub mod search_history;
 pub mod search_memory;
@@ -35,12 +38,16 @@ pub mod skill_tools;
 pub mod web_fetch;
 pub mod write_file;
 
+pub use delete_file::{DeleteFileArgs, DeleteFileError, DeleteFileTool};
 pub use display_image::{DisplayImageOutput, DisplayImageTool};
 pub use get_time::GetTimeTool;
 pub use image_gen::{ImageGenConfig, ImageGenTool};
 pub use list_files::ListFilesTool;
 pub use pin_memory::{
     DeletePinnedMemoryTool, ListPinnedMemoriesTool, PinMemoryTool,
+};
+pub use plugin_tools::{
+    UninstallPluginArgs, UninstallPluginError, UninstallPluginTool,
 };
 pub use read_file::ReadFileTool;
 pub use search_history::SearchHistoryTool;
@@ -49,7 +56,7 @@ pub use set_title::SetTitleTool;
 pub use shell::ShellTool;
 pub use skill_tools::{
     GetSkillDetailTool, InstallClawHubSkillTool, ListInstalledSkillsTool,
-    SearchClawHubSkillsTool, EnableSkillTool,
+    SearchClawHubSkillsTool, EnableSkillTool, UninstallSkillTool,
 };
 pub use web_fetch::WebFetchTool;
 pub use write_file::WriteFileTool;

@@ -99,8 +99,8 @@ impl PinnedMemoryStore {
     /// 列出全部永久记忆（按 `created_at` 降序，新的在前）
     pub async fn list(&self) -> Vec<PinnedMemory> {
         let s = self.inner.read().await;
-        let mut out: Vec<PinnedMemory> = s.memories.iter().cloned().collect();
-        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let mut out: Vec<PinnedMemory> = s.memories.to_vec();
+        out.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         out
     }
 
@@ -215,7 +215,7 @@ impl PinnedMemoryStore {
         }
         // 按创建时间升序：先记住的排前面
         let mut sorted: Vec<&PinnedMemory> = s.memories.iter().collect();
-        sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        sorted.sort_by_key(|a| a.created_at);
 
         let mut out = String::with_capacity(sorted.len() * 64 + 64);
         out.push_str("[永久记忆]（用户要求永久记住的内容，请始终遵守/参考）\n");

@@ -176,7 +176,8 @@ fn save_config(config: &AgentConfig) -> std::result::Result<(), String> {
 /// `image_gen_config` 注入以启用图像生成工具（LLM 可主动调用 image_gen 为用户作画）。
 /// `attachments_dir` 为图片落盘目录。
 /// `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后启用
-/// 技能 RAG 自动注入与 5 个技能管理工具（list/get/enable + search/install ClawHub）。
+/// 技能 RAG 自动注入与 6 个技能管理工具（list/get/enable/uninstall + search/install ClawHub）。
+/// `plugin_store` 注入后启用 uninstall_plugin 工具。
 /// `compression_store` 注入后启用消息压缩（build_context_parts 对历史段应用
 /// Keep/Hide/Replace 决策，当前问题不压缩）。
 /// MockAgent 后端忽略这些参数。
@@ -194,6 +195,7 @@ fn build_agent(
     skill_store: Arc<SkillStore>,
     clawhub_client: Arc<ClawHubClient>,
     skills_dir: std::path::PathBuf,
+    plugin_store: Arc<PluginStore>,
     compression_store: Arc<CompressionStore>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
@@ -215,6 +217,7 @@ fn build_agent(
                 Some(skill_store),
                 Some(clawhub_client),
                 Some(skills_dir),
+                Some(plugin_store),
                 Some(compression_store),
             ) {
                 Ok(agent) => Arc::new(agent),
@@ -392,7 +395,8 @@ async fn set_config(
 
     // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config / store
     // 同时注入 skill_index / skill_store / clawhub / skills_dir 以启用技能 RAG 自动注入
-    // 与 5 个技能管理工具（list/get/enable + search/install ClawHub）
+    // 与 6 个技能管理工具（list/get/enable/uninstall + search/install ClawHub）
+    // plugin_store 注入以启用 uninstall_plugin 工具
     // compression_store 注入以启用消息压缩
     let new_agent = build_agent(
         &config,
@@ -407,6 +411,7 @@ async fn set_config(
         Arc::new(state.skill_store.clone()),
         Arc::new(state.clawhub.clone()),
         skills_dir(),
+        Arc::new(state.plugin_store.clone()),
         Arc::new(state.compression_store.clone()),
     );
 
@@ -674,6 +679,7 @@ async fn set_active_model(
                 Arc::new(state.skill_store.clone()),
                 Arc::new(state.clawhub.clone()),
                 skills_dir(),
+                Arc::new(state.plugin_store.clone()),
                 Arc::new(state.compression_store.clone()),
             );
             {
@@ -965,7 +971,7 @@ async fn search_memory(
     limit: Option<usize>,
 ) -> Result<Vec<MemoryHit>, String> {
     let mode = parse_search_mode(mode.as_deref());
-    let limit = limit.unwrap_or(5).max(1).min(50);
+    let limit = limit.unwrap_or(5).clamp(1, 50);
     // 读出当前会话 id（短暂读锁），检索时排除
     let exclude = state.current_conversation_id.read().await.clone();
     let hits = state
@@ -2598,10 +2604,10 @@ pub fn run() {
     let skills_root = skills_dir();
 
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
-    // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir / compression_store
-    // skill_store / clawhub / compression_store 内部已是 Arc，clone 廉价；为 RigAgent 包成
-    // Arc<SkillStore> / Arc<ClawHubClient> / Arc<CompressionStore> 以匹配 from_key 签名
-    // （共享同一份底层 Arc）
+    // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
+    // plugin_store / compression_store
+    // skill_store / clawhub / plugin_store / compression_store 内部已是 Arc，clone 廉价；
+    // 为 RigAgent 包成 Arc<...> 以匹配 from_key 签名（共享同一份底层 Arc）
     let agent: Arc<dyn ChatAgent> = build_agent(
         &config,
         Arc::clone(&memory),
@@ -2615,6 +2621,7 @@ pub fn run() {
         Arc::new(skill_store.clone()),
         Arc::new(clawhub_client.clone()),
         skills_root.clone(),
+        Arc::new(plugin_store.clone()),
         Arc::new(compression_store.clone()),
     );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {

@@ -99,7 +99,7 @@ impl Tool for SearchHistoryTool {
             .collect();
 
         // 按得分降序，得分相同则保持原顺序（稳定排序）
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.0));
         let results: Vec<&Message> = scored.iter().take(limit).map(|(_, m)| *m).collect();
 
         if results.is_empty() {

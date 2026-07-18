@@ -200,8 +200,8 @@ impl SkillIndex {
     /// 供 ListInstalledSkillsTool 使用，避免直接走 SkillStore IO。
     pub async fn list_all(&self) -> Vec<SkillEntry> {
         let s = self.state.read().await;
-        let mut out: Vec<SkillEntry> = s.entries.iter().cloned().collect();
-        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let mut out: Vec<SkillEntry> = s.entries.to_vec();
+        out.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         out
     }
 

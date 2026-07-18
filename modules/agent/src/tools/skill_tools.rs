@@ -738,6 +738,120 @@ impl Tool for InstallClawHubSkillTool {
 }
 
 // =========================================================
+// UninstallSkillTool：卸载已安装技能
+// =========================================================
+
+#[derive(Deserialize)]
+pub struct UninstallSkillArgs {
+    /// 技能 id（完整或前 8 字符前缀）
+    pub id: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("uninstall skill error: {0}")]
+pub struct UninstallSkillError(String);
+
+/// 卸载技能工具
+///
+/// 持有 `SkillStore` 与 `SkillIndex` 共享句柄。先定位技能，禁止删除内置技能，
+/// 删除后重建索引，让下一轮 RAG 自动注入与 list_installed_skills 工具看到最新数据。
+pub struct UninstallSkillTool {
+    store: Arc<SkillStore>,
+    index: Arc<SkillIndex>,
+}
+
+impl UninstallSkillTool {
+    pub fn new(store: Arc<SkillStore>, index: Arc<SkillIndex>) -> Self {
+        Self { store, index }
+    }
+}
+
+impl Tool for UninstallSkillTool {
+    const NAME: &'static str = "uninstall_skill";
+
+    type Error = UninstallSkillError;
+    type Args = UninstallSkillArgs;
+    type Output = String;
+
+    fn description(&self) -> String {
+        "卸载已安装的技能。内置技能不可卸载；id 支持前 8 字符前缀匹配。\
+         卸载后索引会自动重建，agent 将不再看到此技能。"
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "要卸载的技能 id（完整或前 8 字符前缀）"
+                }
+            },
+            "required": ["id"]
+        })
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let target = args.id.trim();
+        if target.is_empty() {
+            return Err(UninstallSkillError("id 不能为空".to_string()));
+        }
+
+        // 定位技能：先精确匹配，再前缀匹配
+        let skill = match self.store.get(target).await {
+            Ok(Some(s)) => Some(s),
+            _ => {
+                let all = self
+                    .store
+                    .list_all()
+                    .await
+                    .map_err(|e| UninstallSkillError(e.to_string()))?;
+                let prefix_match: Vec<&Skill> =
+                    all.iter().filter(|s| s.id.starts_with(target)).collect();
+                match prefix_match.len() {
+                    1 => Some(prefix_match[0].clone()),
+                    0 => all.into_iter().find(|s| s.id == target),
+                    _ => None,
+                }
+            }
+        };
+
+        let Some(skill) = skill else {
+            return Ok(format!(
+                "未找到 id 包含「{}」的技能。可调用 list_installed_skills 查看全部已安装技能。",
+                target
+            ));
+        };
+
+        if skill.builtin {
+            return Err(UninstallSkillError(format!(
+                "技能「{}」（id={}）是内置技能，不可卸载",
+                skill.name,
+                short_id(&skill.id)
+            )));
+        }
+
+        let name = skill.name.clone();
+        let short = short_id(&skill.id);
+
+        self.store
+            .delete(&skill.id)
+            .await
+            .map_err(|e| UninstallSkillError(e.to_string()))?;
+        self.index
+            .rebuild_from_store(&self.store)
+            .await
+            .map_err(|e| UninstallSkillError(e.to_string()))?;
+
+        Ok(format!(
+            "已卸载技能「{}」（id={}）。索引已重建，agent 将不再看到此技能。",
+            name, short
+        ))
+    }
+}
+
+// =========================================================
 // 单元测试
 // =========================================================
 
@@ -904,5 +1018,54 @@ mod tests {
             })
             .await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn uninstall_skill_rejects_builtin() {
+        let store = Arc::new(SkillStore::new(tmp_path()).unwrap());
+        let idx = Arc::new(SkillIndex::new());
+        let tool = UninstallSkillTool::new(Arc::clone(&store), Arc::clone(&idx));
+
+        // 内置技能 agent-reach 无需落盘即可 get 到
+        let res = tool
+            .call(UninstallSkillArgs {
+                id: "agent-reach".to_string(),
+            })
+            .await;
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("内置技能"));
+    }
+
+    #[tokio::test]
+    async fn uninstall_skill_by_prefix_rebuilds_index() {
+        let store_dir = tmp_path().parent().unwrap().join(format!(
+            "effisuite-skill-uninstall-{}-{}",
+            uuid::Uuid::new_v4(),
+            "store"
+        ));
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let store = Arc::new(SkillStore::new(&store_dir).unwrap());
+        let idx = Arc::new(SkillIndex::new());
+
+        let skill = make_skill("abcdef-1234", "Custom", "desc", "");
+        store.save(&skill).await.unwrap();
+        idx.rebuild_from_store(&store).await.unwrap();
+
+        let tool = UninstallSkillTool::new(Arc::clone(&store), Arc::clone(&idx));
+        let out = tool
+            .call(UninstallSkillArgs {
+                id: "abcdef".to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(out.contains("已卸载技能"));
+        assert!(out.contains("Custom"));
+        assert!(store.get("abcdef-1234").await.unwrap().is_none());
+
+        // 索引也应同步
+        let all = idx.list_all().await;
+        assert!(!all.iter().any(|s| s.id == "abcdef-1234"));
+
+        std::fs::remove_dir_all(&store_dir).ok();
     }
 }

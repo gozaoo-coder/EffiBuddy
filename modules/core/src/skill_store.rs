@@ -110,7 +110,7 @@ impl SkillStore {
             out.push(skill);
         }
         // 按 created_at 降序，新的在前
-        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        out.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         Ok(out)
     }
 

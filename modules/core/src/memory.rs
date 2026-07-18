@@ -42,7 +42,6 @@ const DEFAULT_RRF_K: u32 = 60;
 
 /// 嵌入向量维度（仅用于一致性校验，不强制；不同 provider 维度不同）
 /// 这里不写死维度，由 provider 决定。
-
 /// 异步嵌入向量提供者 trait
 ///
 /// core 模块不依赖任何 HTTP/rig 实现，仅定义接口。agent 模块提供
@@ -110,7 +109,7 @@ pub struct MemoryHit {
 }
 
 /// 检索模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchMode {
     /// 词法 BM25
@@ -118,13 +117,8 @@ pub enum SearchMode {
     /// 向量 embedding 余弦相似度
     Vector,
     /// 混合 RRF（默认推荐）
+    #[default]
     Hybrid,
-}
-
-impl Default for SearchMode {
-    fn default() -> Self {
-        Self::Hybrid
-    }
 }
 
 /// 索引内部可变状态（被 RwLock 包裹）
@@ -366,7 +360,7 @@ impl MemoryIndex {
 
         // 3. 写回（短暂写锁）
         let mut s = self.state.write().await;
-        for ((conv_id, msg_id, _), emb) in to_embed.iter().zip(embeddings.into_iter()) {
+        for ((conv_id, msg_id, _), emb) in to_embed.iter().zip(embeddings) {
             if let Some(entry) = s
                 .entries
                 .iter_mut()
@@ -508,7 +502,7 @@ fn push_entry(state: &mut IndexState, entry: MemoryEntry) {
         state
             .inverted
             .entry(tok.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((idx, tf));
         *state.df.entry(tok.to_string()).or_insert(0) += 1;
     }

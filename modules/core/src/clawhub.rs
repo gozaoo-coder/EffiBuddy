@@ -697,11 +697,12 @@ pub fn extract_zip_to(dest_dir: &std::path::Path, zip_bytes: &[u8]) -> std::resu
 /// - `preamble`：整个文件内容（含 frontmatter），保留供需要完整内容的场景使用
 /// - `body`：去除 frontmatter 后的正文，作为 LLM 系统消息注入最干净
 pub fn parse_skill_md(content: &str) -> ParsedSkillMd {
-    let mut parsed = ParsedSkillMd::default();
-    // 整个文件作为 preamble（保留完整内容）
-    parsed.preamble = content.to_string();
-    // 默认 body 等于 preamble（无 frontmatter 时两者一致）
-    parsed.body = content.to_string();
+    // 整个文件作为 preamble（保留完整内容）；默认 body 等于 preamble（无 frontmatter 时两者一致）
+    let mut parsed = ParsedSkillMd {
+        preamble: content.to_string(),
+        body: content.to_string(),
+        ..Default::default()
+    };
 
     // 检测 frontmatter：以 `---` 开头
     if !content.starts_with("---") {

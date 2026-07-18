@@ -11,19 +11,14 @@
 use serde::{Deserialize, Serialize};
 
 /// Agent 后端类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendKind {
     /// 离线 mock，无网络
+    #[default]
     Mock,
     /// 通过 rig 调用 OpenAI 兼容接口（统一走 Chat Completions API）
     Openai,
-}
-
-impl Default for BackendKind {
-    fn default() -> Self {
-        Self::Mock
-    }
 }
 
 /// 模型能力类型：区分 LLM 对话 / 图像生成 / 视频生成
@@ -32,10 +27,11 @@ impl Default for BackendKind {
 /// - Chat：走 RigAgent（Chat Completions API）
 /// - ImageGen：走图像生成工具（OpenAI 兼容 /images/generations）
 /// - VideoGen：预留，暂未实现
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelKind {
     /// LLM 对话模型（默认）
+    #[default]
     Chat,
     /// 图像生成模型（如 DALL-E 3、SD、Flux）
     ImageGen,
@@ -43,28 +39,17 @@ pub enum ModelKind {
     VideoGen,
 }
 
-impl Default for ModelKind {
-    fn default() -> Self {
-        Self::Chat
-    }
-}
-
 /// 主题模式：系统 / 亮色 / 暗色
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
     /// 跟随系统 prefers-color-scheme
+    #[default]
     System,
     /// 强制亮色
     Light,
     /// 强制暗色
     Dark,
-}
-
-impl Default for ThemeMode {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 /// Agent 配置（可被前端修改并持久化）

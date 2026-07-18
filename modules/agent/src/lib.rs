@@ -24,6 +24,6 @@ pub use rig_agent::{
     call_compression_agent_stream,
 };
 pub use tools::{
-    GetTimeTool, ImageGenConfig, ImageGenTool, SearchHistoryTool, SearchMemoryTool,
-    SetTitleTool,
+    DeleteFileTool, GetTimeTool, ImageGenConfig, ImageGenTool, SearchHistoryTool,
+    SearchMemoryTool, SetTitleTool, UninstallPluginTool, UninstallSkillTool,
 };

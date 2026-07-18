@@ -83,7 +83,7 @@ impl PluginStore {
             };
             out.push(plugin);
         }
-        out.sort_by(|a, b| b.installed_at.cmp(&a.installed_at));
+        out.sort_by_key(|b| std::cmp::Reverse(b.installed_at));
         Ok(out)
     }
 

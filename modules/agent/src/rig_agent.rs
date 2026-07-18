@@ -35,7 +35,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use effisuite_core::{
     ClawHubClient, CompressionStore, ConversationStore, CoreError, MemoryIndex, Message,
-    PinnedMemoryStore, Result, Role, SkillIndex, SkillStore, apply_compression,
+    PinnedMemoryStore, PluginStore, Result, Role, SkillIndex, SkillStore, apply_compression,
 };
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -51,11 +51,11 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent, ContextPreview};
 use crate::tools::{
-    DeletePinnedMemoryTool, DisplayImageTool, GetSkillDetailTool, GetTimeTool, ImageGenConfig,
-    ImageGenTool, InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool,
+    DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool, GetSkillDetailTool, GetTimeTool,
+    ImageGenConfig, ImageGenTool, InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool,
     ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchClawHubSkillsTool,
-    SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, WebFetchTool,
-    WriteFileTool,
+    SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool,
+    UninstallPluginTool, UninstallSkillTool, WebFetchTool, WriteFileTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -101,6 +101,9 @@ pub struct RigAgent {
     clawhub_client: Option<Arc<ClawHubClient>>,
     /// 技能解压根目录，InstallClawHubSkillTool 据此落盘 ZIP 解压结果
     skills_dir: Option<PathBuf>,
+    /// 已安装插件存储句柄，UninstallPluginTool 据此删除插件
+    /// None 时 uninstall_plugin 工具不可用
+    plugin_store: Option<Arc<PluginStore>>,
     /// 当前会话 id 句柄，由 Tauri 命令层在每次 send_message 前更新；
     /// search_memory 工具与自动注入都据此排除当前会话
     current_conversation_id: Arc<RwLock<Option<String>>>,
@@ -133,6 +136,7 @@ impl RigAgent {
     /// `store` 共享会话存储句柄，SetTitleTool 据此持久化标题。
     /// `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后
     /// 启用技能 RAG 自动注入与 5 个技能管理工具；任一为 None 则相应能力降级。
+    /// `plugin_store` 注入后启用 uninstall_plugin 工具。
     /// `compression_store` 注入后启用消息压缩（build_context_parts 对历史段应用
     /// Keep/Hide/Replace 决策）；None 时退化为不压缩。
     #[allow(clippy::too_many_arguments)]
@@ -151,6 +155,7 @@ impl RigAgent {
         skill_store: Option<Arc<SkillStore>>,
         clawhub_client: Option<Arc<ClawHubClient>>,
         skills_dir: Option<PathBuf>,
+        plugin_store: Option<Arc<PluginStore>>,
         compression_store: Option<Arc<CompressionStore>>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
@@ -167,6 +172,7 @@ impl RigAgent {
             skill_store,
             clawhub_client,
             skills_dir,
+            plugin_store,
             current_conversation_id,
             working_dir,
             image_gen_config,
@@ -190,6 +196,7 @@ impl RigAgent {
     /// - `store` 共享会话存储句柄，SetTitleTool / EnableSkillTool 据此读写会话
     /// - `skill_index` / `skill_store` / `clawhub_client` / `skills_dir` 注入后
     ///   启用技能 RAG 自动注入与 5 个技能管理工具；任一为 None 则相应能力降级
+    /// - `plugin_store` 注入后启用 uninstall_plugin 工具
     /// - `compression_store` 注入后启用消息压缩（build_context_parts 对历史段应用
     ///   Keep/Hide/Replace 决策）；None 时退化为不压缩
     #[allow(clippy::too_many_arguments)]
@@ -210,6 +217,7 @@ impl RigAgent {
         skill_store: Option<Arc<SkillStore>>,
         clawhub_client: Option<Arc<ClawHubClient>>,
         skills_dir: Option<PathBuf>,
+        plugin_store: Option<Arc<PluginStore>>,
         compression_store: Option<Arc<CompressionStore>>,
     ) -> Result<Self> {
         let api_key = api_key.into();
@@ -233,6 +241,7 @@ impl RigAgent {
             skill_store,
             clawhub_client,
             skills_dir,
+            plugin_store,
             current_conversation_id,
             working_dir,
             image_gen_config,
@@ -293,6 +302,10 @@ impl RigAgent {
                 Some(p) => WriteFileTool::with_cwd(p.clone()),
                 None => WriteFileTool::new(),
             };
+            let delete_file = match &cwd {
+                Some(p) => DeleteFileTool::with_cwd(p.clone()),
+                None => DeleteFileTool::new(),
+            };
             let list_files = match &cwd {
                 Some(p) => ListFilesTool::with_cwd(p.clone()),
                 None => ListFilesTool::new(),
@@ -327,6 +340,7 @@ impl RigAgent {
                 .tool(time)
                 .tool(read_file)
                 .tool(write_file)
+                .tool(delete_file)
                 .tool(list_files)
                 .tool(shell)
                 .tool(web_fetch)
@@ -356,7 +370,7 @@ impl RigAgent {
             }
 
             // 技能管理工具：仅在 skill_index + skill_store 同时可用时注册
-            // 让 LLM 自主列出 / 查询 / 启用本地已安装技能（替代旧 apply_skill 命令）
+            // 让 LLM 自主列出 / 查询 / 启用 / 卸载本地已安装技能（替代旧 apply_skill 命令）
             if let (Some(idx), Some(store)) = (&self.skill_index, &self.skill_store) {
                 let list_skills = ListInstalledSkillsTool::new(Arc::clone(idx));
                 let get_skill = GetSkillDetailTool::new(Arc::clone(store));
@@ -365,7 +379,12 @@ impl RigAgent {
                     Arc::clone(&self.store),
                     Arc::clone(&self.current_conversation_id),
                 );
-                b = b.tool(list_skills).tool(get_skill).tool(enable_skill);
+                let uninstall_skill = UninstallSkillTool::new(Arc::clone(store), Arc::clone(idx));
+                b = b
+                    .tool(list_skills)
+                    .tool(get_skill)
+                    .tool(enable_skill)
+                    .tool(uninstall_skill);
             }
 
             // ClawHub 工具：仅在 clawhub_client 可用时注册
@@ -386,6 +405,12 @@ impl RigAgent {
                     );
                     b = b.tool(install_clawhub);
                 }
+            }
+
+            // 插件管理工具：仅在 plugin_store 可用时注册
+            if let Some(plugin_store) = &self.plugin_store {
+                let uninstall_plugin = UninstallPluginTool::new(Arc::clone(plugin_store));
+                b = b.tool(uninstall_plugin);
             }
 
             b.default_max_turns(usize::MAX).build()
