@@ -329,7 +329,13 @@ impl Tool for GlobTool {
             .map(|p| format!("当前工作区：{}（默认搜索根，相对路径以此为准）", p.display()))
             .unwrap_or_else(|| "未设置工作区，默认在进程工作目录下搜索".to_string());
         format!(
-            "按文件名 glob 模式**递归搜索**文件，返回匹配文件路径列表（相对工作区，按修改时间降序）。\n\n\
+            "按文件名 glob 模式**递归搜索**文件（不读文件内容），返回匹配文件路径列表（相对工作区，按修改时间降序）。\n\n\
+             **与其他查找工具的边界**：\n\
+             - `list_files`：列目录树，不按模式过滤、不读内容\n\
+             - `glob`（本工具）：按文件名模式匹配，不读内容\n\
+             - `search_file`：字面关键词搜文件内容（非正则）\n\
+             - `grep`：正则表达式搜文件内容\n\
+             - `search_codebase`：基于关键词加权排序的代码搜索（自然语言查询）\n\n\
              **支持的 glob 语法**：\n\
              - `*` 匹配除路径分隔符外的任意字符\n\
              - `**` 匹配任意层级目录（含 0 层，如 `**/*.rs` 同时命中根目录与任意子目录下的 .rs）\n\
@@ -427,20 +433,22 @@ impl Tool for GlobTool {
                 }
                 scanned += 1;
 
-                // 相对展示路径（统一 / 分隔，便于 LLM 直接回传给 read_file / edit_file）
-                let rel = entry
-                    .path()
+                let path = entry.path();
+
+                // 匹配用路径：相对搜索根（glob 模式基于搜索根内的相对结构匹配，
+                // 如 path=sub 时模式 *.rs 应命中 sub/inner.rs 的 "inner.rs" 段）
+                let match_rel = path
                     .strip_prefix(&root)
                     .map(|r| r.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| entry.path().to_string_lossy().into_owned());
-                let rel = if cfg!(windows) {
-                    rel.replace('\\', "/")
+                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+                let match_rel = if cfg!(windows) {
+                    match_rel.replace('\\', "/")
                 } else {
-                    rel
+                    match_rel
                 };
 
                 // 段切分并匹配
-                let segs: Vec<Vec<char>> = rel
+                let segs: Vec<Vec<char>> = match_rel
                     .split('/')
                     .filter(|s| !s.is_empty())
                     .map(|s| s.chars().collect())
@@ -449,13 +457,29 @@ impl Tool for GlobTool {
                     continue;
                 }
 
+                // 展示路径：优先相对工作区 cwd（让 LLM 回传 read_file/edit_file 时路径一致，
+                // 避免 path=sub 时返回 "inner.rs" 导致 read_file 解析为 cwd/inner.rs 找不到），
+                // 其次相对搜索根，最后用绝对路径。Windows 下统一为 / 分隔。
+                let display_rel = self
+                    .cwd
+                    .as_deref()
+                    .and_then(|cwd| path.strip_prefix(cwd).ok())
+                    .or_else(|| path.strip_prefix(&root).ok())
+                    .map(|r| r.display().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                let display_rel = if cfg!(windows) {
+                    display_rel.replace('\\', "/")
+                } else {
+                    display_rel
+                };
+
                 let mtime = entry
                     .metadata()
                     .await
                     .ok()
                     .and_then(|m| m.modified().ok())
                     .unwrap_or(SystemTime::UNIX_EPOCH);
-                matches.push((mtime, rel));
+                matches.push((mtime, display_rel));
             }
         }
 

@@ -247,14 +247,20 @@ fn collect_hits_multiline(re: &Regex, text: &str, total_lines: usize) -> Vec<usi
     set.into_iter().collect()
 }
 
-/// 把绝对/相对路径转为相对搜索根的展示路径，Windows 下统一为 `/` 分隔，
-/// 方便 LLM 直接回传给 read_file / edit_file 使用。
+/// 把路径转为展示路径：优先相对工作区 cwd（让 LLM 回传 read_file/edit_file 时路径一致，
+/// 避免 path=sub 时返回 "inner.rs" 导致 read_file 解析为 cwd/inner.rs 找不到），
+/// 其次相对搜索根，最后用绝对路径。Windows 下统一为 `/` 分隔。
 #[inline]
-fn display_path(path: &std::path::Path, root: &std::path::Path) -> String {
-    let display = path
-        .strip_prefix(root)
+fn display_path(
+    path: &std::path::Path,
+    cwd: Option<&std::path::Path>,
+    root: &std::path::Path,
+) -> String {
+    let display = cwd
+        .and_then(|c| path.strip_prefix(c).ok())
+        .or_else(|| path.strip_prefix(root).ok())
         .map(|r| r.display().to_string())
-        .unwrap_or_else(|_| path.display().to_string());
+        .unwrap_or_else(|| path.display().to_string());
     if cfg!(windows) {
         display.replace('\\', "/")
     } else {
@@ -290,6 +296,12 @@ impl Tool for GrepTool {
         format!(
             "在工作区目录下**递归正则搜索**：对全部文本文件的内容做正则表达式匹配，\
              返回命中行的文件路径 + 行号 + 行内容（类似 grep / ripgrep）。\n\n\
+             **与其他查找工具的边界**：\n\
+             - `list_files`：列目录树，不按模式过滤、不读内容\n\
+             - `glob`：按文件名模式匹配，不读内容\n\
+             - `search_file`：字面关键词搜文件内容（非正则）\n\
+             - `grep`（本工具）：正则表达式搜文件内容\n\
+             - `search_codebase`：基于关键词加权排序的代码搜索（自然语言查询）\n\n\
              **输入**：pattern 为正则表达式（如 `fn \\w+`、`TODO\\(.*\\)`、`\\d{{4}}-\\d{{2}}-\\d{{2}}`），\
              默认不区分大小写，case_sensitive=true 时区分。multiline=true 时正则匹配整篇文本\
              （可跨行，`^`/`$` 锚定行边界），默认逐行匹配。\n\n\
@@ -472,7 +484,7 @@ impl Tool for GrepTool {
                 }
 
                 let n_hits = hit_lines.len();
-                let disp = display_path(&path, &root);
+                let disp = display_path(&path, self.cwd.as_deref(), &root);
                 match mode {
                     MODE_FILES => matched_files.push(disp),
                     MODE_COUNT => count_per_file.push((disp, n_hits)),
@@ -977,7 +989,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(out.contains("path: inner.txt"), "out: {out}");
+        // 路径基准相对工作区 cwd：path=sub 时返回 "sub/inner.txt" 而非 "inner.txt"，
+        // 保证 LLM 回传 read_file/edit_file 时路径可解析
+        assert!(out.contains("path: sub/inner.txt"), "out: {out}");
         assert!(!out.contains("root.txt"), "out: {out}");
 
         std::fs::remove_dir_all(&dir).ok();

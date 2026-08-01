@@ -71,12 +71,16 @@ pub struct GenerateVideoArgs {
 pub struct GenerateVideoError(String);
 
 /// 工具输出：返回保存后的附件信息，供前端渲染视频
+///
+/// 字段按大小降序：String(24) > u64(8)。
 #[derive(Debug, serde::Serialize)]
 pub struct GenerateVideoOutput {
     /// 附件 id（同时作为文件名前缀）
     pub id: String,
     /// 相对 attachments 目录的文件名（或用户指定的绝对路径）
     pub path: String,
+    /// 文件绝对路径，可直接用于 read_file/delete_file 等文件操作
+    pub absolute_path: String,
     /// 显示用文件名
     pub name: String,
     /// 生成耗时毫秒
@@ -206,7 +210,8 @@ impl Tool for GenerateVideoTool {
     fn description(&self) -> String {
         "调用视频生成模型为用户生成视频。支持文本/图片/视频作为参考，\
          生成后视频会自动保存并显示给用户。\
-         提示词越具体效果越好，建议包含主体动作、场景、镜头、风格等描述。"
+         提示词越具体效果越好，建议包含主体动作、场景、镜头、风格等描述。\
+         生成后文件保存到 attachments 目录，返回的 absolute_path 可直接用于 read_file/delete_file 等文件操作。"
             .to_string()
     }
 
@@ -349,9 +354,13 @@ impl Tool for GenerateVideoTool {
         }
 
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        // 绝对路径：保持原生分隔符（Windows 下 `\`，Unix 下 `/`），
+        // read_file 等工具在 Windows 下对两种分隔符都兼容
+        let absolute_path = filepath.to_string_lossy().into_owned();
         Ok(GenerateVideoOutput {
             id,
             path: filename,
+            absolute_path,
             name,
             elapsed_ms,
         })

@@ -53,12 +53,16 @@ pub struct ImageGenArgs {
 pub struct ImageGenError(String);
 
 /// 工具输出：返回保存后的附件信息，供前端渲染图片
+///
+/// 字段按大小降序：String(24) > u64(8)。
 #[derive(serde::Serialize)]
 pub struct ImageGenOutput {
     /// 附件 id（同时作为文件名前缀）
     pub id: String,
-    /// 相对 attachments 目录的文件名
+    /// 相对 attachments 目录的文件名（前端渲染依赖）
     pub path: String,
+    /// 文件绝对路径，可直接用于 read_file/delete_file/display_image 等文件操作
+    pub absolute_path: String,
     /// 显示用文件名
     pub name: String,
     /// 生成耗时毫秒
@@ -179,7 +183,8 @@ impl Tool for ImageGenTool {
     fn description(&self) -> String {
         "调用图像生成模型为用户生成图片。支持英文/中文提示词，\
          生成后图片会自动保存并显示给用户。\
-         提示词越具体效果越好，建议包含风格、构图、光影等描述。"
+         提示词越具体效果越好，建议包含风格、构图、光影等描述。\
+         生成后文件保存到 attachments 目录，返回的 absolute_path 可直接用于 read_file/delete_file 等文件操作。"
             .to_string()
     }
 
@@ -313,9 +318,13 @@ impl Tool for ImageGenTool {
         let elapsed_ms = started.elapsed().as_millis() as u64;
         // 先借用 id 生成 name，再 move id 到结构体，避免 use after move
         let name = format!("生成图片_{}.png", &id[..8]);
+        // 绝对路径：保持原生分隔符（Windows 下 `\`，Unix 下 `/`），
+        // read_file 等工具在 Windows 下对两种分隔符都兼容
+        let absolute_path = filepath.to_string_lossy().into_owned();
         Ok(ImageGenOutput {
             id,
             path: filename,
+            absolute_path,
             name,
             elapsed_ms,
         })

@@ -3,6 +3,9 @@
 //! 非递归模式只列一层；递归模式限制深度 3 层、总条目 500，
 //! 防止遍历巨大目录树导致上下文爆炸或长时间阻塞。
 //!
+//! 输出每行一个条目，使用**完整相对路径**（相对 path 参数指向的根目录，
+//! Windows 下统一为 `/` 分隔），便于 LLM 直接回传给 read_file / edit_file。
+//!
 //! 工作区支持：构造时传入 `cwd: Option<PathBuf>`，相对路径会 join 到 cwd。
 
 use std::path::{Path, PathBuf};
@@ -20,11 +23,13 @@ const MAX_ENTRIES: usize = 500;
 
 /// 工具参数
 ///
-/// 字段按大小降序：String（24B）> Option<bool>（1B）。
+/// 字段按大小降序：`Option<String>`（24B，NonNull niche 优化）
+/// > `Option<bool>`（1B）。
 #[derive(Deserialize)]
 pub struct ListFilesArgs {
-    /// 要列出的目录路径
-    pub path: String,
+    /// 要列出的目录路径（绝对或相对工作区），默认工作区根目录
+    #[serde(default)]
+    pub path: Option<String>,
     /// 是否递归列出子目录，默认 false
     #[serde(default)]
     pub recursive: Option<bool>,
@@ -71,9 +76,11 @@ impl Tool for ListFilesTool {
             .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
             .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
         format!(
-            "列出指定目录下的文件与子目录。非递归只列一层；\
+            "列目录结构（不按模式过滤）；如需按文件名模式匹配用 glob；如需搜文件内容用 search_file/grep。\n\n\
+             列出指定目录下的文件与子目录。非递归只列一层；\
              递归模式限制深度 3 层、总条目 500 防止爆炸。\
-             返回每条目的名称、大小、类型（file/dir）。\n{cwd_hint}"
+             返回每条目的**完整相对路径**、大小、类型（file/dir），\
+             路径分隔符统一为 `/`，便于直接回传给 read_file/edit_file。\n{cwd_hint}"
         )
     }
 
@@ -83,44 +90,72 @@ impl Tool for ListFilesTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "目录路径（绝对或相对工作区）"
+                    "description": "目录路径（绝对或相对工作区），默认工作区根目录"
                 },
                 "recursive": {
                     "type": "boolean",
                     "description": "是否递归列出子目录，默认 false",
                     "default": false
                 }
-            },
-            "required": ["path"]
+            }
         })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let recursive = args.recursive.unwrap_or(false);
-        let resolved = resolve_path(&args.path, self.cwd.as_deref());
-        let path_display = resolved.display().to_string();
-        let mut entries: Vec<String> = Vec::with_capacity(64);
-        let mut count: usize = 0;
 
-        collect_entries(&resolved, recursive, 0, &mut entries, &mut count)
+        // 根目录：path 参数优先，否则工作区根（无 cwd 时回退进程 cwd）
+        // 与 glob_tool 的 path 参数行为一致
+        let root = match &args.path {
+            Some(p) => resolve_path(p, self.cwd.as_deref()),
+            None => self.cwd.clone().unwrap_or_else(|| PathBuf::from(".")),
+        };
+        let root_meta = fs::metadata(&root)
             .await
-            .map_err(|e| ListFilesError(format!("列举目录失败 [{}]: {e}", path_display)))?;
-
-        if entries.is_empty() {
-            return Ok(format!("目录为空 [{}]", path_display));
+            .map_err(|e| ListFilesError(format!("访问目录失败 [{}]: {e}", root.display())))?;
+        if !root_meta.is_dir() {
+            return Err(ListFilesError(format!(
+                "路径不是目录 [{}]",
+                root.display()
+            )));
         }
 
-        let mut out = String::with_capacity(entries.len() * 48);
-        out.push_str(&format!("目录 {} 内容（共 {} 条）：\n", path_display, entries.len()));
+        // 统一展示路径（Windows 下 \ → /），与 glob_tool 一致
+        let root_display = {
+            let s = root.to_string_lossy().into_owned();
+            if cfg!(windows) {
+                s.replace('\\', "/")
+            } else {
+                s
+            }
+        };
+
+        let mut entries: Vec<String> = Vec::with_capacity(64);
+        let mut count: usize = 0;
+        collect_entries(&root, "", recursive, 0, &mut entries, &mut count)
+            .await
+            .map_err(|e| ListFilesError(format!("列举目录失败 [{}]: {e}", root_display)))?;
+
+        if entries.is_empty() {
+            return Ok(format!("目录为空 [{}]", root_display));
+        }
+
+        // 输出：每行一个条目（完整相对路径 + 元信息），尾部附统计信息
+        let mut out = String::with_capacity(entries.len() * 48 + 160);
         for line in entries.iter() {
             out.push_str(line);
             out.push('\n');
         }
+        out.push('\n');
         if count >= MAX_ENTRIES {
             out.push_str(&format!(
-                "\n[已达到最大条目数 {}，后续条目被截断]",
-                MAX_ENTRIES
+                "共 {} 条（已达上限 {}，后续条目被截断），根目录 {}",
+                entries.len(),
+                MAX_ENTRIES,
+                root_display
             ));
+        } else {
+            out.push_str(&format!("共 {} 条，根目录 {}", entries.len(), root_display));
         }
         Ok(out)
     }
@@ -128,10 +163,15 @@ impl Tool for ListFilesTool {
 
 /// 递归收集目录条目
 ///
-/// 用迭代器消费 `read_dir`，按名称 + 大小 + 类型格式化。
+/// 用迭代器消费 `read_dir`，按 **完整相对路径** + 大小 + 类型格式化。
 /// 深度超限或条目超限时停止递归。
+///
+/// - `dir`：当前正在遍历的目录
+/// - `rel_prefix`：当前目录相对根的路径段（根目录下为空字符串，子目录为 `parent/child`
+///   形式，始终使用 `/` 分隔，跨平台一致；由外层累积传入，避免对每个条目重复 strip_prefix）
 async fn collect_entries(
-    path: &Path,
+    dir: &Path,
+    rel_prefix: &str,
     recursive: bool,
     depth: usize,
     out: &mut Vec<String>,
@@ -141,7 +181,7 @@ async fn collect_entries(
         return Ok(());
     }
 
-    let mut reader = fs::read_dir(path).await?;
+    let mut reader = fs::read_dir(dir).await?;
     while let Some(entry) = reader.next_entry().await? {
         if *count >= MAX_ENTRIES {
             return Ok(());
@@ -153,16 +193,23 @@ async fn collect_entries(
         let size = metadata.len();
         let kind = if is_dir { "dir" } else { "file" };
 
-        let indent = "  ".repeat(depth);
-        out.push(format!("{indent}- {name} [{kind}, {size}B]"));
+        // 完整相对路径：rel_prefix 为空时直接用 name（move，避免 clone）；
+        // 否则用 format! 拼接。rel_prefix 始终用 `/` 分隔，保证跨平台一致
+        let full_rel = if rel_prefix.is_empty() {
+            name
+        } else {
+            format!("{rel_prefix}/{name}")
+        };
 
+        out.push(format!("{full_rel} [{kind}, {size}B]"));
         *count += 1;
 
         // 递归且未超深度时下钻
         // 用 Box::pin 包装递归调用，避免 async fn 递归导致 Future 大小无限增长
         if recursive && is_dir && depth + 1 < MAX_DEPTH {
-            let sub_path = entry.path();
-            Box::pin(collect_entries(&sub_path, recursive, depth + 1, out, count)).await?;
+            let sub_dir = entry.path();
+            Box::pin(collect_entries(&sub_dir, &full_rel, recursive, depth + 1, out, count))
+                .await?;
         }
     }
     Ok(())

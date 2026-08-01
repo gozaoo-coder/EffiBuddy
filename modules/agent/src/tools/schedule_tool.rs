@@ -58,9 +58,6 @@ pub struct ScheduleArgs {
     /// cron 表达式（create/update 需要，5字段：分 时 日 月 周）
     #[serde(default)]
     pub cron_expression: Option<String>,
-    /// 时区（IANA 标识，如 "Asia/Shanghai"）
-    #[serde(default)]
-    pub timezone: Option<String>,
     /// 关联的技能 ID（create 需要）
     #[serde(default)]
     pub skill_id: Option<String>,
@@ -96,9 +93,14 @@ impl Tool for ScheduleTool {
     type Output = String;
 
     fn description(&self) -> String {
-        "管理 cron 定时任务。支持创建/更新/暂停/恢复/删除/列表/查询/触发定时任务。\
-         定时任务通过 cron 表达式（5字段：分 时 日 月 周）按计划自动执行关联的技能。\
-         例如：每天 9 点执行报告技能、每周一 10 点执行周报技能等。"
+        "管理 cron 定时任务。支持创建/更新/暂停/恢复/删除/列表/查询/触发定时任务。\n\
+         定时任务通过 cron 表达式（5字段：分 时 日 月 周）按计划自动执行关联的技能。\n\
+         注意：任务按服务器本地时区（Asia/Shanghai）执行，暂不支持自定义时区。\n\n\
+         各 action 所需参数：\n\
+         - create: name, cron_expression, skill_id（message 为任务内容，触发时执行）\n\
+         - update: scheduled_task_id（其他字段可选，仅传需要更新的）\n\
+         - pause/resume/delete/get/trigger: scheduled_task_id\n\
+         - list: 无需额外参数"
             .to_string()
     }
 
@@ -125,11 +127,7 @@ impl Tool for ScheduleTool {
                 },
                 "cron_expression": {
                     "type": "string",
-                    "description": "cron 表达式，5字段：分 时 日 月 周（如 \"0 9 * * *\" 表示每天 9 点）"
-                },
-                "timezone": {
-                    "type": "string",
-                    "description": "时区（IANA 标识，如 \"Asia/Shanghai\"）"
+                    "description": "标准 5 字段 cron 表达式：分(0-59) 时(0-23) 日(1-31) 月(1-12) 周(0-6, 0=周日)。例如 '0 9 * * *' = 每天 9:00；'0 9 * * 1-5' = 工作日 9:00"
                 },
                 "skill_id": {
                     "type": "string",
@@ -529,7 +527,6 @@ mod tests {
             name: None,
             message: None,
             cron_expression: None,
-            timezone: None,
             skill_id: None,
         }
     }
@@ -546,7 +543,6 @@ mod tests {
                 name: Some("每日报告".to_string()),
                 message: Some("生成日报".to_string()),
                 cron_expression: Some("0 9 * * *".to_string()),
-                timezone: Some("Asia/Shanghai".to_string()),
                 skill_id: Some("agent-reach".to_string()),
                 ..args_with(ScheduleAction::Create)
             })

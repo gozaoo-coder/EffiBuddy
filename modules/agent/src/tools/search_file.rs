@@ -118,9 +118,15 @@ impl Tool for SearchFileTool {
             .map(|p| format!("当前工作区：{}（默认搜索根，相对路径以此为准）", p.display()))
             .unwrap_or_else(|| "未设置工作区，默认在进程工作目录下搜索".to_string());
         format!(
-            "在工作区目录下**递归全文搜索**：对全部文本文件的每一行做关键词匹配，\
+            "在工作区目录下**递归全文搜索**：对全部文本文件的每一行做**字面关键词**匹配（非正则），\
              返回命中行的文件路径 + 行号 + 行内容。\n\n\
-             **输入**：keywords 为关键词数组（如 [\"fn main\", \"tokio\"]），\
+             **与其他查找工具的边界**：\n\
+             - `list_files`：列目录树，不按模式过滤、不读内容\n\
+             - `glob`：按文件名模式匹配，不读内容\n\
+             - `search_file`（本工具）：字面关键词搜文件内容（非正则）\n\
+             - `grep`：正则表达式搜文件内容\n\
+             - `search_codebase`：基于关键词加权排序的代码搜索（自然语言查询）\n\n\
+             **输入**：keywords 为关键词数组（如 `[\"fn main\", \"tokio\"]`），\
              一行包含**任意一个**即命中；match_all=true 时需包含全部。\
              默认不区分大小写，case_sensitive=true 时区分。\n\n\
              **返回格式**（行号 1-based，与 read_file 一致）：\n\
@@ -305,13 +311,17 @@ impl Tool for SearchFileTool {
                     hit_lines.iter().map(|&n| (n, true)).collect()
                 };
 
-                // 相对搜索根的展示路径（Windows 下统一为 / 分隔，方便 LLM 直接回传给
-                // read_file / edit_file 使用，两种分隔符均可解析）
-                let display = entry
-                    .path()
-                    .strip_prefix(&root)
+                // 展示路径：优先相对工作区 cwd（让 LLM 回传 read_file/edit_file 时路径一致，
+                // 避免 path=sub 时返回 "inner.rs" 导致 read_file 解析为 cwd/inner.rs 找不到），
+                // 其次相对搜索根，最后用绝对路径。Windows 下统一为 / 分隔。
+                let path = entry.path();
+                let display = self
+                    .cwd
+                    .as_deref()
+                    .and_then(|cwd| path.strip_prefix(cwd).ok())
+                    .or_else(|| path.strip_prefix(&root).ok())
                     .map(|r| r.display().to_string())
-                    .unwrap_or_else(|_| entry.path().display().to_string());
+                    .unwrap_or_else(|| path.display().to_string());
                 let display = if cfg!(windows) {
                     display.replace('\\', "/")
                 } else {
@@ -574,7 +584,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(out.contains("path: inner.txt"));
+        // 路径基准相对工作区 cwd：path=sub 时返回 "sub/inner.txt" 而非 "inner.txt"，
+        // 保证 LLM 回传 read_file/edit_file 时路径可解析
+        assert!(out.contains("path: sub/inner.txt"));
         assert!(!out.contains("root.txt"));
 
         std::fs::remove_dir_all(&dir).ok();
