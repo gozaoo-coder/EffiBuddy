@@ -57,3 +57,10 @@ pub(crate) fn pinned_memories_path() -> std::path::PathBuf {
 pub(crate) fn attachments_dir() -> std::path::PathBuf {
     appdata_root().join("attachments")
 }
+
+/// ASR 转写记录存储目录：`<appdata>/asr`
+///
+/// AsrStore 在此目录下维护 records.json 索引与 transcripts/、audio/ 子目录。
+pub(crate) fn asr_dir() -> std::path::PathBuf {
+    appdata_root().join("asr")
+}

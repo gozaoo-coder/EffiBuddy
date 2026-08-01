@@ -52,9 +52,54 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// ASR 服务商
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AsrProvider {
+    VolcEngine,
+    Qwen,
+}
+
+/// ASR 配置：语音转写服务凭证与行为参数
+///
+/// 字段按大小降序排列以最小化 padding：
+/// String（24B）→ Option<String>（24B）→ AsrProvider（1B）→ bool（1B）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AsrConfig {
+    pub volc_app_id: String,
+    pub volc_access_token: String,
+    pub volc_cluster: String,
+    pub qwen_api_key: String,
+    pub qwen_base_url: String,
+    pub qwen_audio_model: String,
+    pub default_language: String,
+    /// 摘要用 LLM 模型名；None 表示使用当前激活的对话模型
+    pub summary_model: Option<String>,
+    pub provider: AsrProvider,
+    /// 转写完成后自动生成摘要
+    pub enable_auto_summary: bool,
+}
+
+impl Default for AsrConfig {
+    fn default() -> Self {
+        Self {
+            volc_app_id: String::new(),
+            volc_access_token: String::new(),
+            volc_cluster: "volcengine_streaming_common".to_string(),
+            qwen_api_key: String::new(),
+            qwen_base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+            qwen_audio_model: "qwen-audio-asr".to_string(),
+            default_language: "zh-CN".to_string(),
+            summary_model: None,
+            provider: AsrProvider::VolcEngine,
+            enable_auto_summary: true,
+        }
+    }
+}
+
 /// Agent 配置（可被前端修改并持久化）
 ///
-/// 同时承载：当前激活的运行时配置 + 可使用模型列表 + 主题。
+/// 同时承载：当前激活的运行时配置 + 可使用模型列表 + 主题 + ASR 配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub api_key: String,
@@ -71,6 +116,9 @@ pub struct AgentConfig {
     /// 与 active_model_id 独立：用户可同时激活一个对话模型和一个图像生成模型。
     #[serde(default)]
     pub active_image_gen_model_id: Option<String>,
+    /// ASR（语音转写）配置
+    #[serde(default)]
+    pub asr_config: AsrConfig,
     pub backend: BackendKind,
     /// 是否启用工具调用（RAG 索引等）
     pub enable_tools: bool,
@@ -88,6 +136,7 @@ impl Default for AgentConfig {
             models: Vec::new(),
             active_model_id: None,
             active_image_gen_model_id: None,
+            asr_config: AsrConfig::default(),
             backend: BackendKind::Mock,
             enable_tools: true,
             theme: ThemeMode::System,
@@ -321,6 +370,7 @@ mod tests {
             }],
             active_model_id: Some("m1".into()),
             active_image_gen_model_id: None,
+            asr_config: AsrConfig::default(),
         };
         let s = serde_json::to_string(&c).unwrap();
         let back: AgentConfig = serde_json::from_str(&s).unwrap();
@@ -330,6 +380,8 @@ mod tests {
         assert_eq!(c.models.len(), back.models.len());
         assert_eq!(c.models[0].label, back.models[0].label);
         assert_eq!(c.active_model_id, back.active_model_id);
+        assert_eq!(back.asr_config.provider, AsrProvider::VolcEngine);
+        assert!(back.asr_config.enable_auto_summary);
     }
 
     #[test]

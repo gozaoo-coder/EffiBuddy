@@ -36,6 +36,7 @@
 //! 三种检索模式，自动排除当前会话避免与已注入上下文重复。
 
 pub mod ask_user;
+pub mod asr_tools;
 pub mod call_model;
 pub mod delete_file;
 pub mod display_image;
@@ -68,6 +69,11 @@ pub mod web_search;
 pub mod write_file;
 
 pub use ask_user::{AskUserArgs, AskUserError, AskUserTool, Question, QuestionOption};
+pub use asr_tools::{
+    AsrRecordDetail, AsrRecordSummary, AsrTool, GetAsrRecordArgs, GetAsrRecordError,
+    GetAsrRecordTool, ListAsrArgs, ListAsrError, ListAsrTool, SearchAsrArgs, SearchAsrError,
+    SearchAsrTool, TranscribeAudioArgs, TranscribeAudioError, TranscribeAudioOutput,
+};
 pub use call_model::CallModelTool;
 pub use delete_file::{DeleteFileArgs, DeleteFileError, DeleteFileTool};
 pub use display_image::{DisplayImageOutput, DisplayImageTool};

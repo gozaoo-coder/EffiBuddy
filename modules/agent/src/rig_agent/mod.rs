@@ -171,4 +171,7 @@ pub struct RigAgent {
     /// 待办列表共享状态，TodoWriteTool 据此管理任务列表。
     /// None 时 todo_write 工具不可用。
     pub(super) todo_state: Option<Arc<RwLock<Vec<TodoItem>>>>,
+    /// ASR 语音转写服务句柄，ASR 工具集据此转写/检索/列出/获取记录。
+    /// None 时不注册 ASR 工具（transcribe_audio / search_asr_records 等）。
+    pub(super) asr_service: Option<Arc<crate::asr::AsrService>>,
 }

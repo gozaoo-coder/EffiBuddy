@@ -32,6 +32,25 @@ async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# ASR：火山引擎流式 WebSocket（tokio-tungstenite）+ gzip 帧压缩（flate2）+ base64 音频编码
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+flate2 = "1"
+base64 = "0.22"
+
+# P2P 加密与传输：X25519 ECDH 密钥协商 + Ed25519 配对签名 + AES-256-GCM 动态会话密钥 +
+# HKDF 派生 + SHA-256 + 安全随机数；bytes/tokio-util 用于长度前缀帧编解码
+aes-gcm = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = "0.10"
+hkdf = "0.12"
+rand = "0.8"
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# 应用数据目录解析
+dirs = "5"
+
 # 内部 crate 互引
 effisuite-core = { path = "modules/core", version = "0.1.0" }
 effisuite-agent = { path = "modules/agent", version = "0.1.0" }

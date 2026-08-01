@@ -19,3 +19,5 @@ async-trait.workspace = true
 # ClawHub HTTP 客户端 + ZIP 解压
 reqwest.workspace = true
 zip.workspace = true
+# 应用数据目录解析（paths.rs）
+dirs.workspace = true

@@ -13,7 +13,9 @@
 //! - `skills`：技能管理与会话工作区
 //! - `clawhub`：ClawHub 浏览 / 安装（Skills & Plugins）
 //! - `scheduled_tasks`：定时任务管理
+//! - `asr`：语音转写（流式录音 / 文件转写 / 记录管理 / 摘要 RAG / 配置）
 
+mod asr;
 mod chat;
 mod clawhub;
 mod compression;
@@ -27,6 +29,7 @@ mod p2p;
 mod scheduled_tasks;
 mod skills;
 
+pub(crate) use asr::*;
 pub(crate) use chat::*;
 pub(crate) use clawhub::*;
 pub(crate) use compression::*;

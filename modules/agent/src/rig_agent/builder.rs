@@ -89,6 +89,7 @@ impl RigAgent {
             web_search_config: Arc::new(RwLock::new(None)),
             video_gen_config: Arc::new(RwLock::new(None)),
             todo_state: None,
+            asr_service: None,
         })
     }
 
@@ -141,6 +142,13 @@ impl RigAgent {
     /// 注入待办列表共享状态，启用 todo_write 工具
     pub fn with_todo_state(mut self, state: Option<Arc<RwLock<Vec<TodoItem>>>>) -> Self {
         self.todo_state = state;
+        self
+    }
+
+    /// 注入 ASR 语音转写服务句柄，启用 transcribe_audio / search_asr_records /
+    /// list_asr_records / get_asr_record 工具
+    pub fn with_asr_service(mut self, service: Option<Arc<crate::asr::AsrService>>) -> Self {
+        self.asr_service = service;
         self
     }
 
@@ -231,6 +239,7 @@ impl RigAgent {
             web_search_config: Arc::new(RwLock::new(None)),
             video_gen_config: Arc::new(RwLock::new(None)),
             todo_state: None,
+            asr_service: None,
         })
     }
 

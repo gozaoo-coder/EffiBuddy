@@ -8,6 +8,7 @@
 //! ClawHub HTTP API 并解压安装包。把它放在 core 是为了让 tauriFront 命令层
 //! 直接复用，避免在 agent crate 中引入额外耦合。
 
+pub mod asr;
 pub mod clawhub;
 pub mod compression;
 pub mod config;
@@ -15,8 +16,10 @@ pub mod error;
 pub mod events;
 pub mod memory;
 pub mod models;
+pub mod paths;
 pub mod pinned_memory;
 pub mod plugin_store;
+pub mod remote_task;
 pub mod schedule_store;
 pub mod skill_index;
 pub mod skill_store;
@@ -28,8 +31,8 @@ pub use compression::{
     CompressionState, CompressionStore,
 };
 pub use config::{
-    builtin_presets, AgentConfig, AvailableModel, BackendKind, ModelKind, ModelPricing,
-    ProviderPreset, ThemeMode,
+    builtin_presets, AgentConfig, AsrConfig, AsrProvider, AvailableModel, BackendKind, ModelKind,
+    ModelPricing, ProviderPreset, ThemeMode,
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
@@ -43,7 +46,11 @@ pub use models::{
 };
 pub use pinned_memory::{PinnedMemory, PinnedMemorySource, PinnedMemoryStore};
 pub use plugin_store::PluginStore;
+pub use remote_task::RemoteTaskDispatcher;
 pub use schedule_store::ScheduledTaskStore;
 pub use skill_index::{SkillEntry, SkillHit, SkillIndex};
 pub use skill_store::SkillStore;
 pub use storage::{ConversationMeta, ConversationStore, SearchHit};
+pub use asr::{
+    AsrRecord, AsrSearchQuery, AsrSource, AsrStatus, AsrStore, AsrSummaryHit, AsrSummaryIndex,
+};

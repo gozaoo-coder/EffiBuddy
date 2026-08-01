@@ -11,12 +11,18 @@
 //! - [`embedding`]：OpenAI 兼容嵌入向量 provider，为 `MemoryIndex` 提供向量路
 
 pub mod agent;
+pub mod asr;
 pub mod embedding;
 pub mod mock;
 pub mod rig_agent;
 pub mod tools;
 
 pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
+pub use asr::{
+    AsrError, AsrProvider, AsrService, AudioStreamConfig, FinishResult, QwenProvider,
+    SessionInfo, SessionRegistry, SessionState, TranscribeResult, VolcEngineProvider,
+    generate_summary,
+};
 pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::{
@@ -25,11 +31,13 @@ pub use rig_agent::{
     call_compression_agent, call_compression_agent_stream, parse_auto_classify_response,
 };
 pub use tools::{
-    AskUserTool, CallModelTool, DeleteFileTool, EditFileTool, GenerateVideoTool, GetTimeTool,
-    GlobTool, GrepTool, ImageGenConfig, ImageGenTool, ManageModelTool, ModelManagerHandle,
+    AsrRecordDetail, AsrRecordSummary, AsrTool, AskUserTool, CallModelTool, DeleteFileTool,
+    EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetTimeTool, GlobTool, GrepTool,
+    ImageGenConfig, ImageGenTool, ListAsrTool, ManageModelTool, ModelManagerHandle,
     NotifyUserTool, OpenPreviewTool, ReadFileTool, ScheduleAction, ScheduleArgs, ScheduleError,
-    ScheduleTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool, SearchMemoryTool,
-    SearchResult, SetTitleTool, SubAgentEvent, SubAgentEventKind, SubAgentKit, SubAgentManager,
-    SubAgentTool, TodoItem, TodoPriority, TodoStatus, TodoWriteTool, UninstallPluginTool,
-    UninstallSkillTool, VideoGenConfig, WebSearchConfig, WebSearchTool, WriteFileTool,
+    ScheduleTool, SearchAsrTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool,
+    SearchMemoryTool, SearchResult, SetTitleTool, SubAgentEvent, SubAgentEventKind, SubAgentKit,
+    SubAgentManager, SubAgentTool, TodoItem, TodoPriority, TodoStatus, TodoWriteTool,
+    UninstallPluginTool, UninstallSkillTool, VideoGenConfig, WebSearchConfig, WebSearchTool,
+    WriteFileTool,
 };

@@ -24,8 +24,11 @@ chrono.workspace = true
 cron = "0.12"
 # WebFetchTool / ImageGenTool 使用 reqwest；rustls-tls 避免依赖 OpenSSL，json 供 .json()/.bearer_auth()
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-# ImageGenTool 生成图片文件名前缀与 base64 解码
+# ImageGenTool 生成图片文件名前缀与 base64 解码；ASR 音频 base64 编解码
 uuid.workspace = true
-base64 = "0.22"
+base64.workspace = true
 # GrepTool 正则表达式匹配
 regex = "1"
+# ASR：火山引擎流式 WebSocket（tokio-tungstenite）+ gzip 帧压缩（flate2）
+tokio-tungstenite.workspace = true
+flate2.workspace = true

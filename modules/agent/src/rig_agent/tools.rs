@@ -22,14 +22,14 @@ use rig_core::client::CompletionClient;
 use rig_core::providers::openai;
 
 use crate::tools::{
-    AskUserTool, CallModelTool, DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool,
-    EditFileTool, GenerateVideoTool, GetSkillDetailTool, GetTimeTool, GlobTool, GrepTool,
-    ImageGenTool, InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool,
-    ListPinnedMemoriesTool, ManageModelTool, NotifyUserTool, OpenPreviewTool, PinMemoryTool,
-    ReadFileTool, ScheduleTool, SearchClawHubSkillsTool, SearchCodebaseTool, SearchFileTool,
-    SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, SubAgentTool,
-    TodoWriteTool, UninstallPluginTool, UninstallSkillTool, WebFetchTool, WebSearchTool,
-    WriteFileTool,
+    AsrTool, AskUserTool, CallModelTool, DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool,
+    EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetSkillDetailTool, GetTimeTool, GlobTool,
+    GrepTool, ImageGenTool, InstallClawHubSkillTool, ListAsrTool, ListFilesTool,
+    ListInstalledSkillsTool, ListPinnedMemoriesTool, ManageModelTool, NotifyUserTool,
+    OpenPreviewTool, PinMemoryTool, ReadFileTool, ScheduleTool, SearchAsrTool,
+    SearchClawHubSkillsTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool,
+    SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, SubAgentTool, TodoWriteTool,
+    UninstallPluginTool, UninstallSkillTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 
 use super::RigAgent;
@@ -308,6 +308,20 @@ impl RigAgent {
                     None => video_gen,
                 };
                 b = b.tool(video_gen);
+            }
+
+            // ASR 语音转写工具集：仅在 asr_service 注入时注册。
+            // transcribe_audio：转写本地音频文件，自动生成摘要
+            // search_asr_records：按关键词搜索已转写的 ASR 记录
+            // list_asr_records：列出最近的 ASR 转写记录
+            // get_asr_record：获取指定 ASR 记录的完整转写文本
+            // 流式录音 API 不作为 LLM 工具暴露，由 Tauri 命令层直接暴露给前端
+            if let Some(asr) = &self.asr_service {
+                let transcribe = AsrTool::new(Arc::clone(asr));
+                let search_asr = SearchAsrTool::new(Arc::clone(asr));
+                let list_asr = ListAsrTool::new(Arc::clone(asr));
+                let get_asr = GetAsrRecordTool::new(Arc::clone(asr));
+                b = b.tool(transcribe).tool(search_asr).tool(list_asr).tool(get_asr);
             }
 
             b.default_max_turns(usize::MAX).build()

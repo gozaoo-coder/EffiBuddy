@@ -23,12 +23,13 @@
 use std::sync::Arc;
 
 use effisuite_agent::{
-    ChatAgent, ImageGenConfig, ModelManagerHandle, SubAgentEvent, SubAgentKit, SubAgentManager,
+    AsrService, ChatAgent, ImageGenConfig, ModelManagerHandle, SubAgentEvent, SubAgentKit,
+    SubAgentManager,
 };
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
-    AgentConfig, CompressionStore, ConversationStore, EventBus, MemoryIndex, PinnedMemoryStore,
-    PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
+    AgentConfig, AsrStore, AsrSummaryIndex, CompressionStore, ConversationStore, EventBus,
+    MemoryIndex, PinnedMemoryStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
 };
 use effisuite_p2p::P2pManager;
 use tauri::{Emitter, Manager};
@@ -183,9 +184,29 @@ pub fn run() {
         emitter,
     ));
 
+    // 事件总线：ASR 服务与 P2P 均需注入，须在 build_agent 之前构造
+    let event_bus = EventBus::new(64);
+
+    // ASR 服务构造：AsrStore 持久化转写记录，AsrSummaryIndex 接入独立 MemoryIndex
+    // 做摘要 RAG 检索（namespace="asr" 隔离，不污染主记忆索引）
+    let asr_store = match AsrStore::new(asr_dir()) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(error = %e, "AsrStore 初始化失败，ASR 记录不会持久化");
+            None
+        }
+    };
+    let asr_summary_index = AsrSummaryIndex::new(Arc::new(RwLock::new(MemoryIndex::new())));
+    let asr_service = Arc::new(AsrService::from_config(
+        config.asr_config.clone(),
+        Some(Arc::new(event_bus.clone())),
+        asr_store,
+        Some(asr_summary_index),
+    ));
+
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
     // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
-    // plugin_store / compression_store / model_manager / sub_agents
+    // plugin_store / compression_store / model_manager / sub_agents / asr_service
     // skill_store / clawhub / plugin_store / compression_store 已是 Clone（内部 Arc），
     // 直接传值，无需 Arc::new 包装
     let agent: Arc<dyn ChatAgent> = build_agent(
@@ -205,6 +226,7 @@ pub fn run() {
         compression_store.clone(),
         Arc::clone(&model_manager),
         Arc::clone(&sub_agents),
+        Arc::clone(&asr_service),
     );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
@@ -215,7 +237,6 @@ pub fn run() {
         }
     };
 
-    let event_bus = EventBus::new(64);
     let p2p = Arc::new(P2pManager::new(event_bus.clone()));
 
     tracing::info!(backend = %agent.backend(), "EffiSuite 启动");
@@ -247,6 +268,7 @@ pub fn run() {
         model_manager,
         sub_agents,
         sub_agent_records,
+        asr_service,
     };
 
     tauri::Builder::default()
@@ -388,6 +410,22 @@ pub fn run() {
             create_scheduled_task,
             delete_scheduled_task,
             toggle_scheduled_task,
+            // ASR 语音转写
+            asr_start_streaming,
+            asr_push_audio,
+            asr_finish_streaming,
+            asr_cancel_streaming,
+            asr_transcribe_file,
+            asr_list_records,
+            asr_get_record,
+            asr_search_records,
+            asr_delete_record,
+            asr_update_record,
+            asr_search_summaries,
+            asr_list_sessions,
+            asr_get_config,
+            asr_update_config,
+            asr_generate_summary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

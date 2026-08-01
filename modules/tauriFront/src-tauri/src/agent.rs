@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use effisuite_agent::{
-    ChatAgent, ImageGenConfig, MockAgent, OpenAIEmbeddingProvider, RigAgent, DEFAULT_EMBEDDING_MODEL,
+    AsrService, ChatAgent, ImageGenConfig, MockAgent, OpenAIEmbeddingProvider, RigAgent,
+    DEFAULT_EMBEDDING_MODEL,
 };
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
@@ -58,6 +59,7 @@ pub(crate) fn build_agent(
     compression_store: CompressionStore,
     model_manager: Arc<effisuite_agent::ModelManagerHandle>,
     sub_agents: Arc<effisuite_agent::SubAgentManager>,
+    asr_service: Arc<AsrService>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -83,7 +85,7 @@ pub(crate) fn build_agent(
                 Some(model_manager),
                 Some(sub_agents),
             ) {
-                Ok(agent) => Arc::new(agent),
+                Ok(agent) => Arc::new(agent.with_asr_service(Some(asr_service))),
                 Err(e) => {
                     tracing::warn!(error = %e, "RigAgent 构造失败，回退到 MockAgent");
                     Arc::new(MockAgent::new())
@@ -118,6 +120,7 @@ pub(crate) fn build_agent_from_state(
         state.compression_store.clone(),
         Arc::clone(&state.model_manager),
         Arc::clone(&state.sub_agents),
+        Arc::clone(&state.asr_service),
     )
 }
 

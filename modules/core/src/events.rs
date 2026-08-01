@@ -53,6 +53,29 @@ pub enum BusEvent {
         preview_url: String,
         command_id: Option<String>,
     },
+    /// ASR 流式转写的一段增量文本
+    /// session_id 标识当前流式会话，is_final=true 表示该会话转写结束
+    AsrStreamChunk {
+        session_id: String,
+        text: String,
+        is_final: bool,
+    },
+    /// ASR 会话状态变更（started/transcribing/completed/failed/cancelled）
+    AsrSessionStatus {
+        session_id: String,
+        status: String,
+        error: Option<String>,
+    },
+    /// ASR 文件上传转写进度（0.0-1.0）
+    AsrUploadProgress {
+        record_id: String,
+        progress: f32,
+        status: String,
+    },
+    /// ASR 记录更新（新增/转写完成/摘要完成/编辑），前端据此刷新列表
+    AsrRecordUpdated {
+        record_id: String,
+    },
 }
 
 /// 事件总线句柄，可被廉价 clone（broadcast 内部已是 Arc 共享）

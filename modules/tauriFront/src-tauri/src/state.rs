@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use effisuite_agent::{ChatAgent, ImageGenConfig, ModelManagerHandle, SubAgentManager};
+use effisuite_agent::{ChatAgent, AsrService, ImageGenConfig, ModelManagerHandle, SubAgentManager};
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
     AgentConfig, CompressionStore, ConversationStore, EventBus, MemoryIndex, PinnedMemoryStore,
@@ -74,6 +74,9 @@ pub struct AppState {
     /// 流式回复中子 agent 的过程记录（emitter 实时累积，流结束时持久化到消息）。
     pub sub_agent_records:
         Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>>,
+    /// ASR 语音转写服务句柄（火山引擎/千问），注入 agent 启用 ASR 工具，
+    /// 亦供 Tauri 命令层直接调用流式录音 API。
+    pub asr_service: Arc<AsrService>,
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。
