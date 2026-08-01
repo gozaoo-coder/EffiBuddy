@@ -9,7 +9,7 @@
 //! - **词法（BM25）**：基于 Okapi BM25 + IDF 加权，优于简单 `contains` 计数。
 //!   利用倒排表 `HashMap<token, Vec<(entry_idx, tf)>>` 仅对含查询词的文档打分，
 //!   避免全量遍历。
-//! - **向量（embedding 余弦相似度）**：通过 [`EmbeddingProvider`] 异步获取查询向量，
+//! - **向量（embedding 余弦相似度）**：通过 [`EmbeddingProvider`] 异步获取查询向量,
 //!   与每条已嵌入条目比对。Provider 由上层（agent 模块）注入，core 不依赖网络。
 //! - **混合（RRF, Reciprocal Rank Fusion）**：默认模式。对两路结果按
 //!   `score = Σ 1/(k + rank)` 合并，无需归一化原始分数，鲁棒性高。
@@ -21,143 +21,44 @@
 //!   → u64(8) → Role(1)，最小化 padding。
 //! - 查询路径全部用迭代器适配器，无显式 `for i in 0..len` 索引循环。
 //! - 结果 Vec 用 `with_capacity` 预分配。
-//! - embedding 持久化缓存由外部 `import_embeddings`/`export_embeddings` 注入，
+//! - embedding 持久化缓存由外部 `import_embeddings`/`export_embeddings` 注入,
 //!   避免在 core 引入文件 IO。
+//!
+//! # 模块组织
+//!
+//! 为避免"上帝文件"，本模块按职责拆分为多个子文件：
+//! - [`types`]：公开类型与内部状态 [`types::IndexState`]、BM25/RRF 默认参数
+//! - [`tokenize`]：CJK 单字+bigram 分词器（通过 `crate::tokenize` 复用）
+//! - [`bm25`]：BM25 检索算法、IDF/TF 计算、倒排索引构建
+//! - [`vector`]：向量余弦相似度检索
+//! - [`rrf`]：RRF 融合算法
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{CoreError, Message, Role};
 
-/// 默认 BM25 参数 k1（词频饱和参数）
-const DEFAULT_K1: f64 = 1.2;
-/// 默认 BM25 参数 b（文档长度归一化参数）
-const DEFAULT_B: f64 = 0.75;
-/// RRF 默认 k 值（rank fusion 平滑参数）
-const DEFAULT_RRF_K: u32 = 60;
+mod bm25;
+mod rrf;
+mod tokenize;
+mod types;
+mod vector;
 
-/// 嵌入向量维度（仅用于一致性校验，不强制；不同 provider 维度不同）
-/// 这里不写死维度，由 provider 决定。
-/// 异步嵌入向量提供者 trait
-///
-/// core 模块不依赖任何 HTTP/rig 实现，仅定义接口。agent 模块提供
-/// `OpenAIEmbeddingProvider` 实现，使用已配置的 OpenAI 兼容 `/embeddings` 接口。
-///
-/// 实现方需保证：
-/// - 输入多条文本时按顺序返回对应向量
-/// - 向量维度对同一 provider/model 稳定
-/// - 错误以 `CoreError::Agent` 上抛
-#[async_trait]
-pub trait EmbeddingProvider: Send + Sync {
-    /// 批量计算嵌入向量。`texts` 顺序与返回 `Vec<Vec<f32>>` 顺序一一对应。
-    async fn embed(&self, texts: &[&str]) -> crate::Result<Vec<Vec<f32>>>;
-}
+// 对外公开 API（签名与可见性保持不变）
+pub use types::{EmbeddingProvider, MemoryEntry, MemoryHit, MemoryStats, SearchMode};
+// `tokenize` 被 storage.rs / skill_index.rs 等通过 `crate::tokenize` 复用
+pub use tokenize::tokenize;
 
-/// 一条被索引的历史消息条目
-///
-/// 字段按大小降序排列以最小化 padding：
-/// `conversation_id`/`message_id`/`content`（String, 24B）
-/// → `tokens`（Vec, 24B）
-/// → `embedding`（Option<Vec>, 24B）
-/// → `timestamp`（u64, 8B）
-/// → `role`（Role, 1B）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryEntry {
-    pub conversation_id: String,
-    pub message_id: String,
-    pub content: String,
-    /// 预分词结果（小写化），避免每次查询重复切词
-    pub tokens: Vec<String>,
-    /// 嵌入向量；None 表示尚未计算，向量检索时跳过
-    #[serde(default)]
-    pub embedding: Option<Vec<f32>>,
-    pub timestamp: u64,
-    pub role: Role,
-}
-
-impl MemoryEntry {
-    /// 文档长度（token 数），BM25 用
-    #[inline]
-    fn dl(&self) -> usize {
-        self.tokens.len()
-    }
-
-    /// 稳定键：`<conv_id>:<msg_id>`，用于 embedding 持久化缓存匹配
-    #[inline]
-    pub fn cache_key(&self) -> String {
-        format!("{}:{}", self.conversation_id, self.message_id)
-    }
-}
-
-/// 检索命中结果
-///
-/// 字段按大小降序：String(24) → f32(4) → u64(8) 顺序调整后为
-/// String(24) → u64(8) → f32(4) → bool(1)。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryHit {
-    pub conversation_id: String,
-    pub message_id: String,
-    pub snippet: String,
-    pub timestamp: u64,
-    /// 相关性得分，越大越相关；不同检索方式分数含义不同（BM25 / cosine / RRF）
-    pub score: f32,
-    pub role: Role,
-}
-
-/// 检索模式
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SearchMode {
-    /// 词法 BM25
-    Lexical,
-    /// 向量 embedding 余弦相似度
-    Vector,
-    /// 混合 RRF（默认推荐）
-    #[default]
-    Hybrid,
-}
-
-/// 索引内部可变状态（被 RwLock 包裹）
-struct IndexState {
-    entries: Vec<MemoryEntry>,
-    /// 倒排表：token → [(entry_idx, tf)]
-    inverted: HashMap<String, Vec<(usize, u32)>>,
-    /// 文档频率：token → 出现该 token 的文档数
-    df: HashMap<String, u32>,
-    /// 文档总数
-    n_docs: u64,
-    /// 文档总长度（token 数之和）
-    total_dl: u64,
-    /// BM25 参数
-    k1: f64,
-    b: f64,
-    /// 嵌入向量提供者（可热替换）
-    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
-}
-
-impl IndexState {
-    #[inline]
-    fn avg_dl(&self) -> f64 {
-        if self.n_docs == 0 {
-            0.0
-        } else {
-            self.total_dl as f64 / self.n_docs as f64
-        }
-    }
-
-    /// BM25 的 IDF：采用 Okapi 经典公式 `ln((N - df + 0.5) / (df + 0.5) + 1)`，
-    /// 保证非负（Lucene/ES 默认变体）。
-    #[inline]
-    fn idf(&self, df: u32) -> f64 {
-        let n = self.n_docs as f64;
-        let df = df as f64;
-        ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
-    }
-}
+// 内部辅助：将子模块中的算法函数引入本模块作用域，供 MemoryIndex 调用
+use bm25::{bm25_search, push_entry};
+use rrf::rrf_fuse;
+use types::{IndexState, DEFAULT_B, DEFAULT_K1, DEFAULT_RRF_K};
+use vector::cosine_search;
+// `cosine_sim` / `vec_norm` 仅供单元测试直接调用，门控以避免非测试构建的 unused 警告
+#[cfg(test)]
+use vector::{cosine_sim, vec_norm};
 
 /// 跨会话历史记忆索引，线程安全可廉价 clone（内部 RwLock + Arc）
 ///
@@ -486,321 +387,6 @@ impl Default for MemoryIndex {
     }
 }
 
-/// 索引统计
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryStats {
-    pub total_entries: usize,
-    pub unique_tokens: usize,
-    pub embedded_entries: usize,
-    pub avg_doc_len: f64,
-}
-
-// =========================================================
-// 内部辅助函数
-// =========================================================
-
-/// 把一条 entry 推入索引状态：更新 entries / inverted / df / n_docs / total_dl
-fn push_entry(state: &mut IndexState, entry: MemoryEntry) {
-    let idx = state.entries.len();
-    let dl = entry.dl();
-    // 统计每个 token 的 tf（用 HashMap 累积避免重复遍历）
-    let mut tf_map: HashMap<&str, u32> = HashMap::with_capacity(entry.tokens.len());
-    for tok in &entry.tokens {
-        *tf_map.entry(tok.as_str()).or_insert(0) += 1;
-    }
-    for (tok, tf) in tf_map {
-        state
-            .inverted
-            .entry(tok.to_string())
-            .or_default()
-            .push((idx, tf));
-        *state.df.entry(tok.to_string()).or_insert(0) += 1;
-    }
-    state.n_docs += 1;
-    state.total_dl += dl as u64;
-    state.entries.push(entry);
-}
-
-/// 分词：按空白与中英文标点切分，对 CJK 字符做**单字 + bigram（二元字组）**拆分，转小写
-///
-/// 这是 `MemoryIndex` 的唯一分词实现，`search_history`/`storage` 等模块通过
-/// `effisuite_core::tokenize` 复用，保证索引侧与查询侧行为一致。
-///
-/// # 为什么对 CJK 做单字 + bigram？
-///
-/// - 纯整串作 token 会导致 BM25 倒排表只能精确命中整串：索引 "我们讨论过异步编程"
-///   生成单个 token，查询 "异步" 时倒排表中没有 "异步" 这个 key，召回率为 0。
-/// - 纯单字精度低、噪声大（如 "的"/"是" 命中大量文档，IDF 失效）。
-/// - bigram 是无词典中文检索的经典折中：召回与精度兼顾，零依赖，跨平台稳定。
-///
-/// # 示例
-///
-/// - `"异步编程"` → `["异步", "步编", "编程", "异", "步", "编", "程"]`
-/// - `"Rust 编程"` → `["rust", "编程", "编", "程"]`
-pub fn tokenize(content: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(content.len() / 2 + 4);
-    let mut ascii_buf = String::new();
-    let mut cjk_buf: Vec<char> = Vec::new();
-
-    for c in content.chars() {
-        let is_sep = c.is_whitespace() || "，。、；：！？,.:;!?\"'`()[]{}【】《》".contains(c);
-        if is_sep {
-            flush_ascii(&mut ascii_buf, &mut out);
-            flush_cjk(&mut cjk_buf, &mut out);
-        } else if is_cjk(c) {
-            flush_ascii(&mut ascii_buf, &mut out);
-            cjk_buf.push(c);
-        } else {
-            flush_cjk(&mut cjk_buf, &mut out);
-            ascii_buf.push(c);
-        }
-    }
-    flush_ascii(&mut ascii_buf, &mut out);
-    flush_cjk(&mut cjk_buf, &mut out);
-    out
-}
-
-/// 判定字符是否为 CJK（中日韩）表意文字或假名
-///
-/// 覆盖 CJK 统一表意文字主区、扩展 A/B、平假名、片假名。
-/// 仅对 CJK 做单字拆分；ASCII 与其他文字按整词切分。
-#[inline]
-fn is_cjk(c: char) -> bool {
-    matches!(c,
-        '\u{4E00}'..='\u{9FFF}'      // CJK 统一表意文字（主区）
-        | '\u{3400}'..='\u{4DBF}'    // CJK 扩展 A
-        | '\u{20000}'..='\u{2A6DF}'  // CJK 扩展 B
-        | '\u{3040}'..='\u{309F}'    // 平假名
-        | '\u{30A0}'..='\u{30FF}'    // 片假名
-    )
-}
-
-/// flush ASCII / 非分词缓冲区为一个整词 token，转小写
-#[inline]
-fn flush_ascii(buf: &mut String, out: &mut Vec<String>) {
-    if !buf.is_empty() {
-        out.push(buf.to_lowercase());
-        buf.clear();
-    }
-}
-
-/// flush CJK 缓冲区：先输出 bigram（相邻二字组合），再输出单字
-///
-/// bigram 优先于单字写入顺序无语义影响（BM25 按 token 汇总分数）。
-/// 单字 + bigram 同时索引：查询 "异步" 会命中 bigram "异步"（高 IDF），
-/// 也会命中 "异"/"步" 单字（低 IDF），分数对称。
-#[inline]
-fn flush_cjk(cjk: &mut Vec<char>, out: &mut Vec<String>) {
-    if cjk.is_empty() {
-        return;
-    }
-    // bigram（相邻二字组合）
-    for w in cjk.windows(2) {
-        let mut s = String::with_capacity(8);
-        s.push(w[0]);
-        s.push(w[1]);
-        out.push(s);
-    }
-    // 单字
-    for c in cjk.iter() {
-        out.push(c.to_string());
-    }
-    cjk.clear();
-}
-
-/// BM25 检索：仅对含查询词的文档打分
-fn bm25_search(
-    state: &IndexState,
-    keywords: &[String],
-    limit: usize,
-    exclude_conv: Option<&str>,
-) -> Vec<MemoryHit> {
-    if state.entries.is_empty() || keywords.is_empty() {
-        return Vec::new();
-    }
-    let avg_dl = state.avg_dl();
-    let k1 = state.k1;
-    let b = state.b;
-
-    // 候选文档：通过倒排表汇总，避免全量遍历
-    // 候选 entry_idx -> 累积 BM25 分数
-    let mut scores: HashMap<usize, f64> = HashMap::with_capacity(32);
-    for kw in keywords {
-        let df = match state.df.get(kw) {
-            Some(&d) => d,
-            None => continue,
-        };
-        let idf = state.idf(df);
-        if let Some(postings) = state.inverted.get(kw) {
-            for &(idx, tf) in postings {
-                let entry = &state.entries[idx];
-                if let Some(ex) = exclude_conv {
-                    if entry.conversation_id == ex {
-                        continue;
-                    }
-                }
-                let dl = entry.dl() as f64;
-                let tf = tf as f64;
-                // BM25 tf 组件：tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / avg_dl))
-                let denom =
-                    tf + k1 * (1.0 - b + b * (if avg_dl > 0.0 { dl / avg_dl } else { 0.0 }));
-                let tf_component = if denom > 0.0 {
-                    tf * (k1 + 1.0) / denom
-                } else {
-                    0.0
-                };
-                *scores.entry(idx).or_insert(0.0) += idf * tf_component;
-            }
-        }
-    }
-
-    // 按分数降序取 top-limit
-    let mut scored: Vec<(usize, f64)> = scores.into_iter().collect();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored
-        .into_iter()
-        .take(limit)
-        .map(|(idx, score)| {
-            let entry = &state.entries[idx];
-            MemoryHit {
-                conversation_id: entry.conversation_id.clone(),
-                message_id: entry.message_id.clone(),
-                snippet: make_snippet(&entry.content, 100),
-                timestamp: entry.timestamp,
-                score: score as f32,
-                role: entry.role,
-            }
-        })
-        .collect()
-}
-
-/// 向量余弦相似度检索
-fn cosine_search(
-    state: &IndexState,
-    q_vec: &[f32],
-    limit: usize,
-    exclude_conv: Option<&str>,
-) -> Vec<MemoryHit> {
-    if state.entries.is_empty() || q_vec.is_empty() {
-        return Vec::new();
-    }
-    let q_norm = vec_norm(q_vec);
-    if q_norm == 0.0 {
-        return Vec::new();
-    }
-
-    // 迭代器链：过滤已嵌入 + 排除当前会话 + 计算相似度 + 取 top-limit
-    let mut scored: Vec<(usize, f64)> = state
-        .entries
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, e)| {
-            if let Some(ex) = exclude_conv {
-                if e.conversation_id == ex {
-                    return None;
-                }
-            }
-            let emb = e.embedding.as_ref()?;
-            let sim = cosine_sim(emb, q_vec, q_norm);
-            Some((idx, sim))
-        })
-        .collect();
-
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored
-        .into_iter()
-        .take(limit)
-        .map(|(idx, sim)| {
-            let entry = &state.entries[idx];
-            MemoryHit {
-                conversation_id: entry.conversation_id.clone(),
-                message_id: entry.message_id.clone(),
-                snippet: make_snippet(&entry.content, 100),
-                timestamp: entry.timestamp,
-                score: sim as f32,
-                role: entry.role,
-            }
-        })
-        .collect()
-}
-
-/// Reciprocal Rank Fusion：融合两路结果
-///
-/// `score = Σ 1 / (k + rank)`，rank 从 1 开始。无需归一化原始分数。
-fn rrf_fuse(
-    lexical: Vec<MemoryHit>,
-    vector: Vec<MemoryHit>,
-    limit: usize,
-    k: u32,
-) -> Vec<MemoryHit> {
-    // 用 (conv_id, msg_id) 作为合并键
-    let mut fused: HashMap<(String, String), (MemoryHit, f64)> =
-        HashMap::with_capacity(lexical.len() + vector.len());
-
-    for (rank, hit) in lexical.iter().enumerate() {
-        let key = (hit.conversation_id.clone(), hit.message_id.clone());
-        let rrf_score = 1.0 / (k as f64 + (rank + 1) as f64);
-        fused
-            .entry(key)
-            .and_modify(|e| e.1 += rrf_score)
-            .or_insert_with(|| (hit.clone(), rrf_score));
-    }
-    for (rank, hit) in vector.iter().enumerate() {
-        let key = (hit.conversation_id.clone(), hit.message_id.clone());
-        let rrf_score = 1.0 / (k as f64 + (rank + 1) as f64);
-        fused
-            .entry(key)
-            .and_modify(|e| e.1 += rrf_score)
-            .or_insert_with(|| (hit.clone(), rrf_score));
-    }
-
-    let mut out: Vec<(MemoryHit, f64)> = fused.into_values().collect();
-    out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    out.into_iter()
-        .take(limit)
-        .map(|(mut hit, score)| {
-            hit.score = score as f32;
-            hit
-        })
-        .collect()
-}
-
-/// 向量 L2 范数
-#[inline]
-fn vec_norm(v: &[f32]) -> f64 {
-    v.iter()
-        .map(|x| (*x as f64) * (*x as f64))
-        .sum::<f64>()
-        .sqrt()
-}
-
-/// 余弦相似度（precomputable q_norm 优化）
-#[inline]
-fn cosine_sim(a: &[f32], b: &[f32], b_norm: f64) -> f64 {
-    let a_norm = vec_norm(a);
-    if a_norm == 0.0 || b_norm == 0.0 {
-        return 0.0;
-    }
-    let dot: f64 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| (*x as f64) * (*y as f64))
-        .sum();
-    dot / (a_norm * b_norm)
-}
-
-/// 生成片段：取前 max_chars 字符，在 UTF-8 字符边界处截断
-fn make_snippet(content: &str, max_chars: usize) -> String {
-    if content.len() <= max_chars {
-        return content.to_string();
-    }
-    let boundary = content.ceil_char_boundary(max_chars);
-    let mut s = String::with_capacity(boundary + 3);
-    s.push_str(&content[..boundary]);
-    s.push('…');
-    s
-}
-
 // =========================================================
 // 单元测试
 // =========================================================
@@ -808,6 +394,7 @@ fn make_snippet(content: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
 
     fn msg(id: &str, role: Role, content: &str, ts: u64) -> Message {
         Message::new(id, role, content, ts)
