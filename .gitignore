@@ -18,9 +18,12 @@ modules/tauriFront/src-tauri/gen/
 .idea/
 *.swp
 *.swo
+# 临时验证项目（search_codebase 工具验证用）
+.tmp-verify-*/
 
 # agent工具
 .pi/
+
 
 # 系统
 .DS_Store
