@@ -742,8 +742,9 @@ async function loadConversation() {
     }
   }
 
-// 从历史消息恢复气泡元数据（reasoning / toolCalls / usage）
+// 从历史消息恢复气泡元数据（reasoning / toolCalls / usage / subAgents）
 // 新版已把这些字段持久化到 Message；旧消息（无对应字段）保持默认空状态。
+// 四项互相独立恢复——即使某项缺失也不影响其他项恢复。
 function restoreBubbleMetaFromHistory() {
   for (const m of messages.value) {
     if (m.role !== 'assistant') continue
@@ -773,18 +774,19 @@ function restoreBubbleMetaFromHistory() {
         cache_miss_cost: 0,
         output_cost: 0,
         total_cost: 0,
-        }
-      }
-      // 子 agent 过程卡片 → 从历史恢复（后端持久化的 SubAgentRecord）
-      if (m.subAgents && m.subAgents.length > 0) {
-        meta.subAgents = m.subAgents.map((sa) => ({
-          ...sa,
-          // 历史记录总是已完成；后端未持久化 pending 标记，补默认值
-          toolCalls: (sa.toolCalls ?? []).map((t) => ({ ...t, pending: false })),
-        }))
       }
     }
+    // 子 agent 过程卡片 → 从历史恢复（后端持久化的 SubAgentRecord）
+    // 独立于 usage 恢复：即使无 usage 也要恢复子 agent 卡片
+    if (m.subAgents && m.subAgents.length > 0) {
+      meta.subAgents = m.subAgents.map((sa) => ({
+        ...sa,
+        // 历史记录总是已完成；后端未持久化 pending 标记，补默认值
+        toolCalls: (sa.toolCalls ?? []).map((t) => ({ ...t, pending: false })),
+      }))
+    }
   }
+}
 
 // ---------- 会话级工作区管理 ----------
 // 优先级：会话级 > 技能级（apply_skill 写入） > 进程默认 cwd

@@ -57,6 +57,11 @@ pub enum DeviceStatus {
 /// 字段按大小降序排列：String(24) > Vec(24) > u64(8) > enum(1)。
 /// attachments / reasoning / tool_calls / usage 使用 #[serde(default)]
 /// 保证旧 JSON 向后兼容（旧消息缺省为空，新消息被旧版本读取时忽略未知字段）。
+///
+/// 字段命名约定：reasoning / usage 为单词，snake_case 与 camelCase 一致；
+/// tool_calls / sub_agents 为多词，用 serde rename 对齐前端 camelCase
+/// （toolCalls / subAgents），与 SubAgentRecord 的做法一致。
+/// ToolCallRecord / MessageUsage 内部字段保持 snake_case（前端接口同为 snake_case）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
@@ -72,7 +77,8 @@ pub struct Message {
     pub reasoning: Option<String>,
     /// 助手消息的工具调用记录（一次回复中模型调用的工具及其结果），
     /// 前端据此在历史回看时恢复工具调用组。
-    #[serde(default)]
+    /// rename = "toolCalls" 对齐前端 Message.toolCalls（camelCase）。
+    #[serde(default, rename = "toolCalls")]
     pub tool_calls: Vec<ToolCallRecord>,
     /// 助手消息的 token 用量统计。模型返回 usage 时持久化，
     /// 前端据此在历史回看时恢复用量显示（token 模式，不含价格）。
@@ -80,7 +86,8 @@ pub struct Message {
     pub usage: Option<MessageUsage>,
     /// 助手消息的子 agent 过程记录（sub_agent 工具召唤的子 agent 全流程），
     /// 前端据此在历史回看时恢复子 agent 过程卡片。
-    #[serde(default)]
+    /// rename = "subAgents" 对齐前端 Message.subAgents（camelCase）。
+    #[serde(default, rename = "subAgents")]
     pub sub_agents: Vec<SubAgentRecord>,
 }
 
