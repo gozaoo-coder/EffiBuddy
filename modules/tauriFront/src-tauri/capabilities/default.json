@@ -1,13 +1,22 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "EffiSuite 默认权限：允许事件监听与基础核心能力",
+  "description": "EffiSuite 默认权限：允许事件监听、基础核心能力与自定义窗口控制",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:event:default",
     "dialog:default",
     "fs:default",
-    "shell:default"
+    "shell:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-set-focus"
   ]
 }

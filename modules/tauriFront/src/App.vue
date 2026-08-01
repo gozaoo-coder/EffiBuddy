@@ -3,7 +3,9 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import ChatWindow from './components/ChatWindow.vue'
-import SideNav from './components/SideNav.vue'
+import TitleBar from './components/TitleBar.vue'
+import IconRail, { type RailView } from './components/IconRail.vue'
+import HistoryRail from './components/HistoryRail.vue'
 import DevicePanel from './components/DevicePanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
@@ -11,16 +13,14 @@ import SkillPanel from './components/SkillPanel.vue'
 import PluginPanel from './components/PluginPanel.vue'
 import ClawHubPanel from './components/ClawHubPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
-import { IconButton, Icon, ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
+import { ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
 import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
 // 当前激活模型名称（真实 model_name，来自 get_active_model_info）
 const activeModelName = ref('')
-// 侧栏抽屉（Kimi 风格左侧抽屉）
-const sideNavOpen = ref(false)
-// 各功能面板状态（均从 SideNav 触发）
+// 各功能面板状态（均从 IconRail 触发）
 const devicePanelOpen = ref(false)
 const settingsOpen = ref(false)
 const modelConfigOpen = ref(false)
@@ -28,15 +28,59 @@ const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
 const pluginPanelOpen = ref(false)
 const clawhubPanelOpen = ref(false)
-// 当前选中的会话 id（由 SideNav 选择或 ChatWindow 新建时更新）
+// 当前选中的会话 id（由 HistoryRail 选择或 ChatWindow 新建时更新）
 const currentConversationId = ref<string | null>(null)
 const { toast } = useToast()
 
-// SideNav 实例引用：用于在会话变更时调用 refresh()
-const sideNavRef = ref<{ refresh: () => void } | null>(null)
+// HistoryRail 实例引用：用于在会话变更时调用 refresh()
+const historyRailRef = ref<{ refresh: () => void } | null>(null)
 
 // 事件取消订阅句柄集合
 let unlistens: UnlistenFn[] = []
+
+// IconRail 当前高亮视图：有面板打开时高亮对应图标，否则默认聊天
+const activeView = computed<RailView | ''>(() => {
+  if (modelConfigOpen.value) return 'model-config'
+  if (scheduledTasksOpen.value) return 'automation'
+  if (skillPanelOpen.value) return 'skills'
+  if (pluginPanelOpen.value) return 'plugins'
+  return 'chat'
+})
+
+function closeAllPanels() {
+  devicePanelOpen.value = false
+  settingsOpen.value = false
+  modelConfigOpen.value = false
+  scheduledTasksOpen.value = false
+  skillPanelOpen.value = false
+  pluginPanelOpen.value = false
+  clawhubPanelOpen.value = false
+}
+
+// IconRail 主栏点击：切换视图 / 开关面板
+function onRailSelect(view: RailView) {
+  // 切换时先关闭其它功能面板，避免叠加
+  devicePanelOpen.value = false
+  settingsOpen.value = false
+  clawhubPanelOpen.value = false
+  switch (view) {
+    case 'chat':
+      closeAllPanels()
+      break
+    case 'model-config':
+      modelConfigOpen.value = !modelConfigOpen.value
+      break
+    case 'automation':
+      scheduledTasksOpen.value = !scheduledTasksOpen.value
+      break
+    case 'skills':
+      skillPanelOpen.value = !skillPanelOpen.value
+      break
+    case 'plugins':
+      pluginPanelOpen.value = !pluginPanelOpen.value
+      break
+  }
+}
 
 async function refreshBackend() {
   try {
@@ -64,14 +108,13 @@ onMounted(async () => {
   } catch {
     // 默认 system
   }
-    await refreshBackend()
-    await refreshModelDisplay()
+  await refreshBackend()
+  await refreshModelDisplay()
 
-  // 监听 set_title 工具成功更新标题事件：立即刷新 SideNav 列表
-  // 不必等流结束，LLM 调用 set_title 后前端就能看到新标题
+  // 监听 set_title 工具成功更新标题事件：立即刷新 HistoryRail 列表
   unlistens.push(
     await listen<ConversationTitlePayload>('conversation-title-updated', () => {
-      sideNavRef.value?.refresh()
+      historyRailRef.value?.refresh()
     }),
   )
 })
@@ -81,10 +124,6 @@ onUnmounted(() => {
   unlistens = []
 })
 
-function toggleSideNav() {
-  sideNavOpen.value = !sideNavOpen.value
-}
-
 function onSettingsSaved(backend: string) {
   agentBackend.value = backend
   // 模型切换/保存后刷新顶部模型名（取真实 model_name，而非后端标识）
@@ -92,89 +131,58 @@ function onSettingsSaved(backend: string) {
   toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
 
-// SideNav 选择会话（null 表示新建聊天）
+// HistoryRail 选择会话（null 表示新建聊天）
 function handleSelectConv(id: string | null) {
   currentConversationId.value = id
 }
 
-// ChatWindow 会话变更（流式结束 / 新建会话）→ 刷新 SideNav 列表
+// ChatWindow 会话变更（流式结束 / 新建会话）→ 刷新 HistoryRail 列表
 function onConversationChanged() {
-  sideNavRef.value?.refresh()
+  historyRailRef.value?.refresh()
 }
 
-// 从 SideNav 打开各面板时自动收起抽屉
+// 从「更多」打开各面板
 function openDevicePanel() {
-  sideNavOpen.value = false
   devicePanelOpen.value = true
 }
 
 function openSettingsPanel() {
-  sideNavOpen.value = false
   settingsOpen.value = true
 }
 
-function openModelConfig() {
-  sideNavOpen.value = false
-  // ModelConfigPanel 为独立面板，直接打开
-  modelConfigOpen.value = true
-}
-
-function openScheduledTasks() {
-  sideNavOpen.value = false
-  scheduledTasksOpen.value = true
-}
-
-function openSkills() {
-  sideNavOpen.value = false
-  skillPanelOpen.value = true
-}
-
 function openClawHub() {
-  sideNavOpen.value = false
   skillPanelOpen.value = false
   pluginPanelOpen.value = false
   clawhubPanelOpen.value = true
 }
 
-function openPluginPanel() {
-  sideNavOpen.value = false
-  pluginPanelOpen.value = true
-}
-
-// 顶部药丸导航中显示的当前模型名称（真实 model_name）
+// 标题栏中间显示的当前模型名称（真实 model_name）
 const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
 </script>
 
 <template>
   <div class="app-shell">
-    <!-- Kimi 风格顶部导航：左侧汉堡菜单、中间模型药丸、右侧操作 -->
-    <header class="app-header">
-      <div class="header-left">
-        <IconButton
-          size="md"
-          container
-          dot
-          title="侧栏"
-          @click="toggleSideNav"
-        >
-          <Icon name="menu" :size="20" />
-        </IconButton>
-      </div>
-
-      <div class="header-center">
-          <div class="model-pill">
-            <span class="model-name">{{ modelDisplay }}</span>
-          </div>
-      </div>
-
-      <div class="header-right">
-        <IconButton size="md" container title="静音">
-          <Icon name="mute" :size="20" />
-        </IconButton>
-      </div>
-    </header>
+    <!-- 自定义标题栏：左侧品牌、中间模型、右上角窗口控件 -->
+    <TitleBar :model-name="modelDisplay" />
 
     <main class="app-main">
+      <!-- 第一栏：router（纯图标 + hover 提示） -->
+      <IconRail
+        :active="activeView"
+        @select="onRailSelect"
+        @open-clawhub="openClawHub"
+        @open-device="openDevicePanel"
+        @open-settings="openSettingsPanel"
+      />
+
+      <!-- 第二栏：历史记录（新建聊天 / 置顶 / 文件夹分类） -->
+      <HistoryRail
+        ref="historyRailRef"
+        :active-id="currentConversationId"
+        @select-conversation="handleSelectConv"
+      />
+
+      <!-- 主聊天区 -->
       <section class="chat-area">
         <ChatWindow
           :backend="agentBackend"
@@ -185,7 +193,7 @@ const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
       </section>
     </main>
 
-    <!-- 设备管理面板：按需弹出，非常驻 -->
+    <!-- 设备管理面板 -->
     <BindSheet
       v-model:visible="devicePanelOpen"
       side="right"
@@ -194,21 +202,6 @@ const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
     >
       <DevicePanel />
     </BindSheet>
-
-    <!-- 左侧抽屉导航 -->
-    <SideNav
-      ref="sideNavRef"
-      v-model:open="sideNavOpen"
-      :active-id="currentConversationId"
-      @open-settings="openSettingsPanel"
-      @open-device="openDevicePanel"
-      @open-model-config="openModelConfig"
-      @open-scheduled-tasks="openScheduledTasks"
-      @open-skills="openSkills"
-      @open-plugin-panel="openPluginPanel"
-      @open-clawhub="openClawHub"
-      @select-conversation="handleSelectConv"
-    />
 
     <SettingsPanel
       :open="settingsOpen"
