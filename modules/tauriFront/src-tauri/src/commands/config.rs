@@ -5,14 +5,14 @@ use std::sync::Arc;
 use effisuite_core::{AgentConfig, ThemeMode};
 use tauri::Emitter;
 
-use crate::agent::{apply_embedding_provider, build_agent, resolve_image_gen_config};
+use crate::agent::{apply_embedding_provider, build_agent_from_state, sync_image_gen_config};
 use crate::config_io::save_config;
-use crate::paths::skills_dir;
 use crate::state::AppState;
 
 #[tauri::command]
 pub(crate) async fn get_config(state: tauri::State<'_, AppState>) -> Result<AgentConfig, String> {
-    Ok(state.config.read().await.clone())
+    // Arc 快照读（廉价），深拷贝仅在返回序列化时发生
+    Ok(state.config.read().await.as_ref().clone())
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -38,36 +38,11 @@ pub(crate) async fn set_config(
     // 根据新配置刷新 embedding provider（启用/禁用向量检索路）
     apply_embedding_provider(&config, &state.memory).await;
 
-    // 同步图像生成配置：若 active_image_gen_model_id 指向有效模型则更新句柄
-    if let Some(cfg) = resolve_image_gen_config(&config) {
-        *state.image_gen_config.write().await = Some(cfg);
-    } else {
-        *state.image_gen_config.write().await = None;
-    }
+    // 同步图像生成配置句柄
+    sync_image_gen_config(&state, &config).await;
 
-    // 构造新 agent：注入 memory / pinned_memory / current_conversation_id / image_gen_config / store
-    // 同时注入 skill_index / skill_store / clawhub / skills_dir 以启用技能 RAG 自动注入
-    // 与 6 个技能管理工具（list/get/enable/uninstall + search/install ClawHub）
-    // plugin_store 注入以启用 uninstall_plugin 工具
-    // compression_store 注入以启用消息压缩
-    let new_agent = build_agent(
-        &config,
-        Arc::clone(&state.memory),
-        Arc::clone(&state.pinned_memory),
-        Arc::clone(&state.current_conversation_id),
-        Arc::clone(&state.working_dir),
-        Arc::clone(&state.image_gen_config),
-        state.attachments_dir.clone(),
-        Arc::clone(&state.store),
-        Arc::clone(&state.skill_index),
-        Arc::new(state.skill_store.clone()),
-        Arc::new(state.clawhub.clone()),
-        skills_dir(),
-        Arc::new(state.plugin_store.clone()),
-        Arc::new(state.compression_store.clone()),
-        Arc::clone(&state.model_manager),
-        Arc::clone(&state.sub_agents),
-    );
+    // 构造新 agent（复用 build_agent_from_state 消除重复参数组装）
+    let new_agent = build_agent_from_state(&state, &config);
 
     // 替换 state 中的 agent 和 config
     {
@@ -76,7 +51,7 @@ pub(crate) async fn set_config(
     }
     {
         let mut config_lock = state.config.write().await;
-        *config_lock = config;
+        *config_lock = Arc::new(config);
     }
     state.agent_rev.store(
         state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
@@ -95,9 +70,10 @@ pub(crate) async fn set_theme(
     state: tauri::State<'_, AppState>,
     theme: ThemeMode,
 ) -> Result<(), String> {
-    let mut config = state.config.read().await.clone();
+    // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
+    let mut config = state.config.read().await.as_ref().clone();
     config.theme = theme;
     save_config(&config)?;
-    *state.config.write().await = config;
+    *state.config.write().await = Arc::new(config);
     Ok(())
 }

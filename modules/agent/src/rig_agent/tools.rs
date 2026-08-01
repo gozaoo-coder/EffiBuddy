@@ -206,13 +206,13 @@ impl RigAgent {
             // 让 LLM 自主列出 / 查询 / 启用 / 卸载本地已安装技能（替代旧 apply_skill 命令）
             if let (Some(idx), Some(store)) = (&self.skill_index, &self.skill_store) {
                 let list_skills = ListInstalledSkillsTool::new(Arc::clone(idx));
-                let get_skill = GetSkillDetailTool::new(Arc::clone(store));
+                let get_skill = GetSkillDetailTool::new(store.clone());
                 let enable_skill = EnableSkillTool::new(
-                    Arc::clone(store),
+                    store.clone(),
                     Arc::clone(&self.store),
                     Arc::clone(&self.current_conversation_id),
                 );
-                let uninstall_skill = UninstallSkillTool::new(Arc::clone(store), Arc::clone(idx));
+                let uninstall_skill = UninstallSkillTool::new(store.clone(), Arc::clone(idx));
                 b = b
                     .tool(list_skills)
                     .tool(get_skill)
@@ -225,14 +225,14 @@ impl RigAgent {
             // install_clawhub_skill 额外依赖 skill_store / skill_index / skills_dir，
             // 任一缺失则只暴露 search_clawhub_skills（agent 可推荐 slug 但不能直接安装）
             if let Some(client) = &self.clawhub_client {
-                let search_clawhub = SearchClawHubSkillsTool::new(Arc::clone(client));
+                let search_clawhub = SearchClawHubSkillsTool::new(client.clone());
                 b = b.tool(search_clawhub);
                 if let (Some(store), Some(idx), Some(dir)) =
                     (&self.skill_store, &self.skill_index, &self.skills_dir)
                 {
                     let install_clawhub = InstallClawHubSkillTool::new(
-                        Arc::clone(client),
-                        Arc::clone(store),
+                        client.clone(),
+                        store.clone(),
                         Arc::clone(idx),
                         dir.clone(),
                     );
@@ -242,7 +242,7 @@ impl RigAgent {
 
             // 插件管理工具：仅在 plugin_store 可用时注册
             if let Some(plugin_store) = &self.plugin_store {
-                let uninstall_plugin = UninstallPluginTool::new(Arc::clone(plugin_store));
+                let uninstall_plugin = UninstallPluginTool::new(plugin_store.clone());
                 b = b.tool(uninstall_plugin);
             }
 

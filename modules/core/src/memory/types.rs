@@ -19,6 +19,16 @@ pub(super) const DEFAULT_B: f64 = 0.75;
 /// RRF 默认 k 值（rank fusion 平滑参数）
 pub(super) const DEFAULT_RRF_K: u32 = 60;
 
+/// 检索命中片段的最大字符数
+///
+/// 词法（BM25）与向量两路检索构造 [`MemoryHit::snippet`] 时统一使用，
+/// 同时被 `search_history` 工具复用，避免各处重复硬编码。
+///
+/// 取值权衡：100 字符对中文不足两句，难以承载有效上下文；240 字符约 2~3 句，
+/// 既能给模型足够语义线索，又不会在 5 条结果下过度占用上下文窗口（≈1.2K 字符）。
+/// 对 ASR 结构化内容（标题\n摘要\n转写前缀）亦能覆盖标题 + 大部分摘要。
+pub const SNIPPET_MAX_CHARS: usize = 240;
+
 /// 嵌入向量维度（仅用于一致性校验，不强制；不同 provider 维度不同）
 /// 这里不写死维度，由 provider 决定。
 /// 异步嵌入向量提供者 trait
@@ -127,11 +137,12 @@ pub(super) struct IndexState {
     pub(super) embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
 }
 
-/// 生成片段：取前 max_chars 字符，在 UTF-8 字符边界处截断
+/// 生成片段：取前 `max_chars` 字符，在 UTF-8 字符边界处安全截断并补省略号。
 ///
-/// 词法/向量两路检索均需构造 [`MemoryHit::snippet`]，集中在此避免重复实现。
+/// 词法/向量两路检索与 `search_history` 工具均通过本函数构造片段，
+/// 集中在此避免重复实现。默认长度见 [`SNIPPET_MAX_CHARS`]。
 #[inline]
-pub(super) fn make_snippet(content: &str, max_chars: usize) -> String {
+pub fn make_snippet(content: &str, max_chars: usize) -> String {
     if content.len() <= max_chars {
         return content.to_string();
     }

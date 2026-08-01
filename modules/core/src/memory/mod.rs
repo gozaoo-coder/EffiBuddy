@@ -47,7 +47,10 @@ mod types;
 mod vector;
 
 // 对外公开 API（签名与可见性保持不变）
-pub use types::{EmbeddingProvider, MemoryEntry, MemoryHit, MemoryStats, SearchMode};
+pub use types::{
+    make_snippet, EmbeddingProvider, MemoryEntry, MemoryHit, MemoryStats, SearchMode,
+    SNIPPET_MAX_CHARS,
+};
 // `tokenize` 被 storage.rs / skill_index.rs 等通过 `crate::tokenize` 复用
 pub use tokenize::tokenize;
 

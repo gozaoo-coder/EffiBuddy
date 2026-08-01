@@ -114,15 +114,18 @@ pub struct RigAgent {
     pub(super) skill_index: Option<Arc<SkillIndex>>,
     /// 技能存储句柄，GetSkillDetailTool / EnableSkillTool 据此读写
     /// None 时 skill_index 相关工具不可用
-    pub(super) skill_store: Option<Arc<SkillStore>>,
+    /// `SkillStore` 已是 `Clone`（内部 Arc），无需外层 `Arc` 包装
+    pub(super) skill_store: Option<SkillStore>,
     /// ClawHub 客户端句柄，SearchClawHubSkillsTool / InstallClawHubSkillTool 据此访问远程市场
     /// None 时 clawhub 相关工具不可用（agent 只能用已安装技能）
-    pub(super) clawhub_client: Option<Arc<ClawHubClient>>,
+    /// `ClawHubClient` 已是 `Clone`（内部 Arc），无需外层 `Arc` 包装
+    pub(super) clawhub_client: Option<ClawHubClient>,
     /// 技能解压根目录，InstallClawHubSkillTool 据此落盘 ZIP 解压结果
     pub(super) skills_dir: Option<PathBuf>,
     /// 已安装插件存储句柄，UninstallPluginTool 据此删除插件
     /// None 时 uninstall_plugin 工具不可用
-    pub(super) plugin_store: Option<Arc<PluginStore>>,
+    /// `PluginStore` 已是 `Clone`（内部 Arc），无需外层 `Arc` 包装
+    pub(super) plugin_store: Option<PluginStore>,
     /// 当前会话 id 句柄，由 Tauri 命令层在每次 send_message 前更新；
     /// search_memory 工具与自动注入都据此排除当前会话
     pub(super) current_conversation_id: Arc<RwLock<Option<String>>>,
@@ -141,7 +144,8 @@ pub struct RigAgent {
     /// Some 时 `build_context_parts` 会加载当前会话的压缩状态并对历史段
     /// （`messages[..last_user_idx]`）应用 Keep/Hide/Replace 决策。
     /// 当前问题（最后一条用户消息）不压缩。None 时退化为不压缩。
-    pub(super) compression_store: Option<Arc<CompressionStore>>,
+    /// `CompressionStore` 已是 `Clone`（内部 Arc），无需外层 `Arc` 包装
+    pub(super) compression_store: Option<CompressionStore>,
     /// 模型管理句柄：manage_model / call_model 工具据此读写模型列表。
     /// None 时不注册这两个工具。
     pub(super) model_manager: Option<Arc<ModelManagerHandle>>,

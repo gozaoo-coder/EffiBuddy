@@ -51,11 +51,11 @@ pub(crate) fn build_agent(
     attachments_dir: std::path::PathBuf,
     store: Arc<ConversationStore>,
     skill_index: Arc<effisuite_core::SkillIndex>,
-    skill_store: Arc<SkillStore>,
-    clawhub_client: Arc<ClawHubClient>,
+    skill_store: SkillStore,
+    clawhub_client: ClawHubClient,
     skills_dir: std::path::PathBuf,
-    plugin_store: Arc<PluginStore>,
-    compression_store: Arc<CompressionStore>,
+    plugin_store: PluginStore,
+    compression_store: CompressionStore,
     model_manager: Arc<effisuite_agent::ModelManagerHandle>,
     sub_agents: Arc<effisuite_agent::SubAgentManager>,
 ) -> Arc<dyn ChatAgent> {
@@ -94,6 +94,41 @@ pub(crate) fn build_agent(
     }
 }
 
+/// 从 AppState 组装 build_agent 的全部参数并构造新 agent。
+/// 消除 ensure_agent_synced / set_config / set_active_model 中的重复 16 参数调用。
+#[inline]
+pub(crate) fn build_agent_from_state(
+    state: &AppState,
+    config: &AgentConfig,
+) -> Arc<dyn ChatAgent> {
+    build_agent(
+        config,
+        Arc::clone(&state.memory),
+        Arc::clone(&state.pinned_memory),
+        Arc::clone(&state.current_conversation_id),
+        Arc::clone(&state.working_dir),
+        Arc::clone(&state.image_gen_config),
+        state.attachments_dir.clone(),
+        Arc::clone(&state.store),
+        Arc::clone(&state.skill_index),
+        state.skill_store.clone(),
+        state.clawhub.clone(),
+        skills_dir(),
+        state.plugin_store.clone(),
+        state.compression_store.clone(),
+        Arc::clone(&state.model_manager),
+        Arc::clone(&state.sub_agents),
+    )
+}
+
+/// 同步 image_gen_config 句柄到当前配置快照。
+/// 在 set_config / ensure_agent_synced 路径中复用。
+#[inline]
+pub(crate) async fn sync_image_gen_config(state: &AppState, config: &AgentConfig) {
+    let cfg = resolve_image_gen_config(config);
+    *state.image_gen_config.write().await = cfg;
+}
+
 /// 懒重建：若配置版本号与当前 agent 不一致（agent 工具 manage_model 修改了配置），
 /// 用最新配置重建 agent 并同步 image_gen_config 句柄。
 /// 在每次 send_message / send_message_stream 前调用。
@@ -105,34 +140,14 @@ pub(crate) async fn ensure_agent_synced(
     if state.agent_rev.load(std::sync::atomic::Ordering::SeqCst) == rev {
         return;
     }
+    // Arc 快照克隆（廉价，不再深拷贝 AgentConfig）
     let config = state.config.read().await.clone();
 
-    // 同步图像生成配置句柄（agent 可能激活了新的 image_gen 模型）
-    if let Some(cfg) = resolve_image_gen_config(&config) {
-        *state.image_gen_config.write().await = Some(cfg);
-    } else {
-        *state.image_gen_config.write().await = None;
-    }
+    // 同步图像生成配置句柄
+    sync_image_gen_config(state, &config).await;
 
-    // 重建 agent
-    let new_agent = build_agent(
-        &config,
-        Arc::clone(&state.memory),
-        Arc::clone(&state.pinned_memory),
-        Arc::clone(&state.current_conversation_id),
-        Arc::clone(&state.working_dir),
-        Arc::clone(&state.image_gen_config),
-        state.attachments_dir.clone(),
-        Arc::clone(&state.store),
-        Arc::clone(&state.skill_index),
-        Arc::new(state.skill_store.clone()),
-        Arc::new(state.clawhub.clone()),
-        skills_dir(),
-        Arc::new(state.plugin_store.clone()),
-        Arc::new(state.compression_store.clone()),
-        Arc::clone(&state.model_manager),
-        Arc::clone(&state.sub_agents),
-    );
+    // 重建 agent（复用 build_agent_from_state 消除重复参数组装）
+    let new_agent = build_agent_from_state(state, &config);
     {
         let mut agent_lock = state.agent.write().await;
         *agent_lock = new_agent;

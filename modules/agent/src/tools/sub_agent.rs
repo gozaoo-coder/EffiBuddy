@@ -50,13 +50,14 @@ pub struct SubAgentKit {
     pub attachments_dir: PathBuf,
     pub store: Arc<ConversationStore>,
     pub skill_index: Option<Arc<SkillIndex>>,
-    pub skill_store: Option<Arc<SkillStore>>,
-    pub clawhub_client: Option<Arc<ClawHubClient>>,
+    pub skill_store: Option<SkillStore>,
+    pub clawhub_client: Option<ClawHubClient>,
     pub skills_dir: Option<PathBuf>,
-    pub plugin_store: Option<Arc<PluginStore>>,
-    pub compression_store: Option<Arc<CompressionStore>>,
+    pub plugin_store: Option<PluginStore>,
+    pub compression_store: Option<CompressionStore>,
     /// 模型配置共享句柄（解析子 agent 使用的模型）
-    pub model_config: Arc<RwLock<AgentConfig>>,
+    /// `Arc<RwLock<Arc<AgentConfig>>>` 快照模式：读 clone Arc（廉价）
+    pub model_config: Arc<RwLock<Arc<AgentConfig>>>,
     /// 模型管理句柄（子 agent 也可管理模型列表）
     pub model_manager: Option<Arc<ModelManagerHandle>>,
 }
@@ -656,7 +657,7 @@ mod tests {
             skills_dir: None,
             plugin_store: None,
             compression_store: None,
-            model_config: Arc::new(RwLock::new(AgentConfig::default())),
+            model_config: Arc::new(RwLock::new(Arc::new(AgentConfig::default()))),
             model_manager: None,
         };
         let manager = Arc::new(SubAgentManager::new(kit, Box::new(|_| {})));
@@ -699,7 +700,7 @@ mod tests {
             skills_dir: None,
             plugin_store: None,
             compression_store: None,
-            model_config: Arc::new(RwLock::new(AgentConfig::default())),
+            model_config: Arc::new(RwLock::new(Arc::new(AgentConfig::default()))),
             model_manager: None,
         };
         let manager = Arc::new(SubAgentManager::new(kit, Box::new(|_| {})));
@@ -743,7 +744,7 @@ mod tests {
             skills_dir: None,
             plugin_store: None,
             compression_store: None,
-            model_config: Arc::new(RwLock::new(config)),
+            model_config: Arc::new(RwLock::new(Arc::new(config))),
             model_manager: None,
         };
         let manager = Arc::new(SubAgentManager::new(kit, Box::new(|_| {})));

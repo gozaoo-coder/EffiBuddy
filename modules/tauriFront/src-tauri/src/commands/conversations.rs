@@ -117,7 +117,7 @@ pub(crate) async fn auto_classify_conversation(
         return Err("会话无消息，无法归类".to_string());
     }
 
-    // 2. 读取配置快照（锁临界区极短：仅 clone）
+    // 2. 读取配置快照（Arc clone 廉价，不再深拷贝 AgentConfig）
     let config = state.config.read().await.clone();
     if !config.is_rig_ready() {
         return Err("未配置 api_key 或 backend 非 openai，无法调用归类 agent".to_string());

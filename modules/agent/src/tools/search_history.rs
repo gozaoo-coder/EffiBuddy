@@ -11,7 +11,7 @@
 //! 避免引入向量数据库依赖，零外部成本即可获得基础 RAG 能力。
 //! 后续可替换为基于嵌入向量的检索而不改 trait。
 
-use effisuite_core::{Message, Role, tokenize};
+use effisuite_core::{make_snippet, Message, Role, tokenize, SNIPPET_MAX_CHARS};
 use rig_core::tool::Tool;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -106,8 +106,8 @@ impl Tool for SearchHistoryTool {
             return Ok(format!("未找到与「{}」相关的历史消息。", args.query));
         }
 
-        // 序列化结果摘要
-        let mut out = String::with_capacity(results.len() * 64);
+        // 序列化结果摘要（复用 core 的 make_snippet，UTF-8 边界安全截断）
+        let mut out = String::with_capacity(results.len() * (SNIPPET_MAX_CHARS + 48));
         out.push_str(&format!("找到 {} 条相关历史消息：\n", results.len()));
         for (i, m) in results.iter().enumerate() {
             let role = match m.role {
@@ -115,12 +115,7 @@ impl Tool for SearchHistoryTool {
                 Role::Assistant => "助手",
                 Role::System => "系统",
             };
-            // 截取前 100 字符避免上下文爆炸
-            let preview = if m.content.len() > 100 {
-                format!("{}…", &m.content[..m.content.ceil_char_boundary(100)])
-            } else {
-                m.content.clone()
-            };
+            let preview = make_snippet(&m.content, SNIPPET_MAX_CHARS);
             out.push_str(&format!("{}. [{}] {}\n", i + 1, role, preview));
         }
         Ok(out)

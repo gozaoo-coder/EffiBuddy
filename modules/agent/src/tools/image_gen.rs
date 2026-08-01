@@ -77,7 +77,8 @@ pub struct ImageGenOutput {
 pub struct ImageGenTool {
     config: Arc<RwLock<Option<ImageGenConfig>>>,
     /// 模型列表共享句柄（可选）：支持按 model_id 指定图像模型
-    models: Option<Arc<RwLock<AgentConfig>>>,
+    /// `Arc<RwLock<Arc<AgentConfig>>>` 快照模式
+    models: Option<Arc<RwLock<Arc<AgentConfig>>>>,
     /// attachments 目录绝对路径，图片保存到此
     attachments_dir: PathBuf,
 }
@@ -92,7 +93,7 @@ impl ImageGenTool {
     }
 
     /// 附加模型列表句柄：启用 model_id 指定图像模型能力
-    pub fn with_models(mut self, models: Arc<RwLock<AgentConfig>>) -> Self {
+    pub fn with_models(mut self, models: Arc<RwLock<Arc<AgentConfig>>>) -> Self {
         self.models = Some(models);
         self
     }

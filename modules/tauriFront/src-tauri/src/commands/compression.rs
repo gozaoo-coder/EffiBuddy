@@ -43,7 +43,7 @@ pub(crate) async fn compress_messages(
         return Err("会话无消息，无需压缩".to_string());
     }
 
-    // 2. 读取配置快照（锁临界区极短：仅 clone）
+    // 2. 读取配置快照（Arc clone 廉价，不再深拷贝 AgentConfig）
     let config = state.config.read().await.clone();
     if !config.is_rig_ready() {
         return Err("未配置 api_key 或 backend 非 openai，无法调用压缩 agent".to_string());
@@ -202,7 +202,7 @@ pub(crate) async fn compress_messages_stream(
         return Err(msg);
     }
 
-    // 2. 读取配置快照（锁临界区极短：仅 clone）
+    // 2. 读取配置快照（Arc clone 廉价，不再深拷贝 AgentConfig）
     let config = state.config.read().await.clone();
     if !config.is_rig_ready() {
         let msg = "未配置 api_key 或 backend 非 openai，无法调用压缩 agent".to_string();

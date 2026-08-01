@@ -10,11 +10,10 @@ use effisuite_core::{
 use serde::Deserialize;
 use tauri::Emitter;
 
-use crate::agent::{apply_embedding_provider, build_agent};
+use crate::agent::{apply_embedding_provider, build_agent_from_state};
 use crate::commands::chat::truncate_str;
 use crate::commands::config::ActiveModelInfo;
 use crate::config_io::save_config;
-use crate::paths::skills_dir;
 use crate::state::AppState;
 
 /// 返回内置 provider 预设列表（openai/deepseek/groq/...）
@@ -27,6 +26,7 @@ pub(crate) fn list_provider_presets() -> Vec<ProviderPreset> {
 pub(crate) async fn get_active_model_info(
     state: tauri::State<'_, AppState>,
 ) -> Result<ActiveModelInfo, String> {
+    // Arc 快照读（廉价，不再深拷贝 AgentConfig）
     let config = state.config.read().await.clone();
     if let Some(id) = config.active_model_id.as_ref() {
         if let Some(m) = config.models.iter().find(|m| &m.id == id) {
@@ -52,7 +52,8 @@ pub(crate) async fn save_model(
     state: tauri::State<'_, AppState>,
     model: AvailableModel,
 ) -> Result<String, String> {
-    let mut config = state.config.read().await.clone();
+    // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
+    let mut config = state.config.read().await.as_ref().clone();
     // 若 id 已存在则更新，否则新增
     let id = model.id.clone();
     if let Some(existing) = config.models.iter_mut().find(|m| m.id == id) {
@@ -61,7 +62,7 @@ pub(crate) async fn save_model(
         config.models.push(model);
     }
     save_config(&config)?;
-    *state.config.write().await = config;
+    *state.config.write().await = Arc::new(config);
     Ok(id)
 }
 
@@ -71,13 +72,14 @@ pub(crate) async fn delete_model(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    let mut config = state.config.read().await.clone();
+    // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
+    let mut config = state.config.read().await.as_ref().clone();
     config.models.retain(|m| m.id != id);
     if config.active_model_id.as_deref() == Some(id.as_str()) {
         config.active_model_id = None;
     }
     save_config(&config)?;
-    *state.config.write().await = config;
+    *state.config.write().await = Arc::new(config);
     Ok(())
 }
 
@@ -94,7 +96,8 @@ pub(crate) async fn set_active_model(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<String, String> {
-    let mut config = state.config.read().await.clone();
+    // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
+    let mut config = state.config.read().await.as_ref().clone();
     let model = config
         .models
         .iter()
@@ -115,7 +118,7 @@ pub(crate) async fn set_active_model(
             config.active_image_gen_model_id = Some(id.clone());
             save_config(&config)?;
             *state.image_gen_config.write().await = Some(cfg);
-            *state.config.write().await = config;
+            *state.config.write().await = Arc::new(config);
             // 图像模型变更不需要重建对话 agent：版本号同步跟进，避免下次消息误触发重建
             state
                 .config_rev
@@ -148,29 +151,13 @@ pub(crate) async fn set_active_model(
             // 切换模型时刷新 embedding provider（base_url/api_key 可能变化）
             apply_embedding_provider(&config, &state.memory).await;
 
-            let new_agent = build_agent(
-                &config,
-                Arc::clone(&state.memory),
-                Arc::clone(&state.pinned_memory),
-                Arc::clone(&state.current_conversation_id),
-                Arc::clone(&state.working_dir),
-                Arc::clone(&state.image_gen_config),
-                state.attachments_dir.clone(),
-                Arc::clone(&state.store),
-                Arc::clone(&state.skill_index),
-                Arc::new(state.skill_store.clone()),
-                Arc::new(state.clawhub.clone()),
-                skills_dir(),
-                Arc::new(state.plugin_store.clone()),
-                Arc::new(state.compression_store.clone()),
-                Arc::clone(&state.model_manager),
-                Arc::clone(&state.sub_agents),
-            );
+            // 构造新 agent（复用 build_agent_from_state 消除重复参数组装）
+            let new_agent = build_agent_from_state(&state, &config);
             {
                 let mut agent_lock = state.agent.write().await;
                 *agent_lock = new_agent;
             }
-            *state.config.write().await = config;
+            *state.config.write().await = Arc::new(config);
             state.agent_rev.store(
                 state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
                 std::sync::atomic::Ordering::SeqCst,
@@ -191,7 +178,8 @@ pub(crate) async fn set_image_gen_model(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<String, String> {
-    let mut config = state.config.read().await.clone();
+    // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
+    let mut config = state.config.read().await.as_ref().clone();
     let model = config
         .models
         .iter()
@@ -211,7 +199,7 @@ pub(crate) async fn set_image_gen_model(
     config.active_image_gen_model_id = Some(id.clone());
     save_config(&config)?;
     *state.image_gen_config.write().await = Some(cfg);
-    *state.config.write().await = config;
+    *state.config.write().await = Arc::new(config);
     // 图像模型变更不需要重建对话 agent：版本号同步跟进，避免下次消息误触发重建
     state
         .config_rev

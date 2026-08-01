@@ -56,11 +56,11 @@ pub(crate) struct ResolvedModel {
 
 /// 模型调用工具
 pub struct CallModelTool {
-    config: Arc<RwLock<AgentConfig>>,
+    config: Arc<RwLock<Arc<AgentConfig>>>,
 }
 
 impl CallModelTool {
-    pub fn new(config: Arc<RwLock<AgentConfig>>) -> Self {
+    pub fn new(config: Arc<RwLock<Arc<AgentConfig>>>) -> Self {
         Self { config }
     }
 }

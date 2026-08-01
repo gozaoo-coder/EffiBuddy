@@ -137,7 +137,8 @@ pub fn run() {
     // 配置版本号：manage_model 工具修改配置后 bump，send_message 时懒重建 agent
     let config_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let agent_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let config_lock: Arc<RwLock<AgentConfig>> = Arc::new(RwLock::new(config.clone()));
+    let config_lock: Arc<RwLock<Arc<AgentConfig>>> =
+        Arc::new(RwLock::new(Arc::new(config.clone())));
     let model_manager = Arc::new(ModelManagerHandle {
         config: Arc::clone(&config_lock),
         save: Box::new(save_config),
@@ -171,11 +172,11 @@ pub fn run() {
             attachments_dir: attachments_root.clone(),
             store: Arc::clone(&store),
             skill_index: Some(Arc::clone(&skill_index)),
-            skill_store: Some(Arc::new(skill_store.clone())),
-            clawhub_client: Some(Arc::new(clawhub_client.clone())),
+            skill_store: Some(skill_store.clone()),
+            clawhub_client: Some(clawhub_client.clone()),
             skills_dir: Some(skills_root.clone()),
-            plugin_store: Some(Arc::new(plugin_store.clone())),
-            compression_store: Some(Arc::new(compression_store.clone())),
+            plugin_store: Some(plugin_store.clone()),
+            compression_store: Some(compression_store.clone()),
             model_config: Arc::clone(&config_lock),
             model_manager: Some(Arc::clone(&model_manager)),
         },
@@ -185,8 +186,8 @@ pub fn run() {
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
     // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
     // plugin_store / compression_store / model_manager / sub_agents
-    // skill_store / clawhub / plugin_store / compression_store 内部已是 Arc，clone 廉价；
-    // 为 RigAgent 包成 Arc<...> 以匹配 from_key 签名（共享同一份底层 Arc）
+    // skill_store / clawhub / plugin_store / compression_store 已是 Clone（内部 Arc），
+    // 直接传值，无需 Arc::new 包装
     let agent: Arc<dyn ChatAgent> = build_agent(
         &config,
         Arc::clone(&memory),
@@ -197,11 +198,11 @@ pub fn run() {
         attachments_root.clone(),
         Arc::clone(&store),
         Arc::clone(&skill_index),
-        Arc::new(skill_store.clone()),
-        Arc::new(clawhub_client.clone()),
+        skill_store.clone(),
+        clawhub_client.clone(),
         skills_root.clone(),
-        Arc::new(plugin_store.clone()),
-        Arc::new(compression_store.clone()),
+        plugin_store.clone(),
+        compression_store.clone(),
         Arc::clone(&model_manager),
         Arc::clone(&sub_agents),
     );

@@ -3,8 +3,6 @@
 //! 当前仅提供卸载能力（安装走 ClawHub 前端命令）。
 //! 插件 id 形如 `<owner>/<name>`，卸载时支持精确匹配，未命中时按 name 回退匹配。
 
-use std::sync::Arc;
-
 use effisuite_core::PluginStore;
 use rig_core::tool::Tool;
 use serde::Deserialize;
@@ -26,11 +24,11 @@ pub struct UninstallPluginError(String);
 /// 持有 `PluginStore` 共享句柄。先按 id 精确匹配，未命中则按 name 匹配。
 /// 删除后返回结果文本。
 pub struct UninstallPluginTool {
-    store: Arc<PluginStore>,
+    store: PluginStore,
 }
 
 impl UninstallPluginTool {
-    pub fn new(store: Arc<PluginStore>) -> Self {
+    pub fn new(store: PluginStore) -> Self {
         Self { store }
     }
 }
@@ -136,11 +134,11 @@ mod tests {
     async fn uninstall_plugin_by_id() {
         let dir = tmp_dir();
         std::fs::create_dir_all(&dir).unwrap();
-        let store = Arc::new(PluginStore::new(&dir).unwrap());
+        let store = PluginStore::new(&dir).unwrap();
         let plugin = sample_plugin("openclaw/whatsapp", "whatsapp", "WhatsApp");
         store.save(&plugin).await.unwrap();
 
-        let tool = UninstallPluginTool::new(Arc::clone(&store));
+        let tool = UninstallPluginTool::new(store.clone());
         let out = tool
             .call(UninstallPluginArgs {
                 id: "openclaw/whatsapp".to_string(),
@@ -158,11 +156,11 @@ mod tests {
     async fn uninstall_plugin_by_name_fallback() {
         let dir = tmp_dir();
         std::fs::create_dir_all(&dir).unwrap();
-        let store = Arc::new(PluginStore::new(&dir).unwrap());
+        let store = PluginStore::new(&dir).unwrap();
         let plugin = sample_plugin("openclaw/telegram", "telegram", "Telegram");
         store.save(&plugin).await.unwrap();
 
-        let tool = UninstallPluginTool::new(Arc::clone(&store));
+        let tool = UninstallPluginTool::new(store.clone());
         let out = tool
             .call(UninstallPluginArgs {
                 id: "telegram".to_string(),
@@ -179,9 +177,9 @@ mod tests {
     async fn uninstall_plugin_not_found() {
         let dir = tmp_dir();
         std::fs::create_dir_all(&dir).unwrap();
-        let store = Arc::new(PluginStore::new(&dir).unwrap());
+        let store = PluginStore::new(&dir).unwrap();
 
-        let tool = UninstallPluginTool::new(Arc::clone(&store));
+        let tool = UninstallPluginTool::new(store.clone());
         let out = tool
             .call(UninstallPluginArgs {
                 id: "missing".to_string(),
@@ -197,9 +195,9 @@ mod tests {
     async fn uninstall_plugin_rejects_empty_id() {
         let dir = tmp_dir();
         std::fs::create_dir_all(&dir).unwrap();
-        let store = Arc::new(PluginStore::new(&dir).unwrap());
+        let store = PluginStore::new(&dir).unwrap();
 
-        let tool = UninstallPluginTool::new(Arc::clone(&store));
+        let tool = UninstallPluginTool::new(store.clone());
         let res = tool
             .call(UninstallPluginArgs {
                 id: "   ".to_string(),

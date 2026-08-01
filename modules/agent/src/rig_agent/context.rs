@@ -394,7 +394,7 @@ fn short_skill_id(id: &str) -> &str {
 /// 2. [会话def67890] [助手] tokio 使用 work-stealing 调度器...
 /// ```
 fn format_memory_section(hits: &[effisuite_core::MemoryHit]) -> String {
-    let mut s = String::with_capacity(hits.len() * 128 + 32);
+    let mut s = String::with_capacity(hits.len() * (effisuite_core::SNIPPET_MAX_CHARS + 48));
     s.push_str("[相关历史记忆]（来自其他对话，供参考）\n");
     for (i, hit) in hits.iter().enumerate() {
         let role = match hit.role {

@@ -34,7 +34,8 @@ pub use config::{
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
 pub use memory::{
-    tokenize, EmbeddingProvider, MemoryEntry, MemoryHit, MemoryIndex, MemoryStats, SearchMode,
+    make_snippet, tokenize, EmbeddingProvider, MemoryEntry, MemoryHit, MemoryIndex, MemoryStats,
+    SearchMode, SNIPPET_MAX_CHARS,
 };
 pub use models::{
     Attachment, AttachmentKind, Conversation, Device, DeviceStatus, InstalledPlugin, Message,

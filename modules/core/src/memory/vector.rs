@@ -6,7 +6,7 @@
 //!
 //! 查询路径全部用迭代器适配器，结果 Vec 用 `with_capacity` 预分配。
 
-use super::types::{IndexState, MemoryHit, make_snippet};
+use super::types::{IndexState, MemoryHit, make_snippet, SNIPPET_MAX_CHARS};
 
 /// 向量余弦相似度检索
 pub(super) fn cosine_search(
@@ -49,7 +49,7 @@ pub(super) fn cosine_search(
             MemoryHit {
                 conversation_id: entry.conversation_id.clone(),
                 message_id: entry.message_id.clone(),
-                snippet: make_snippet(&entry.content, 100),
+                snippet: make_snippet(&entry.content, SNIPPET_MAX_CHARS),
                 timestamp: entry.timestamp,
                 score: sim as f32,
                 role: entry.role,

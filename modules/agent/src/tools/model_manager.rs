@@ -25,8 +25,9 @@ pub type SaveConfigFn = Box<dyn Fn(&AgentConfig) -> std::result::Result<(), Stri
 
 /// 模型管理句柄：由 Tauri 层构造并注入，工具经它安全地修改共享配置
 pub struct ModelManagerHandle {
-    /// 共享的 AgentConfig（与 AppState.config 同一份）
-    pub config: Arc<RwLock<AgentConfig>>,
+    /// 共享的 AgentConfig 快照（与 AppState.config 同一份）
+    /// `Arc<RwLock<Arc<AgentConfig>>>`：读 clone Arc（廉价），写 COW（clone 内部 → 改 → 写回新 Arc）
+    pub config: Arc<RwLock<Arc<AgentConfig>>>,
     /// 持久化回调（Tauri 层：写入 config.json）
     pub save: SaveConfigFn,
     /// 配置版本号 bump：Tauri 层据此懒重建 agent（与 AppState.config_rev 同一份）
@@ -185,7 +186,8 @@ impl ManageModelTool {
 
     /// 新增或更新模型（id 为空自动生成），bump 配置版本
     async fn save(&self, model: AvailableModel) -> Result<String, ManageModelError> {
-        let mut config = self.handle.config.write().await;
+        // COW：读快照 → clone 内部 → 修改 → 持久化 → 写回新 Arc
+        let mut config = self.handle.config.read().await.as_ref().clone();
         let id = if model.id.is_empty() {
             uuid::Uuid::new_v4().to_string()
         } else {
@@ -204,6 +206,7 @@ impl ManageModelTool {
             config.models.push(m);
         }
         self.persist(&config)?;
+        *self.handle.config.write().await = Arc::new(config);
         Ok(format!(
             "已{}模型：id={id} kind={} model={} label={}（已持久化）",
             if is_update { "更新" } else { "新增" },
@@ -215,7 +218,8 @@ impl ManageModelTool {
 
     /// 删除模型；若为激活模型则清空对应激活标记
     async fn delete(&self, id: &str) -> Result<String, ManageModelError> {
-        let mut config = self.handle.config.write().await;
+        // COW：读快照 → clone → 修改 → 持久化 → 写回新 Arc
+        let mut config = self.handle.config.read().await.as_ref().clone();
         let existed = config.models.iter().any(|m| m.id == id);
         if !existed {
             return Err(ManageModelError(format!("模型 {id} 不存在，无需删除")));
@@ -228,13 +232,14 @@ impl ManageModelTool {
             config.active_image_gen_model_id = None;
         }
         self.persist(&config)?;
-        drop(config);
+        *self.handle.config.write().await = Arc::new(config);
         Ok(format!("已删除模型 {id}（若它曾是激活模型，激活标记已清空）"))
     }
 
     /// 激活模型：chat → 当前对话模型；image_gen → 当前图像生成模型
     async fn activate(&self, id: &str) -> Result<String, ManageModelError> {
-        let mut config = self.handle.config.write().await;
+        // COW：读快照 → clone → 修改 → 持久化 → 写回新 Arc
+        let mut config = self.handle.config.read().await.as_ref().clone();
         let model = config
             .models
             .iter()
@@ -245,7 +250,7 @@ impl ManageModelTool {
             ModelKind::Chat => {
                 config.active_model_id = Some(id.to_string());
                 self.persist(&config)?;
-                drop(config);
+                *self.handle.config.write().await = Arc::new(config);
                 Ok(format!(
                     "已激活对话模型：{}（{id}）。下一轮对话起生效。",
                     model.model_name
@@ -254,7 +259,7 @@ impl ManageModelTool {
             ModelKind::ImageGen => {
                 config.active_image_gen_model_id = Some(id.to_string());
                 self.persist(&config)?;
-                drop(config);
+                *self.handle.config.write().await = Arc::new(config);
                 Ok(format!(
                     "已激活图像生成模型：{}（{id}）。下一轮起 image_gen 工具将使用此模型。",
                     model.model_name
@@ -279,8 +284,8 @@ impl ManageModelTool {
 mod tests {
     use super::*;
 
-    fn make_handle() -> (Arc<ModelManagerHandle>, Arc<RwLock<AgentConfig>>) {
-        let config = Arc::new(RwLock::new(AgentConfig::default()));
+    fn make_handle() -> (Arc<ModelManagerHandle>, Arc<RwLock<Arc<AgentConfig>>>) {
+        let config = Arc::new(RwLock::new(Arc::new(AgentConfig::default())));
         let bump = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let handle = Arc::new(ModelManagerHandle {
             config: Arc::clone(&config),

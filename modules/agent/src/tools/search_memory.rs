@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use effisuite_core::{MemoryIndex, SearchMode};
+use effisuite_core::{MemoryIndex, SearchMode, SNIPPET_MAX_CHARS};
 use rig_core::tool::Tool;
 use serde::Deserialize;
 use tokio::sync::RwLock;
@@ -140,8 +140,8 @@ impl Tool for SearchMemoryTool {
             return Ok(format!("未找到与「{}」相关的历史记忆。", query));
         }
 
-        // 格式化结果
-        let mut out = String::with_capacity(hits.len() * 96);
+        // 格式化结果（预分配：每条 ≈ SNIPPET_MAX_CHARS + 序号/会话id/角色等开销 ≈ 48B）
+        let mut out = String::with_capacity(hits.len() * (SNIPPET_MAX_CHARS + 48));
         out.push_str(&format!("找到 {} 条相关历史记忆：\n", hits.len()));
         for (i, hit) in hits.iter().enumerate() {
             let role = match hit.role {

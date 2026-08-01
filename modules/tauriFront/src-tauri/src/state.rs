@@ -38,7 +38,10 @@ pub struct AppState {
     /// 可热替换的 agent：RwLock 写少读多，内层 Arc 让 async 命令可跨 await 持有
     pub agent: Arc<RwLock<Arc<dyn ChatAgent>>>,
     pub store: Arc<ConversationStore>,
-    pub config: Arc<RwLock<AgentConfig>>,
+    /// 配置快照：`Arc<RwLock<Arc<AgentConfig>>>` 让读操作 clone Arc（廉价），
+    /// 写操作 clone 内部 AgentConfig → 修改 → 写回新 Arc（COW 语义）。
+    /// 消除 read().await.clone() 的深拷贝（5 处读路径受益）。
+    pub config: Arc<RwLock<Arc<AgentConfig>>>,
     pub p2p: Arc<P2pManager>,
     pub event_bus: EventBus,
     /// 跨会话历史记忆索引（RAG 记忆增强核心），与 agent 共享同一份 Arc

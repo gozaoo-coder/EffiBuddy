@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use super::types::{IndexState, MemoryEntry, MemoryHit, make_snippet};
+use super::types::{IndexState, MemoryEntry, MemoryHit, make_snippet, SNIPPET_MAX_CHARS};
 
 impl IndexState {
     #[inline]
@@ -111,7 +111,7 @@ pub(super) fn bm25_search(
             MemoryHit {
                 conversation_id: entry.conversation_id.clone(),
                 message_id: entry.message_id.clone(),
-                snippet: make_snippet(&entry.content, 100),
+                snippet: make_snippet(&entry.content, SNIPPET_MAX_CHARS),
                 timestamp: entry.timestamp,
                 score: score as f32,
                 role: entry.role,
