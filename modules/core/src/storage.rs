@@ -4,15 +4,18 @@
 //! 存放在 `appdata/conversations/<id>.json`。
 //!
 //! 设计要点：
-//! - 读多写少：用 `RwLock` 而非 `Mutex`，允许多个并发读取
-//! - 写入时仅短暂持锁序列化，IO 操作（文件写入）在锁外完成
+//! - 读多写少：`load`/`list_meta`/`search`/`save`/`delete` 无锁，直接 IO
+//! - 读-改-写原子性：`rename`/`set_pinned`/`set_working_dir`/`append_message`
+//!   使用**每会话独立锁**，仅阻塞同一会话的并发操作，不同会话互不阻塞
 //! - 使用 `with_capacity` 预分配 list 返回值，避免多次扩容
 //! - 所有方法返回 `Result`，错误以 `CoreError::Io`/`Serde` 上抛
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex as StdMutex;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 
 use crate::{Conversation, CoreError, Message, Result};
 
@@ -57,13 +60,17 @@ fn score_message(content: &str, keywords: &[String]) -> usize {
         .count()
 }
 
-/// 聊天记录存储，线程安全可廉价 clone（内部 RwLock + Arc 等价）
+/// 聊天记录存储，线程安全可廉价 clone（内部 `Arc` 共享）
+///
+/// 读-改-写操作（rename/set_pinned/set_working_dir/append_message）使用每会话
+/// 独立锁，仅阻塞同一会话的并发操作。纯读（load/list_meta/search）和纯写
+/// （save/delete）无锁，直接 IO。
 #[derive(Clone)]
 pub struct ConversationStore {
     root: PathBuf,
-    // 缓存最近写入的 conversation id 集合，避免每次 list 都全盘扫描
-    // 实际场景中 conversation 数量有限，直接目录扫描也足够
-    _lock: std::sync::Arc<RwLock<()>>,
+    /// 每会话独立锁表：`conversation_id → Arc<Mutex<()>>`。
+    /// 外层 `StdMutex` 仅短暂持有（无 IO/await），内层 `tokio::Mutex` 跨 await 持有。
+    locks: std::sync::Arc<StdMutex<HashMap<String, std::sync::Arc<Mutex<()>>>>>,
 }
 
 impl ConversationStore {
@@ -73,8 +80,18 @@ impl ConversationStore {
         std::fs::create_dir_all(&root).map_err(CoreError::Io)?;
         Ok(Self {
             root,
-            _lock: std::sync::Arc::new(RwLock::new(())),
+            locks: std::sync::Arc::new(StdMutex::new(HashMap::new())),
         })
+    }
+
+    /// 获取指定会话的独立锁（不存在则创建）。
+    /// 外层锁是 `std::sync::Mutex`，仅短暂持有以查表，无 IO/await。
+    #[inline]
+    fn conv_lock(&self, id: &str) -> std::sync::Arc<Mutex<()>> {
+        let mut map = self.locks.lock().unwrap();
+        map.entry(id.to_string())
+            .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
+            .clone()
     }
 
     /// conversation 文件路径：`<root>/<id>.json`
@@ -160,7 +177,8 @@ impl ConversationStore {
 
     /// 重命名会话
     pub async fn rename(&self, id: &str, title: String) -> Result<()> {
-        let _guard = self._lock.write().await;
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
         let mut conv = self.load(id).await?.ok_or_else(|| {
             CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -174,7 +192,8 @@ impl ConversationStore {
 
     /// 设置/取消置顶
     pub async fn set_pinned(&self, id: &str, pinned: bool, now: u64) -> Result<()> {
-        let _guard = self._lock.write().await;
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
         let mut conv = self.load(id).await?.ok_or_else(|| {
             CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -189,7 +208,8 @@ impl ConversationStore {
 
     /// 设置会话级工作区路径。传入 None 清除工作区（回退到技能级或进程默认）。
     pub async fn set_working_dir(&self, id: &str, working_dir: Option<String>) -> Result<()> {
-        let _guard = self._lock.write().await;
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
         let mut conv = self.load(id).await?.ok_or_else(|| {
             CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -292,7 +312,8 @@ impl ConversationStore {
         msg: Message,
         created_at: u64,
     ) -> Result<Conversation> {
-        let _guard = self._lock.write().await;
+        let lock = self.conv_lock(conv_id);
+        let _guard = lock.lock().await;
         let mut conv = self
             .load(conv_id)
             .await?

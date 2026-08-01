@@ -118,6 +118,22 @@ fn accumulate_sub_agent_event(
     buf: &Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>>,
     ev: &SubAgentEvent,
 ) {
+    // 预解析 Attachment 事件的 JSON（锁外 CPU 工作），避免锁内调用 serde_json
+    let attachment_image: Option<SubAgentImage> = if matches!(ev.kind, SubAgentEventKind::Attachment) {
+        serde_json::from_str::<serde_json::Value>(&ev.content)
+            .ok()
+            .and_then(|v| {
+                let path = v.get("path").and_then(|p| p.as_str())?;
+                let name = v.get("name").and_then(|n| n.as_str())?;
+                Some(SubAgentImage {
+                    path: path.to_string(),
+                    name: name.to_string(),
+                })
+            })
+    } else {
+        None
+    };
+
     let Ok(mut map) = buf.lock() else { return };
     let recs = map.entry(ev.conversation_id.clone()).or_default();
     let rec = match recs.iter_mut().find(|r| r.session_id == ev.session_id) {
@@ -164,16 +180,8 @@ fn accumulate_sub_agent_event(
             }
         }
         SubAgentEventKind::Attachment => {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.content) {
-                if let (Some(path), Some(name)) = (
-                    v.get("path").and_then(|p| p.as_str()),
-                    v.get("name").and_then(|n| n.as_str()),
-                ) {
-                    rec.images.push(SubAgentImage {
-                        path: path.to_string(),
-                        name: name.to_string(),
-                    });
-                }
+            if let Some(img) = attachment_image {
+                rec.images.push(img);
             }
         }
         SubAgentEventKind::Done => {
@@ -634,7 +642,7 @@ async fn set_image_gen_model(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<String, String> {
-    let mut config = state.config.write().await.clone();
+    let mut config = state.config.read().await.clone();
     let model = config
         .models
         .iter()
@@ -750,7 +758,7 @@ async fn save_model(
     state: tauri::State<'_, AppState>,
     model: AvailableModel,
 ) -> Result<String, String> {
-    let mut config = state.config.write().await.clone();
+    let mut config = state.config.read().await.clone();
     // 若 id 已存在则更新，否则新增
     let id = model.id.clone();
     if let Some(existing) = config.models.iter_mut().find(|m| m.id == id) {
@@ -766,7 +774,7 @@ async fn save_model(
 /// 删除指定 id 的可使用模型；若它是当前激活模型则清空 active_model_id
 #[tauri::command]
 async fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
-    let mut config = state.config.write().await.clone();
+    let mut config = state.config.read().await.clone();
     config.models.retain(|m| m.id != id);
     if config.active_model_id.as_deref() == Some(id.as_str()) {
         config.active_model_id = None;
@@ -789,7 +797,7 @@ async fn set_active_model(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<String, String> {
-    let mut config = state.config.write().await.clone();
+    let mut config = state.config.read().await.clone();
     let model = config
         .models
         .iter()
@@ -880,7 +888,7 @@ async fn set_active_model(
 /// 设置主题模式（持久化，不重建 agent）
 #[tauri::command]
 async fn set_theme(state: tauri::State<'_, AppState>, theme: ThemeMode) -> Result<(), String> {
-    let mut config = state.config.write().await.clone();
+    let mut config = state.config.read().await.clone();
     config.theme = theme;
     save_config(&config)?;
     *state.config.write().await = config;

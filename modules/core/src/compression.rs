@@ -5,7 +5,7 @@
 //! - XML 解析用纯字符串扫描，**不引入 xml crate 依赖**，避免 Cargo.toml 改动
 //! - 容错：格式错误的 `<act>` 块以 `tracing::warn!` 记录后跳过，不中断整体解析
 //! - `apply_compression` 用 `HashMap<&str, &CompressionAction>` 索引，O(n+m)
-//! - 锁临界区极短：`save` 仅在写文件前持写锁，IO 在锁内但无重计算
+//! - 锁临界区极短：`save` 将序列化移出锁外，锁内仅保留文件写入以防止并发写损坏
 //! - 结构体字段按大小降序：`Vec`(24B) → `u64`(8B)
 //!
 //! 压缩对用户透明：UI 仍显示原始消息，仅发给 LLM 的 prompt 中应用压缩决策。
@@ -142,9 +142,9 @@ impl CompressionStore {
 
     /// 保存（或覆盖）指定会话的压缩状态
     pub async fn save(&self, conversation_id: &str, state: &CompressionState) -> Result<()> {
-        let _guard = self._lock.write().await;
         let path = self.path_for(conversation_id);
         let bytes = serde_json::to_vec(state).map_err(CoreError::Serde)?;
+        let _guard = self._lock.write().await;
         tokio::fs::write(&path, bytes)
             .await
             .map_err(CoreError::Io)?;

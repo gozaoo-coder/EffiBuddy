@@ -94,12 +94,12 @@ impl ScheduledTaskStore {
 
     /// 更新上次执行时间；任务不存在时返回 NotFound
     pub async fn update_last_run(&self, id: &str, time: u64) -> Result<()> {
-        let _guard = self._lock.write().await;
         let mut task = self
             .get(id)
             .await?
             .ok_or_else(|| CoreError::NotFound(format!("scheduled task {} not found", id)))?;
         task.last_run = Some(time);
+        let _guard = self._lock.write().await;
         self.save(&task).await?;
         Ok(())
     }
