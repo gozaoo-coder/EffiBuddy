@@ -15,25 +15,27 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use effisuite_agent::{
-    AgentStreamItem, ChatAgent, CompressionStreamItem, ContextPreview, ImageGenConfig, ImageGenTool,
-    MockAgent, OpenAIEmbeddingProvider, RigAgent, call_compression_agent,
-    call_compression_agent_stream, DEFAULT_EMBEDDING_MODEL,
-};
-use effisuite_core::{
-    AgentConfig, Attachment, AttachmentKind, AvailableModel, BackendKind, BusEvent, CompressionAction,
-    CompressionState, CompressionStore, Conversation, ConversationMeta, ConversationStore, Device,
-    EventBus, InstalledPlugin, MemoryHit, MemoryIndex, MemoryStats, Message, ModelKind, PinnedMemory,
-    PinnedMemorySource, PinnedMemoryStore, PluginStore, ProviderPreset, Role, ScheduledTask,
-    ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore, ThemeMode, builtin_presets,
-    build_compression_prompt, parse_compression_response,
+    call_compression_agent, call_compression_agent_stream, AgentStreamItem, ChatAgent,
+    CompressionStreamItem, ContextPreview, ImageGenConfig, ImageGenTool, MockAgent,
+    ModelManagerHandle, OpenAIEmbeddingProvider, RigAgent, SubAgentEvent, SubAgentEventKind,
+    SubAgentKit, SubAgentManager, DEFAULT_EMBEDDING_MODEL,
 };
 use effisuite_core::clawhub::{
-    ClawHubClient, PackageListResponse, PackageResponse, PackageSearchResponse,
-    SkillListResponse, SkillResponse, SearchResponse,
+    ClawHubClient, PackageListResponse, PackageResponse, PackageSearchResponse, SearchResponse,
+    SkillListResponse, SkillResponse,
+};
+use effisuite_core::{
+    build_compression_prompt, builtin_presets, parse_compression_response, AgentConfig, Attachment,
+    AttachmentKind, AvailableModel, BackendKind, BusEvent, CompressionAction, CompressionState,
+    CompressionStore, Conversation, ConversationMeta, ConversationStore, Device, EventBus,
+    InstalledPlugin, MemoryHit, MemoryIndex, MemoryStats, Message, MessageUsage, ModelKind,
+    ModelPricing, PinnedMemory, PinnedMemorySource, PinnedMemoryStore, PluginStore, ProviderPreset,
+    Role, ScheduledTask, ScheduledTaskStore, SearchHit, SearchMode, Skill, SkillStore,
+    SubAgentImage, SubAgentRecord, ThemeMode, ToolCallRecord,
 };
 use effisuite_p2p::P2pManager;
-use serde::Deserialize;
 use futures::StreamExt;
+use serde::Deserialize;
 use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
@@ -82,6 +84,20 @@ pub struct AppState {
     /// cron 调度器 task 句柄（setup 中 spawn 后写入；shutdown 时可 abort）。
     /// 用 `Mutex` 是因为句柄在 setup 阶段才产生，需运行时回填到已 manage 的 state。
     pub scheduler_handle: std::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    /// 配置版本号：agent 工具（manage_model）每次修改配置 +1；
+    /// 与 agent_rev 比对，send_message 时懒重建 agent。
+    pub config_rev: Arc<std::sync::atomic::AtomicU64>,
+    /// 当前 agent 所基于的配置版本号。config_rev != agent_rev 时触发重建。
+    pub agent_rev: Arc<std::sync::atomic::AtomicU64>,
+    /// 模型管理句柄：注入 agent，manage_model / call_model / sub_agent 工具据此读写模型列表
+    pub model_manager: Arc<ModelManagerHandle>,
+    /// 子 agent 管理器：注入 agent，sub_agent 工具据此召唤子 agent；事件经回调 emit 到前端
+    /// 子 agent 管理器：注入 agent，sub_agent 工具据此召唤子 agent；事件经回调 emit 到前端
+    pub sub_agents: Arc<SubAgentManager>,
+    /// 子 agent 事件累积缓冲：key = 主会话 conversation_id，value = 该会话当前
+    /// 流式回复中子 agent 的过程记录（emitter 实时累积，流结束时持久化到消息）。
+    pub sub_agent_records:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>>,
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。
@@ -91,6 +107,88 @@ pub(crate) fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 把子 agent 事件累积到会话缓冲（供 send_message_stream 流结束时持久化）。
+///
+/// 聚合逻辑与前端 `onSubAgentEvent` 对齐（按 session_id 分组到同一记录）：
+/// started 记任务、token 累积文本、tool_call/tool_result 记录工具调用、
+/// attachment 解析图片、done/error 收尾。
+fn accumulate_sub_agent_event(
+    buf: &Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>>,
+    ev: &SubAgentEvent,
+) {
+    let Ok(mut map) = buf.lock() else { return };
+    let recs = map.entry(ev.conversation_id.clone()).or_default();
+    let rec = match recs.iter_mut().find(|r| r.session_id == ev.session_id) {
+        Some(r) => r,
+        None => {
+            recs.push(SubAgentRecord {
+                session_id: ev.session_id.clone(),
+                name: ev.name.clone(),
+                model: ev.model.clone(),
+                depth: ev.depth,
+                status: "running".to_string(),
+                task: String::new(),
+                text: String::new(),
+                tool_calls: Vec::new(),
+                images: Vec::new(),
+                error: String::new(),
+                finished_at: None,
+            });
+            recs.last_mut().unwrap()
+        }
+    };
+    match ev.kind {
+        SubAgentEventKind::Started => {
+            rec.task = ev.content.clone();
+            rec.status = "running".to_string();
+        }
+        SubAgentEventKind::Token => rec.text.push_str(&ev.content),
+        SubAgentEventKind::ToolCall => rec.tool_calls.push(ToolCallRecord {
+            call_id: format!("{}_{}", ev.session_id, rec.tool_calls.len()),
+            tool_name: ev.tool_name.clone(),
+            arguments: ev.arguments.clone(),
+            result: String::new(),
+            is_error: false,
+        }),
+        SubAgentEventKind::ToolResult => {
+            // 与前端一致：按 tool_name + 未完成匹配（事件未携带 call_id）
+            if let Some(tc) = rec
+                .tool_calls
+                .iter_mut()
+                .find(|t| t.tool_name == ev.tool_name && t.result.is_empty())
+            {
+                tc.result = ev.content.clone();
+                tc.is_error = ev.is_error;
+            }
+        }
+        SubAgentEventKind::Attachment => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.content) {
+                if let (Some(path), Some(name)) = (
+                    v.get("path").and_then(|p| p.as_str()),
+                    v.get("name").and_then(|n| n.as_str()),
+                ) {
+                    rec.images.push(SubAgentImage {
+                        path: path.to_string(),
+                        name: name.to_string(),
+                    });
+                }
+            }
+        }
+        SubAgentEventKind::Done => {
+            rec.status = "done".to_string();
+            if !ev.content.is_empty() {
+                rec.text = ev.content.clone();
+            }
+            rec.finished_at = Some(now_ms() as i64);
+        }
+        SubAgentEventKind::Error => {
+            rec.status = "error".to_string();
+            rec.error = ev.content.clone();
+            rec.finished_at = Some(now_ms() as i64);
+        }
+    }
 }
 
 /// appdata 根目录：`<app_data_dir>/effisuite`
@@ -197,6 +295,8 @@ fn build_agent(
     skills_dir: std::path::PathBuf,
     plugin_store: Arc<PluginStore>,
     compression_store: Arc<CompressionStore>,
+    model_manager: Arc<ModelManagerHandle>,
+    sub_agents: Arc<SubAgentManager>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -219,6 +319,8 @@ fn build_agent(
                 Some(skills_dir),
                 Some(plugin_store),
                 Some(compression_store),
+                Some(model_manager),
+                Some(sub_agents),
             ) {
                 Ok(agent) => Arc::new(agent),
                 Err(e) => {
@@ -229,6 +331,53 @@ fn build_agent(
         }
         _ => Arc::new(MockAgent::new()),
     }
+}
+
+/// 懒重建：若配置版本号与当前 agent 不一致（agent 工具 manage_model 修改了配置），
+/// 用最新配置重建 agent 并同步 image_gen_config 句柄。
+/// 在每次 send_message / send_message_stream 前调用。
+async fn ensure_agent_synced(state: &tauri::State<'_, AppState>, app_handle: &tauri::AppHandle) {
+    let rev = state.config_rev.load(std::sync::atomic::Ordering::SeqCst);
+    if state.agent_rev.load(std::sync::atomic::Ordering::SeqCst) == rev {
+        return;
+    }
+    let config = state.config.read().await.clone();
+
+    // 同步图像生成配置句柄（agent 可能激活了新的 image_gen 模型）
+    if let Some(cfg) = resolve_image_gen_config(&config) {
+        *state.image_gen_config.write().await = Some(cfg);
+    } else {
+        *state.image_gen_config.write().await = None;
+    }
+
+    // 重建 agent
+    let new_agent = build_agent(
+        &config,
+        Arc::clone(&state.memory),
+        Arc::clone(&state.pinned_memory),
+        Arc::clone(&state.current_conversation_id),
+        Arc::clone(&state.working_dir),
+        Arc::clone(&state.image_gen_config),
+        state.attachments_dir.clone(),
+        Arc::clone(&state.store),
+        Arc::clone(&state.skill_index),
+        Arc::new(state.skill_store.clone()),
+        Arc::new(state.clawhub.clone()),
+        skills_dir(),
+        Arc::new(state.plugin_store.clone()),
+        Arc::new(state.compression_store.clone()),
+        Arc::clone(&state.model_manager),
+        Arc::clone(&state.sub_agents),
+    );
+    {
+        let mut agent_lock = state.agent.write().await;
+        *agent_lock = new_agent;
+    }
+    state
+        .agent_rev
+        .store(rev, std::sync::atomic::Ordering::SeqCst);
+    tracing::info!(rev, "agent 已按最新配置重建（模型/工具变更生效）");
+    let _ = app_handle.emit("agent-backend-changed", ());
 }
 
 /// 根据 config 构造 embedding provider 并注入到 memory index。
@@ -264,7 +413,8 @@ async fn rebuild_memory_from_store(store: &ConversationStore, memory: &MemoryInd
         }
     };
     // 收集所有 (conv_id, Message) 对
-    let mut pairs: Vec<(String, Message)> = Vec::with_capacity(metas.iter().map(|m| m.message_count).sum());
+    let mut pairs: Vec<(String, Message)> =
+        Vec::with_capacity(metas.iter().map(|m| m.message_count).sum());
     for meta in &metas {
         match store.load(&meta.id).await {
             Ok(Some(conv)) => {
@@ -319,6 +469,9 @@ fn forward_event(handle: &tauri::AppHandle, event: &BusEvent) {
         BusEvent::DeviceFound { .. } => ("device-found", event),
         BusEvent::DeviceStatusChanged { .. } => ("device-status-changed", event),
         BusEvent::PairingRequest { .. } => ("pairing-request", event),
+        BusEvent::AskUser { .. } => ("ask-user", event),
+        BusEvent::NotifyUser { .. } => ("notify-user", event),
+        BusEvent::OpenPreview { .. } => ("open-preview", event),
     };
     let _ = handle.emit(name, payload);
 }
@@ -355,7 +508,9 @@ struct ActiveModelInfo {
 }
 
 #[tauri::command]
-async fn get_active_model_info(state: tauri::State<'_, AppState>) -> Result<ActiveModelInfo, String> {
+async fn get_active_model_info(
+    state: tauri::State<'_, AppState>,
+) -> Result<ActiveModelInfo, String> {
     let config = state.config.read().await.clone();
     if let Some(id) = config.active_model_id.as_ref() {
         if let Some(m) = config.models.iter().find(|m| &m.id == id) {
@@ -382,6 +537,10 @@ async fn set_config(
 ) -> Result<(), String> {
     // 持久化
     save_config(&config)?;
+    // 配置版本 +1：通知懒重建机制（本命令已直接重建，agent_rev 同步跟进）
+    state
+        .config_rev
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // 根据新配置刷新 embedding provider（启用/禁用向量检索路）
     apply_embedding_provider(&config, &state.memory).await;
@@ -413,6 +572,8 @@ async fn set_config(
         skills_dir(),
         Arc::new(state.plugin_store.clone()),
         Arc::new(state.compression_store.clone()),
+        Arc::clone(&state.model_manager),
+        Arc::clone(&state.sub_agents),
     );
 
     // 替换 state 中的 agent 和 config
@@ -424,6 +585,10 @@ async fn set_config(
         let mut config_lock = state.config.write().await;
         *config_lock = config;
     }
+    state.agent_rev.store(
+        state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+        std::sync::atomic::Ordering::SeqCst,
+    );
 
     // 通知前端 backend 变化
     let _ = app_handle.emit("agent-backend-changed", ());
@@ -490,6 +655,14 @@ async fn set_image_gen_model(
     save_config(&config)?;
     *state.image_gen_config.write().await = Some(cfg);
     *state.config.write().await = config;
+    // 图像模型变更不需要重建对话 agent：版本号同步跟进，避免下次消息误触发重建
+    state
+        .config_rev
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    state.agent_rev.store(
+        state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+        std::sync::atomic::Ordering::SeqCst,
+    );
     Ok(id)
 }
 
@@ -504,18 +677,18 @@ async fn generate_image(
     quality: Option<String>,
 ) -> Result<Attachment, String> {
     // 确认图像生成模型已配置
-    let _cfg = state
-        .image_gen_config
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "未配置图像生成模型，请先在设置中激活一个 kind=image_gen 的模型".to_string())?;
+    let _cfg = state.image_gen_config.read().await.clone().ok_or_else(|| {
+        "未配置图像生成模型，请先在设置中激活一个 kind=image_gen 的模型".to_string()
+    })?;
 
     let tool = ImageGenTool::new(
         Arc::clone(&state.image_gen_config),
         state.attachments_dir.clone(),
     );
-    let output = tool.generate(prompt, size, quality).await.map_err(|e| e.to_string())?;
+    let output = tool
+        .generate(prompt, size, quality)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 读取文件大小
     let filepath = state.attachments_dir.join(&output.path);
@@ -546,10 +719,7 @@ async fn read_attachment(
         .await
         .map_err(|e| format!("读取附件失败: {e}"))?;
     let mime = guess_mime(&path);
-    let b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &bytes,
-    );
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
     Ok(format!("data:{mime};base64,{b64}"))
 }
 
@@ -595,10 +765,7 @@ async fn save_model(
 
 /// 删除指定 id 的可使用模型；若它是当前激活模型则清空 active_model_id
 #[tauri::command]
-async fn delete_model(
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+async fn delete_model(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     let mut config = state.config.write().await.clone();
     config.models.retain(|m| m.id != id);
     if config.active_model_id.as_deref() == Some(id.as_str()) {
@@ -644,12 +811,18 @@ async fn set_active_model(
             save_config(&config)?;
             *state.image_gen_config.write().await = Some(cfg);
             *state.config.write().await = config;
+            // 图像模型变更不需要重建对话 agent：版本号同步跟进，避免下次消息误触发重建
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
             let _ = app_handle.emit("agent-backend-changed", ());
             Ok(id)
         }
-        ModelKind::VideoGen => {
-            Err("视频生成模型暂未实现".to_string())
-        }
+        ModelKind::VideoGen => Err("视频生成模型暂未实现".to_string()),
         ModelKind::Chat => {
             // 对话模型：写入运行时字段并重建 agent
             config.api_key = model.api_key.clone();
@@ -662,6 +835,10 @@ async fn set_active_model(
             config.active_model_id = Some(id.clone());
 
             save_config(&config)?;
+            // 配置版本 +1（本命令已直接重建 agent，agent_rev 同步跟进）
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
             // 切换模型时刷新 embedding provider（base_url/api_key 可能变化）
             apply_embedding_provider(&config, &state.memory).await;
@@ -681,12 +858,18 @@ async fn set_active_model(
                 skills_dir(),
                 Arc::new(state.plugin_store.clone()),
                 Arc::new(state.compression_store.clone()),
+                Arc::clone(&state.model_manager),
+                Arc::clone(&state.sub_agents),
             );
             {
                 let mut agent_lock = state.agent.write().await;
                 *agent_lock = new_agent;
             }
             *state.config.write().await = config;
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
 
             let _ = app_handle.emit("agent-backend-changed", ());
             Ok(id)
@@ -696,10 +879,7 @@ async fn set_active_model(
 
 /// 设置主题模式（持久化，不重建 agent）
 #[tauri::command]
-async fn set_theme(
-    state: tauri::State<'_, AppState>,
-    theme: ThemeMode,
-) -> Result<(), String> {
+async fn set_theme(state: tauri::State<'_, AppState>, theme: ThemeMode) -> Result<(), String> {
     let mut config = state.config.write().await.clone();
     config.theme = theme;
     save_config(&config)?;
@@ -792,8 +972,8 @@ async fn list_remote_models(
         .bytes()
         .await
         .map_err(|e| format!("读取响应体失败: {e}"))?;
-    let parsed: RemoteModelsResponse = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("解析响应失败: {e}"))?;
+    let parsed: RemoteModelsResponse =
+        serde_json::from_slice(&body_bytes).map_err(|e| format!("解析响应失败: {e}"))?;
     // 按 id 排序，便于前端展示
     let mut list: Vec<_> = parsed
         .data
@@ -845,8 +1025,8 @@ async fn get_remote_model(
         .bytes()
         .await
         .map_err(|e| format!("读取响应体失败: {e}"))?;
-    let parsed: RemoteModelDetailResponse = serde_json::from_slice(&body_bytes)
-        .map_err(|e| format!("解析响应失败: {e}"))?;
+    let parsed: RemoteModelDetailResponse =
+        serde_json::from_slice(&body_bytes).map_err(|e| format!("解析响应失败: {e}"))?;
     Ok(RemoteModelInfo {
         id: parsed.id,
         object: parsed.object.unwrap_or_else(|| "model".to_string()),
@@ -883,7 +1063,9 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 // =========================================================
 
 #[tauri::command]
-async fn list_conversations(state: tauri::State<'_, AppState>) -> Result<Vec<ConversationMeta>, String> {
+async fn list_conversations(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ConversationMeta>, String> {
     let store = state.store.clone();
     store.list_meta().await.map_err(|e| e.to_string())
 }
@@ -944,11 +1126,7 @@ async fn search_conversations(
     state: tauri::State<'_, AppState>,
     query: String,
 ) -> Result<Vec<SearchHit>, String> {
-    state
-        .store
-        .search(&query)
-        .await
-        .map_err(|e| e.to_string())
+    state.store.search(&query).await.map_err(|e| e.to_string())
 }
 
 // =========================================================
@@ -1066,10 +1244,7 @@ async fn update_pinned_memory(
 
 /// 删除指定 id 的永久记忆
 #[tauri::command]
-async fn delete_pinned_memory(
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+async fn delete_pinned_memory(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     state
         .pinned_memory
         .delete(&id)
@@ -1079,14 +1254,8 @@ async fn delete_pinned_memory(
 
 /// 清空所有永久记忆（危险操作，前端应有二次确认）
 #[tauri::command]
-async fn clear_pinned_memories(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    state
-        .pinned_memory
-        .clear()
-        .await
-        .map_err(|e| e.to_string())
+async fn clear_pinned_memories(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.pinned_memory.clear().await.map_err(|e| e.to_string())
 }
 
 // =========================================================
@@ -1471,6 +1640,8 @@ async fn send_message(
     conversation_id: String,
     content: String,
 ) -> Result<String, String> {
+    // agent 工具（manage_model）可能已修改配置：版本不一致时懒重建
+    ensure_agent_synced(&state, &app_handle).await;
     let agent = state.agent.read().await.clone();
     let store = state.store.clone();
     let bus = state.event_bus.clone();
@@ -1544,12 +1715,18 @@ async fn send_message_stream(
     conversation_id: String,
     content: String,
 ) -> Result<(), String> {
+    // agent 工具（manage_model）可能已修改配置：版本不一致时懒重建
+    ensure_agent_synced(&state, &app_handle).await;
     let agent = state.agent.read().await.clone();
     let store = state.store.clone();
     let memory = Arc::clone(&state.memory);
     let cur_conv = Arc::clone(&state.current_conversation_id);
     let working_dir_handle = Arc::clone(&state.working_dir);
     let handle = app_handle.clone();
+    // 子 agent 事件累积缓冲：emitter 按 conversation_id 实时写入，流结束时取走持久化
+    let sub_agent_records = Arc::clone(&state.sub_agent_records);
+    // 流开始前清空该会话上一轮的缓冲（防残留；正常流程上次流结束已取走）
+    sub_agent_records.lock().unwrap().remove(&conversation_id);
 
     // 标记当前会话：agent 据此排除当前会话
     *cur_conv.write().await = Some(conversation_id.clone());
@@ -1571,19 +1748,31 @@ async fn send_message_stream(
 
     // 同步会话级工作区到 agent 句柄：read_file/list_files/shell 据此解析相对路径
     // 优先级：会话级 working_dir > 技能级（enable_skill 工具写入会话） > None
-    let conv_wd = conv
-        .working_dir
-        .clone()
-        .map(std::path::PathBuf::from);
+    let conv_wd = conv.working_dir.clone().map(std::path::PathBuf::from);
     *working_dir_handle.write().await = conv_wd;
 
     let history = conv.history().to_vec();
     let conv_id = conversation_id.clone();
 
+    // 计费所需：模型名 + 激活模型预设的计费单价（用户配置，非硬编码）。
+    // 在 spawn 前读取，避免在异步 task 内持有 RwLock。
+    let model_name = agent.name().to_string();
+    let pricing: Option<ModelPricing> = {
+        let cfg = state.config.read().await;
+        cfg.active_model_id
+            .as_ref()
+            .and_then(|id| cfg.models.iter().find(|m| m.id.as_str() == id.as_str()))
+            .and_then(|m| m.pricing)
+    };
+
     // 2. spawn 独立 task 驱动流
     tauri::async_runtime::spawn(async move {
         let mut stream = agent.chat_stream(&history);
         let mut full = String::with_capacity(256);
+        // 累积本轮推理文本（thinking），流结束后持久化到助手消息，供历史回看
+        let mut reasoning_full = String::new();
+        // 累积本轮工具调用记录（call_id → 参数/结果），流结束后持久化
+        let mut tool_call_records: Vec<ToolCallRecord> = Vec::new();
         // 跟踪 call_id → tool_name 映射，用于在 ToolResult 时判断是否为 image_gen / set_title
         let mut tool_call_names: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
@@ -1594,6 +1783,32 @@ async fn send_message_stream(
         let mut image_attachments: Vec<Attachment> = Vec::new();
         // 累计本轮所有 completion 的 token 使用统计，agent-done 时一并下发
         let mut usage_summary = UsageSummary::default();
+
+        // 回答结束时下发一次计费统计（agent-billing）。
+        // 成功路径在 agent-done 前调用；错误路径在 return 前调用。
+        let emit_billing = |summary: &UsageSummary| {
+            if summary.completion_count == 0 {
+                return;
+            }
+            let b = BillingSummary::compute(summary, pricing);
+            let _ = handle.emit(
+                "agent-billing",
+                &AgentBillingPayload {
+                    conversation_id: &conv_id,
+                    model_name: &model_name,
+                    rounds: b.rounds,
+                    cache_hit_tokens: b.cache_hit_tokens,
+                    cache_miss_tokens: b.cache_miss_tokens,
+                    output_tokens: b.output_tokens,
+                    total_tokens: b.total_tokens,
+                    priced: b.priced,
+                    cache_hit_cost: b.cache_hit_cost,
+                    cache_miss_cost: b.cache_miss_cost,
+                    output_cost: b.output_cost,
+                    total_cost: b.total_cost,
+                },
+            );
+        };
 
         while let Some(chunk) = stream.next().await {
             match chunk {
@@ -1613,6 +1828,7 @@ async fn send_message_stream(
                     );
                 }
                 Ok(AgentStreamItem::Reasoning { content }) => {
+                    reasoning_full.push_str(&content);
                     let _ = handle.emit(
                         "agent-reasoning",
                         &AgentReasoningPayload {
@@ -1621,12 +1837,25 @@ async fn send_message_stream(
                         },
                     );
                 }
-                Ok(AgentStreamItem::ToolCallStart { call_id, tool_name, arguments }) => {
+                Ok(AgentStreamItem::ToolCallStart {
+                    call_id,
+                    tool_name,
+                    arguments,
+                }) => {
                     // 记录 call_id → tool_name，供 ToolResult 时判断是否为 image_gen / set_title
                     tool_call_names.insert(call_id.clone(), tool_name.clone());
-                    let args_str = serde_json::to_string(&arguments).unwrap_or_else(|_| "null".to_string());
+                    let args_str =
+                        serde_json::to_string(&arguments).unwrap_or_else(|_| "null".to_string());
                     // 记录 call_id → args_str，供 set_title 结果到达时解析 title 字段
                     tool_call_args.insert(call_id.clone(), args_str.clone());
+                    // 记录到持久化列表（result 待 ToolResult 到达后填充）
+                    tool_call_records.push(ToolCallRecord {
+                        call_id: call_id.clone(),
+                        tool_name: tool_name.clone(),
+                        arguments: args_str.clone(),
+                        result: String::new(),
+                        is_error: false,
+                    });
                     let _ = handle.emit(
                         "agent-tool-call",
                         &AgentToolCallPayload {
@@ -1637,7 +1866,11 @@ async fn send_message_stream(
                         },
                     );
                 }
-                Ok(AgentStreamItem::ToolResult { call_id, output, is_error }) => {
+                Ok(AgentStreamItem::ToolResult {
+                    call_id,
+                    output,
+                    is_error,
+                }) => {
                     // 若为 image_gen / display_image 工具结果，解析 JSON 提取图片信息并收集为附件。
                     // 两者输出格式兼容（id/path/name），display_image 额外有 source 字段不影响解析。
                     if let Some(name) = tool_call_names.get(&call_id) {
@@ -1660,7 +1893,9 @@ async fn send_message_stream(
                             if let Some(title) = tool_call_args
                                 .get(&call_id)
                                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                                .and_then(|v| v.get("title").and_then(|t| t.as_str()).map(str::to_string))
+                                .and_then(|v| {
+                                    v.get("title").and_then(|t| t.as_str()).map(str::to_string)
+                                })
                             {
                                 let _ = handle.emit(
                                     "conversation-title-updated",
@@ -1677,6 +1912,11 @@ async fn send_message_stream(
                             let _ = handle.emit("clawhub-skill-installed", &());
                         }
                     }
+                    // 填充持久化工具调用记录的执行结果
+                    if let Some(rec) = tool_call_records.iter_mut().find(|r| r.call_id == call_id) {
+                        rec.result = output.clone();
+                        rec.is_error = is_error;
+                    }
                     let _ = handle.emit(
                         "agent-tool-result",
                         &AgentToolResultPayload {
@@ -1692,14 +1932,19 @@ async fn send_message_stream(
                     output_tokens,
                     total_tokens,
                     reasoning_tokens,
+                    cache_hit_tokens,
+                    cache_miss_tokens,
                 }) => {
                     // 透传单次 completion 的 token 使用统计。
-                    // 前端累计所有 Usage 事件得到本轮总消耗，显示在气泡底部。
-                    // 累计到 usage_summary 供 agent-done 时一并返回（前端可在 done 后仍更新）。
+                    // 前端累计所有 Usage 事件得到本轮总消耗，显示在底栏。
+                    // 同时累计到 usage_summary，供回答结束时计算计费（agent-billing）。
                     usage_summary.input_tokens += input_tokens;
                     usage_summary.output_tokens += output_tokens;
                     usage_summary.total_tokens += total_tokens;
                     usage_summary.reasoning_tokens += reasoning_tokens;
+                    usage_summary.cache_hit_tokens += cache_hit_tokens;
+                    usage_summary.cache_miss_tokens += cache_miss_tokens;
+                    usage_summary.completion_count += 1;
                     let _ = handle.emit(
                         "agent-usage",
                         &AgentUsagePayload {
@@ -1718,6 +1963,8 @@ async fn send_message_stream(
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "stream error");
+                    // 回答结束（异常路径）：如有已消耗的 token，同样下发计费统计
+                    emit_billing(&usage_summary);
                     let _ = handle.emit(
                         "agent-stream-error",
                         &StreamErrorPayload {
@@ -1741,6 +1988,38 @@ async fn send_message_stream(
         if !image_attachments.is_empty() {
             assistant_msg.attachments = image_attachments.clone();
         }
+        // 持久化推理文本 / 工具调用 / token 用量：重启后历史回看仍可见
+        if !reasoning_full.is_empty() {
+            assistant_msg.reasoning = Some(reasoning_full);
+        }
+        assistant_msg.tool_calls = tool_call_records;
+        if usage_summary.completion_count > 0 {
+            // cache_miss 未上报时用 input - cache_hit 推导（与 BillingSummary::compute 一致）
+            let cache_miss = if usage_summary.cache_miss_tokens > 0 {
+                usage_summary.cache_miss_tokens
+            } else {
+                usage_summary
+                    .input_tokens
+                    .saturating_sub(usage_summary.cache_hit_tokens)
+            };
+            assistant_msg.usage = Some(MessageUsage {
+                input_tokens: usage_summary.input_tokens,
+                output_tokens: usage_summary.output_tokens,
+                total_tokens: usage_summary.cache_hit_tokens
+                    + cache_miss
+                    + usage_summary.output_tokens,
+                reasoning_tokens: usage_summary.reasoning_tokens,
+                cache_hit_tokens: usage_summary.cache_hit_tokens,
+                cache_miss_tokens: cache_miss,
+                rounds: usage_summary.completion_count,
+            });
+        }
+        // 子 agent 过程记录：从累积缓冲取走并持久化，重启后历史回看可恢复卡片
+        if let Some(recs) = sub_agent_records.lock().unwrap().remove(&conv_id) {
+            if !recs.is_empty() {
+                assistant_msg.sub_agents = recs;
+            }
+        }
         let assistant_msg_for_memory = assistant_msg.clone();
         if let Err(e) = store
             .append_message(&conv_id, assistant_msg, now_ms())
@@ -1751,7 +2030,8 @@ async fn send_message_stream(
         // 增量更新 memory index（即使持久化失败也尝试索引，best-effort）
         memory.add(&conv_id, assistant_msg_for_memory).await;
 
-        // 4. 通知前端流结束（仅直接 emit，避免与总线转发重复）
+        // 4. 回答结束（成功路径）：先下发本轮计费统计，再通知前端流结束
+        emit_billing(&usage_summary);
         let _ = handle.emit(
             "agent-done",
             &StreamTokenPayload {
@@ -1803,6 +2083,99 @@ struct UsageSummary {
     output_tokens: u64,
     total_tokens: u64,
     reasoning_tokens: u64,
+    /// 缓存命中输入 token 累计（DeepSeek prompt_cache_hit_tokens）
+    cache_hit_tokens: u64,
+    /// 缓存未命中输入 token 累计（DeepSeek prompt_cache_miss_tokens）
+    cache_miss_tokens: u64,
+    /// 处理轮数：本轮所有 completion 次数（含工具调用轮）
+    completion_count: u32,
+}
+
+/// 回答结束时的计费统计（agent-billing 事件 payload）
+///
+/// 本轮"询问"（可能包含多次 completion + 工具调用）结束时 emit 一次，
+/// 前端据此在气泡底部显示最终消费价格，悬浮可查看分项明细。
+#[derive(Debug, serde::Serialize)]
+struct AgentBillingPayload<'a> {
+    conversation_id: &'a str,
+    /// 模型名（agent 实际使用的模型）
+    model_name: &'a str,
+    /// 处理轮数：本轮所有 completion 次数
+    rounds: u32,
+    /// 缓存命中输入 token 总数
+    cache_hit_tokens: u64,
+    /// 缓存未命中输入 token 总数
+    cache_miss_tokens: u64,
+    /// 输出 token 总数
+    output_tokens: u64,
+    /// 总 token 数（缓存命中 + 未命中 + 输出）
+    total_tokens: u64,
+    /// 是否已配置计费单价；false 时各 cost 字段为 0，前端只显示 token
+    priced: bool,
+    /// 缓存计费（元）
+    cache_hit_cost: f64,
+    /// 未缓存计费（元）
+    cache_miss_cost: f64,
+    /// 输出计费（元）
+    output_cost: f64,
+    /// 合计消费（元）
+    total_cost: f64,
+}
+
+/// 一次"回答结束"的计费计算结果
+#[derive(Debug, Clone, Copy)]
+struct BillingSummary {
+    rounds: u32,
+    cache_hit_tokens: u64,
+    cache_miss_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    priced: bool,
+    cache_hit_cost: f64,
+    cache_miss_cost: f64,
+    output_cost: f64,
+    total_cost: f64,
+}
+
+impl BillingSummary {
+    /// 根据累计用量与用户配置的计费单价（元/百万 tokens）计算消费金额。
+    ///
+    /// - 缓存未命中数优先用 provider 上报值；未上报时（如 OpenAI 风格
+    ///   provider 只报 cached_tokens）用 `输入 - 缓存命中` 推导。
+    /// - `pricing` 为 None（模型未配置单价）时 `priced=false`，不计算金额。
+    fn compute(summary: &UsageSummary, pricing: Option<ModelPricing>) -> Self {
+        let cache_hit_tokens = summary.cache_hit_tokens;
+        let cache_miss_tokens = if summary.cache_miss_tokens > 0 {
+            summary.cache_miss_tokens
+        } else {
+            summary.input_tokens.saturating_sub(cache_hit_tokens)
+        };
+        let output_tokens = summary.output_tokens;
+        let total_tokens = cache_hit_tokens + cache_miss_tokens + output_tokens;
+
+        let (priced, cache_hit_cost, cache_miss_cost, output_cost) = match pricing {
+            Some(p) => (
+                true,
+                cache_hit_tokens as f64 * p.cache_hit_per_m / 1_000_000.0,
+                cache_miss_tokens as f64 * p.cache_miss_per_m / 1_000_000.0,
+                output_tokens as f64 * p.output_per_m / 1_000_000.0,
+            ),
+            None => (false, 0.0, 0.0, 0.0),
+        };
+
+        Self {
+            rounds: summary.completion_count,
+            cache_hit_tokens,
+            cache_miss_tokens,
+            output_tokens,
+            total_tokens,
+            priced,
+            cache_hit_cost,
+            cache_miss_cost,
+            output_cost,
+            total_cost: cache_hit_cost + cache_miss_cost + output_cost,
+        }
+    }
 }
 
 /// token 使用统计 payload（agent-usage 事件）
@@ -1934,7 +2307,12 @@ async fn pick_file(app: tauri::AppHandle) -> Result<Option<PickedFile>, String> 
     let path = app
         .dialog()
         .file()
-        .add_filter("文档", &["txt", "md", "pdf", "doc", "docx", "csv", "json", "rs", "py", "ts", "js"])
+        .add_filter(
+            "文档",
+            &[
+                "txt", "md", "pdf", "doc", "docx", "csv", "json", "rs", "py", "ts", "js",
+            ],
+        )
         .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
         .add_filter("所有文件", &["*"])
         .blocking_pick_file();
@@ -1965,7 +2343,11 @@ async fn capture_photo(app: tauri::AppHandle) -> Result<Option<PickedFile>, Stri
 async fn read_file_text(path: String, max_bytes: Option<u64>) -> Result<String, String> {
     let max = max_bytes.unwrap_or(512 * 1024) as usize;
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let truncated: &[u8] = if bytes.len() > max { &bytes[..max] } else { &bytes[..] };
+    let truncated: &[u8] = if bytes.len() > max {
+        &bytes[..max]
+    } else {
+        &bytes[..]
+    };
     match std::str::from_utf8(truncated) {
         Ok(s) => Ok(s.to_string()),
         Err(e) => {
@@ -1988,7 +2370,11 @@ async fn read_file_text(path: String, max_bytes: Option<u64>) -> Result<String, 
 /// 列出全部技能：内置（agent-reach / browser-act）+ 用户自定义
 #[tauri::command]
 async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<Skill>, String> {
-    state.skill_store.list_all().await.map_err(|e| e.to_string())
+    state
+        .skill_store
+        .list_all()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 创建用户技能，返回 id。空 id 自动生成；强制 builtin=false
@@ -2073,7 +2459,11 @@ async fn delete_skill(state: tauri::State<'_, AppState>, id: String) -> Result<(
 /// 失败仅记录日志不阻断主流程：索引短暂过期不影响已有技能可用性，
 /// 下次增删或重启时会再次 rebuild 自愈。
 async fn rebuild_skill_index(state: &AppState) {
-    if let Err(e) = state.skill_index.rebuild_from_store(&state.skill_store).await {
+    if let Err(e) = state
+        .skill_index
+        .rebuild_from_store(&state.skill_store)
+        .await
+    {
         tracing::warn!(error = %e, "技能索引 rebuild 失败，将在下次增删或重启时重试");
     }
 }
@@ -2225,7 +2615,11 @@ async fn clawhub_install_skill(
         .get_skill(&slug)
         .await
         .map_err(|e| format!("获取技能详情失败: {e}"))?;
-    let owner_handle = detail.owner.as_ref().and_then(|o| o.handle.clone()).unwrap_or_default();
+    let owner_handle = detail
+        .owner
+        .as_ref()
+        .and_then(|o| o.handle.clone())
+        .unwrap_or_default();
     let version = detail
         .latest_version
         .as_ref()
@@ -2241,30 +2635,46 @@ async fn clawhub_install_skill(
     // 3. 解压到 <skills_dir>/<slug>/
     let dest_dir = skills_root.join(&slug);
     let dest_for_blocking = dest_dir.clone();
-    tokio::task::spawn_blocking(move || {
-        extract_zip_to(&dest_for_blocking, &zip_bytes)
-    })
-    .await
-    .map_err(|e| format!("解压任务调度失败: {e}"))?
-    .map_err(|e| format!("解压失败: {e}"))?;
+    tokio::task::spawn_blocking(move || extract_zip_to(&dest_for_blocking, &zip_bytes))
+        .await
+        .map_err(|e| format!("解压任务调度失败: {e}"))?
+        .map_err(|e| format!("解压失败: {e}"))?;
 
     // 4. 解析 SKILL.md：提取 frontmatter 字段 + 正文作为 preamble
     // preamble 写入 Skill.preamble，enable_skill 工具注入为 System 消息，
     // agent 据此看到技能指令；working_dir 已指向解压目录，agent 可通过
     // read_file/list_files/shell 访问技能携带的脚本与资源文件。
     let skill_md_path = dest_dir.join("SKILL.md");
-    let (name, description, parsed_version, body) = match tokio::fs::read_to_string(&skill_md_path).await {
-        Ok(content) => {
-            let p = parse_skill_md(&content);
-            (
-                if p.name.is_empty() { slug.clone() } else { p.name },
-                if p.description.is_empty() { format!("ClawHub 技能: {}", slug) } else { p.description },
-                if p.version.is_empty() { version.clone() } else { p.version },
-                p.body,
-            )
-        }
-        Err(_) => (slug.clone(), format!("ClawHub 技能: {}", slug), version.clone(), String::new()),
-    };
+    let (name, description, parsed_version, body) =
+        match tokio::fs::read_to_string(&skill_md_path).await {
+            Ok(content) => {
+                let p = parse_skill_md(&content);
+                (
+                    if p.name.is_empty() {
+                        slug.clone()
+                    } else {
+                        p.name
+                    },
+                    if p.description.is_empty() {
+                        format!("ClawHub 技能: {}", slug)
+                    } else {
+                        p.description
+                    },
+                    if p.version.is_empty() {
+                        version.clone()
+                    } else {
+                        p.version
+                    },
+                    p.body,
+                )
+            }
+            Err(_) => (
+                slug.clone(),
+                format!("ClawHub 技能: {}", slug),
+                version.clone(),
+                String::new(),
+            ),
+        };
 
     // 5. 落盘 skill_store：preamble 为 SKILL.md 正文（无 frontmatter 时为整个文件）
     let skill = Skill {
@@ -2278,13 +2688,18 @@ async fn clawhub_install_skill(
         builtin: false,
         source: Some("clawhub".to_string()),
         source_slug: Some(slug_clone.clone()),
-        source_owner: if owner_handle.is_empty() { None } else { Some(owner_handle) },
-        source_version: if parsed_version.is_empty() { None } else { Some(parsed_version) },
+        source_owner: if owner_handle.is_empty() {
+            None
+        } else {
+            Some(owner_handle)
+        },
+        source_version: if parsed_version.is_empty() {
+            None
+        } else {
+            Some(parsed_version)
+        },
     };
-    skill_store
-        .save(&skill)
-        .await
-        .map_err(|e| e.to_string())?;
+    skill_store.save(&skill).await.map_err(|e| e.to_string())?;
     rebuild_skill_index(&state).await;
     // 通知前端：技能已安装，ClawHubPanel / SkillPanel 据此刷新
     let _ = app_handle.emit("clawhub-skill-installed", &skill.id);
@@ -2407,12 +2822,10 @@ async fn clawhub_install_plugin(
     };
     let dest_dir = plugins_root.join(safe_id.replace('/', "__"));
     let dest_for_blocking = dest_dir.clone();
-    tokio::task::spawn_blocking(move || {
-        extract_zip_to(&dest_for_blocking, &zip_bytes)
-    })
-    .await
-    .map_err(|e| format!("解压任务调度失败: {e}"))?
-    .map_err(|e| format!("解压失败: {e}"))?;
+    tokio::task::spawn_blocking(move || extract_zip_to(&dest_for_blocking, &zip_bytes))
+        .await
+        .map_err(|e| format!("解压任务调度失败: {e}"))?
+        .map_err(|e| format!("解压失败: {e}"))?;
 
     // 4. 落盘 plugin_store
     let plugin = InstalledPlugin {
@@ -2467,11 +2880,7 @@ async fn list_installed_plugins(
 async fn list_scheduled_tasks(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ScheduledTask>, String> {
-    state
-        .schedule_store
-        .list()
-        .await
-        .map_err(|e| e.to_string())
+    state.schedule_store.list().await.map_err(|e| e.to_string())
 }
 
 /// 创建定时任务，返回 id。空 id 自动生成
@@ -2554,7 +2963,8 @@ pub fn run() {
     let attachments_root = attachments_dir();
 
     // 初始化永久记忆存储（用户主动要求"记住"的内容）
-    let pinned_memory: Arc<PinnedMemoryStore> = match PinnedMemoryStore::new(pinned_memories_path()) {
+    let pinned_memory: Arc<PinnedMemoryStore> = match PinnedMemoryStore::new(pinned_memories_path())
+    {
         Ok(s) => Arc::new(s),
         Err(e) => {
             tracing::error!(error = %e, "PinnedMemoryStore 初始化失败，回退到临时目录");
@@ -2610,9 +3020,58 @@ pub fn run() {
     let skill_index = Arc::new(effisuite_core::SkillIndex::new());
     let skills_root = skills_dir();
 
+    // ===== 模型管理句柄 + 子 agent 管理器（注入 agent，供新工具使用） =====
+    // 配置版本号：manage_model 工具修改配置后 bump，send_message 时懒重建 agent
+    let config_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let agent_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let config_lock: Arc<RwLock<AgentConfig>> = Arc::new(RwLock::new(config.clone()));
+    let model_manager = Arc::new(ModelManagerHandle {
+        config: Arc::clone(&config_lock),
+        save: Box::new(save_config),
+        bump: Arc::clone(&config_rev),
+    });
+    // 子 agent 事件发射器：setup 阶段回填 AppHandle 后转发为前端 sub-agent-event；
+    // 同时按 conversation_id 累积到 sub_agent_records 缓冲，供 send_message_stream
+    // 流结束时把子 agent 过程记录持久化到助手消息（重启后历史回看可恢复卡片）。
+    let emitter_slot: Arc<std::sync::Mutex<Option<tauri::AppHandle>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let sub_agent_records: Arc<
+        std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>,
+    > = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let emitter = {
+        let slot = Arc::clone(&emitter_slot);
+        let buf = Arc::clone(&sub_agent_records);
+        Box::new(move |ev: &SubAgentEvent| {
+            if let Some(handle) = slot.lock().unwrap().as_ref() {
+                let _ = handle.emit("sub-agent-event", ev);
+            }
+            accumulate_sub_agent_event(&buf, ev);
+        })
+    };
+    let sub_agents = Arc::new(SubAgentManager::new(
+        SubAgentKit {
+            memory: Some(Arc::clone(&memory)),
+            pinned_memory: Some(Arc::clone(&pinned_memory)),
+            current_conversation_id: Arc::clone(&current_conversation_id),
+            working_dir: Arc::clone(&working_dir),
+            image_gen_config: Arc::clone(&image_gen_config),
+            attachments_dir: attachments_root.clone(),
+            store: Arc::clone(&store),
+            skill_index: Some(Arc::clone(&skill_index)),
+            skill_store: Some(Arc::new(skill_store.clone())),
+            clawhub_client: Some(Arc::new(clawhub_client.clone())),
+            skills_dir: Some(skills_root.clone()),
+            plugin_store: Some(Arc::new(plugin_store.clone())),
+            compression_store: Some(Arc::new(compression_store.clone())),
+            model_config: Arc::clone(&config_lock),
+            model_manager: Some(Arc::clone(&model_manager)),
+        },
+        emitter,
+    ));
+
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
     // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
-    // plugin_store / compression_store
+    // plugin_store / compression_store / model_manager / sub_agents
     // skill_store / clawhub / plugin_store / compression_store 内部已是 Arc，clone 廉价；
     // 为 RigAgent 包成 Arc<...> 以匹配 from_key 签名（共享同一份底层 Arc）
     let agent: Arc<dyn ChatAgent> = build_agent(
@@ -2630,6 +3089,8 @@ pub fn run() {
         skills_root.clone(),
         Arc::new(plugin_store.clone()),
         Arc::new(compression_store.clone()),
+        Arc::clone(&model_manager),
+        Arc::clone(&sub_agents),
     );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
@@ -2657,7 +3118,7 @@ pub fn run() {
         clawhub: clawhub_client,
         agent: Arc::clone(&agent_lock),
         store: Arc::clone(&store),
-        config: Arc::new(RwLock::new(config)),
+        config: Arc::clone(&config_lock),
         p2p,
         event_bus,
         memory: Arc::clone(&memory),
@@ -2667,6 +3128,11 @@ pub fn run() {
         image_gen_config: Arc::clone(&image_gen_config),
         attachments_dir: attachments_root,
         scheduler_handle: std::sync::Mutex::new(None),
+        config_rev,
+        agent_rev,
+        model_manager,
+        sub_agents,
+        sub_agent_records,
     };
 
     tauri::Builder::default()
@@ -2675,6 +3141,9 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
+            // 回填子 agent 事件发射器所需的 AppHandle（setup 阶段才可用）
+            *emitter_slot.lock().unwrap() = Some(app.handle().clone());
+
             // 订阅内部事件总线，转发为前端 Tauri 事件。
             // 使用 tauri::async_runtime::spawn 以兼容桌面与 mobile 运行时。
             let handle = app.handle().clone();

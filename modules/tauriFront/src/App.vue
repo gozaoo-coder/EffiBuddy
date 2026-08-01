@@ -16,6 +16,8 @@ import { applyThemeNow } from './composables/useTheme'
 import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
+// 当前激活模型名称（真实 model_name，来自 get_active_model_info）
+const activeModelName = ref('')
 // 侧栏抽屉（Kimi 风格左侧抽屉）
 const sideNavOpen = ref(false)
 // 各功能面板状态（均从 SideNav 触发）
@@ -44,6 +46,16 @@ async function refreshBackend() {
   }
 }
 
+// 刷新顶部显示的当前模型名称（真实 model_name）
+async function refreshModelDisplay() {
+  try {
+    const info = await invoke<{ name: string }>('get_active_model_info')
+    activeModelName.value = info.name || ''
+  } catch {
+    activeModelName.value = ''
+  }
+}
+
 onMounted(async () => {
   // 启动时立即应用持久化的主题，避免闪烁
   try {
@@ -52,7 +64,8 @@ onMounted(async () => {
   } catch {
     // 默认 system
   }
-  await refreshBackend()
+    await refreshBackend()
+    await refreshModelDisplay()
 
   // 监听 set_title 工具成功更新标题事件：立即刷新 SideNav 列表
   // 不必等流结束，LLM 调用 set_title 后前端就能看到新标题
@@ -74,6 +87,8 @@ function toggleSideNav() {
 
 function onSettingsSaved(backend: string) {
   agentBackend.value = backend
+  // 模型切换/保存后刷新顶部模型名（取真实 model_name，而非后端标识）
+  void refreshModelDisplay()
   toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
 
@@ -126,14 +141,8 @@ function openPluginPanel() {
   pluginPanelOpen.value = true
 }
 
-// 顶部药丸导航中显示的当前模型名称
-const modelDisplay = computed(() => {
-  if (!agentBackend.value || agentBackend.value === 'unknown') return 'EffiBuddy'
-  // 简单处理：截取 provider/model 的最后一段，如 openai:gpt-4o -> gpt-4o
-  const idx = agentBackend.value.lastIndexOf(':')
-  const name = idx >= 0 ? agentBackend.value.slice(idx + 1) : agentBackend.value
-  return name || 'EffiBuddy'
-})
+// 顶部药丸导航中显示的当前模型名称（真实 model_name）
+const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
 </script>
 
 <template>
@@ -153,10 +162,9 @@ const modelDisplay = computed(() => {
       </div>
 
       <div class="header-center">
-        <div class="model-pill">
-          <span class="model-name">{{ modelDisplay }}</span>
-          <span class="model-tag">Fast</span>
-        </div>
+          <div class="model-pill">
+            <span class="model-name">{{ modelDisplay }}</span>
+          </div>
       </div>
 
       <div class="header-right">

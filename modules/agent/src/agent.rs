@@ -111,6 +111,10 @@ pub enum AgentStreamItem {
         total_tokens: u64,
         /// 推理 token 数（o1 / DeepSeek-R1 等模型的思考链）
         reasoning_tokens: u64,
+        /// 缓存命中输入 token 数（DeepSeek 等 provider 在 usage 顶层返回）
+        cache_hit_tokens: u64,
+        /// 缓存未命中输入 token 数（DeepSeek 等 provider 在 usage 顶层返回）
+        cache_miss_tokens: u64,
     },
 }
 

@@ -39,7 +39,9 @@ impl ScheduledTaskStore {
 
     /// 列出全部定时任务，按 created_at 降序。
     pub async fn list(&self) -> Result<Vec<ScheduledTask>> {
-        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
+        let mut entries = tokio::fs::read_dir(&self.root)
+            .await
+            .map_err(CoreError::Io)?;
         let mut out = Vec::with_capacity(8);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
             let path = entry.path();
@@ -75,7 +77,9 @@ impl ScheduledTaskStore {
     pub async fn save(&self, task: &ScheduledTask) -> Result<()> {
         let path = self.path_for(&task.id);
         let bytes = serde_json::to_vec(task).map_err(CoreError::Serde)?;
-        tokio::fs::write(&path, bytes).await.map_err(CoreError::Io)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(CoreError::Io)?;
         Ok(())
     }
 
@@ -83,9 +87,7 @@ impl ScheduledTaskStore {
     pub async fn delete(&self, id: &str) -> Result<()> {
         let path = self.path_for(id);
         if path.exists() {
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(CoreError::Io)?;
+            tokio::fs::remove_file(&path).await.map_err(CoreError::Io)?;
         }
         Ok(())
     }
@@ -108,7 +110,8 @@ mod tests {
     use super::*;
 
     fn tmp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("effisuite-sched-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("effisuite-sched-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

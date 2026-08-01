@@ -25,7 +25,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::{Skill, SkillStore, tokenize};
+use crate::{tokenize, Skill, SkillStore};
 
 /// 默认 BM25 参数 k1（词频饱和参数）
 const DEFAULT_K1: f64 = 1.2;
@@ -316,8 +316,18 @@ mod tests {
         let idx = SkillIndex::new();
         idx.rebuild(vec![
             make_skill("weather", "Weather", "Get current weather forecast", false),
-            make_skill("translator", "Translator", "Translate text between languages", false),
-            make_skill("agent-reach", "Agent Reach", "Internet access and search", true),
+            make_skill(
+                "translator",
+                "Translator",
+                "Translate text between languages",
+                false,
+            ),
+            make_skill(
+                "agent-reach",
+                "Agent Reach",
+                "Internet access and search",
+                true,
+            ),
         ])
         .await;
 
@@ -347,7 +357,8 @@ mod tests {
     #[tokio::test]
     async fn search_empty_query_returns_empty() {
         let idx = SkillIndex::new();
-        idx.rebuild(vec![make_skill("a", "Skill", "desc", false)]).await;
+        idx.rebuild(vec![make_skill("a", "Skill", "desc", false)])
+            .await;
         let hits = idx.search("   ", 5).await;
         assert!(hits.is_empty());
     }

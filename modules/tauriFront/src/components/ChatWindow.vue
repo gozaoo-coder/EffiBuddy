@@ -8,6 +8,7 @@ import { useTheme } from '../composables/useTheme'
 import { Button, IconButton, BindSheet, Chips, Icon, Menu, ContextRing, useToast, type MenuItemOption } from './basic'
 import ReasoningBox from './ReasoningBox.vue'
 import ToolCallGroup from './ToolCallGroup.vue'
+import SubAgentCard from './SubAgentCard.vue'
 import type {
   Message,
   Conversation,
@@ -19,6 +20,9 @@ import type {
   AgentToolResultPayload,
   AgentAttachmentPayload,
   AgentUsagePayload,
+  AgentBillingPayload,
+  SubAgentEventPayload,
+  SubAgentRecord,
   CompressStatusPayload,
   CompressTokenPayload,
   CompressDonePayload,
@@ -80,15 +84,31 @@ let scrollRafId: number | null = null
 // 因此这里完全移除高度动画，仅保留 spawn 时的 opacity + scale 过渡，
 // 内容增长交给浏览器原生 reflow + markstream-vue 的 smooth-streaming 处理。
 
-// 每个助手气泡的元数据：reasoning / tool calls / usage（流式期间累积，不持久化）
+// 每个助手气泡的元数据：reasoning / tool calls / 子 agent / 计费（流式期间累积，不持久化）
 interface BubbleMeta {
   reasoning: string
   isThinking: boolean
   toolCalls: ToolCallRecord[]
-  /** token 使用统计：仅在 agent-usage 事件到达后赋值，流式结束保留显示 */
-  usage: AgentUsagePayload | null
+  /** 子 agent 记录（按 session_id 聚合） */
+  subAgents: SubAgentRecord[]
+  /** 计费统计：仅在 agent-billing 事件（回答结束时）到达后赋值 */
+  billing: AgentBillingPayload | null
 }
 const bubbleMeta = reactive<Record<string, BubbleMeta>>({})
+
+// 每条消息的计费单位切换状态：'price'（元）/ 'token'
+// 未配置价格的模型强制 token 模式，不参与切换。
+const billingUnit = reactive<Record<string, 'price' | 'token'>>({})
+
+function billingUnitOf(id: string): 'price' | 'token' {
+  const b = bubbleMeta[id]?.billing
+  if (b && !b.priced) return 'token'
+  return billingUnit[id] ?? 'price'
+}
+
+function toggleBillingUnit(id: string) {
+  billingUnit[id] = billingUnitOf(id) === 'price' ? 'token' : 'price'
+}
 
 // 附件图片 base64 data URL 缓存：attachment.id -> data URL
 // read_attachment 命令把图片文件编码成 data URL 返回，避免 Tauri 2 资源协议配置。
@@ -107,7 +127,8 @@ function ensureMeta(id: string): BubbleMeta {
       reasoning: '',
       isThinking: false,
       toolCalls: [],
-      usage: null,
+      subAgents: [],
+      billing: null,
     }
   }
   return bubbleMeta[id]
@@ -681,6 +702,7 @@ async function loadConversation() {
     messages.value = []
     // 清空 meta / 附件缓存
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    Object.keys(billingUnit).forEach((k) => delete billingUnit[k])
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
     // 清空引用块，避免残留上一会话的引用
@@ -694,14 +716,17 @@ async function loadConversation() {
     messages.value = conv?.messages ?? []
     // 历史会话不携带 reasoning/tools 元数据，清空
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    Object.keys(billingUnit).forEach((k) => delete billingUnit[k])
     // 切换会话时清空附件缓存，避免上一会话残留
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     // 清空引用块，避免残留上一会话的引用
     quoteChips.value = []
-    // 切换会话时清空上次 completion 统计（历史消息不携带 usage）
-    lastUsage.value = null
-    // 加载会话级工作区
-    workingDir.value = conv?.working_dir ?? null
+      // 切换会话时清空上次 completion 统计（历史消息不携带 usage）
+      lastUsage.value = null
+      // 新版已把 reasoning / toolCalls / usage 持久化到消息，据此恢复气泡元数据
+      restoreBubbleMetaFromHistory()
+      // 加载会话级工作区
+      workingDir.value = conv?.working_dir ?? null
     // 历史消息可能携带 attachments（如历史 image_gen 结果），回填 base64
     await loadConversationAttachments()
     await nextTick()
@@ -710,11 +735,56 @@ async function loadConversation() {
     console.warn('get_conversation failed', e)
     messages.value = []
     Object.keys(bubbleMeta).forEach((k) => delete bubbleMeta[k])
+    Object.keys(billingUnit).forEach((k) => delete billingUnit[k])
     Object.keys(attachmentUrls).forEach((k) => delete attachmentUrls[k])
     workingDir.value = null
     lastUsage.value = null
+    }
   }
-}
+
+// 从历史消息恢复气泡元数据（reasoning / toolCalls / usage）
+// 新版已把这些字段持久化到 Message；旧消息（无对应字段）保持默认空状态。
+function restoreBubbleMetaFromHistory() {
+  for (const m of messages.value) {
+    if (m.role !== 'assistant') continue
+    const meta = ensureMeta(m.id)
+    // thinking 全文 → 折叠推理框（历史中视为已思考完成）
+    if (m.reasoning) {
+      meta.reasoning = m.reasoning
+      meta.isThinking = false
+    }
+    // 工具调用记录 → 工具调用组（历史记录总是已完成，pending=false）
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      meta.toolCalls = m.toolCalls.map((t) => ({ ...t, pending: false }))
+    }
+    // token 用量 → 用量显示。历史只持久化 token（价格来自运行时模型配置），
+    // 故恢复为未计费模式（priced=false），前端按 token 展示。
+    if (m.usage) {
+      meta.billing = {
+        conversation_id: activeId.value ?? '',
+        model_name: '',
+        rounds: m.usage.rounds,
+        cache_hit_tokens: m.usage.cache_hit_tokens,
+        cache_miss_tokens: m.usage.cache_miss_tokens,
+        output_tokens: m.usage.output_tokens,
+        total_tokens: m.usage.total_tokens,
+        priced: false,
+        cache_hit_cost: 0,
+        cache_miss_cost: 0,
+        output_cost: 0,
+        total_cost: 0,
+        }
+      }
+      // 子 agent 过程卡片 → 从历史恢复（后端持久化的 SubAgentRecord）
+      if (m.subAgents && m.subAgents.length > 0) {
+        meta.subAgents = m.subAgents.map((sa) => ({
+          ...sa,
+          // 历史记录总是已完成；后端未持久化 pending 标记，补默认值
+          toolCalls: (sa.toolCalls ?? []).map((t) => ({ ...t, pending: false })),
+        }))
+      }
+    }
+  }
 
 // ---------- 会话级工作区管理 ----------
 // 优先级：会话级 > 技能级（apply_skill 写入） > 进程默认 cwd
@@ -930,13 +1000,105 @@ async function onAttachment(payload: AgentAttachmentPayload) {
   scrollBottom()
 }
 
+// ---------- 子 agent 事件 ----------
+// sub-agent-event：子 agent 全流程事件（started/token/tool_call/tool_result/attachment/done/error）。
+// 按 session_id 聚合到当前流式气泡的子 agent 记录中，前端实时渲染过程卡片。
+async function onSubAgentEvent(p: SubAgentEventPayload) {
+  if (!streamingBubbleId.value) {
+    streamingBubbleId.value = newId()
+    await addMessage({
+      id: streamingBubbleId.value,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    })
+  }
+  const meta = ensureMeta(streamingBubbleId.value)
+  let rec = meta.subAgents.find((s) => s.session_id === p.session_id)
+  if (!rec) {
+    rec = {
+      session_id: p.session_id,
+      name: p.name,
+      model: p.model,
+      depth: p.depth,
+      status: 'running',
+      task: '',
+      text: '',
+      toolCalls: [],
+      images: [],
+      error: '',
+      finishedAt: null,
+    }
+    meta.subAgents.push(rec)
+  }
+  switch (p.kind) {
+    case 'started':
+      rec.task = p.content
+      rec.status = 'running'
+      break
+    case 'token':
+      rec.text += p.content
+      break
+    case 'tool_call':
+      rec.toolCalls.push({
+        call_id: p.session_id + '_' + rec.toolCalls.length,
+        tool_name: p.tool_name,
+        arguments: p.arguments,
+        result: null,
+        is_error: false,
+        pending: true,
+      })
+      break
+    case 'tool_result': {
+      const tc = rec.toolCalls.find((t) => t.tool_name === p.tool_name && t.pending)
+      if (tc) {
+        tc.result = p.content
+        tc.is_error = p.is_error
+        tc.pending = false
+      }
+      break
+    }
+    case 'attachment':
+      try {
+        const parsed = JSON.parse(p.content)
+        if (parsed.path && parsed.name) {
+          rec.images.push({ path: parsed.path, name: parsed.name })
+        }
+      } catch {
+        /* 忽略解析失败 */
+      }
+      break
+    case 'done':
+      rec.status = 'done'
+      rec.text = p.content || rec.text
+      rec.finishedAt = Date.now()
+      break
+    case 'error':
+      rec.status = 'error'
+      rec.error = p.content
+      rec.finishedAt = Date.now()
+      break
+  }
+  await nextTick()
+  scrollBottom()
+}
+
 // ---------- token 使用统计 ----------
-// agent-usage 事件在每次 CompletionCall 结束时 emit 一次：
-//   - 单次值（input_tokens/output_tokens/total_tokens/reasoning_tokens）：本次 completion
-//   - 累计值（cumulative_*）：本轮会话所有 completion 的累加
-// 写入"当前 streamingBubbleId"对应的 meta.usage；若介于两段 completion 之间
-// （streamingBubbleId 已被清空但新 token 未到达），回退到最近一条 assistant 消息。
+// agent-usage 事件在每次 CompletionCall 结束时 emit 一次，仅用于更新底栏
+// "最后一次 completion"统计。气泡内的消费展示改由 agent-billing 事件
+// （回答结束时 emit 一次）驱动，见 onBilling。
 async function onUsage(p: AgentUsagePayload) {
+  // 更新底栏显示的最后一次 completion 统计
+  lastUsage.value = p
+}
+
+// ---------- 计费统计（回答结束时） ----------
+// 用户发送一次"询问"后，模型可能因工具调用进行多次 Completions；
+// 全部结束（"回答结束"）时后端 emit 一次 agent-billing，携带本次询问
+// 的累计用量与按模型配置单价计算的消费金额。
+// 写入"当前 streamingBubbleId"对应的 meta.billing；若介于两段 completion 之间
+// （streamingBubbleId 已被清空），回退到最近一条 assistant 消息。
+async function onBilling(p: AgentBillingPayload) {
   let targetId = streamingBubbleId.value
   if (!targetId) {
     // 回退：找最后一条 assistant 消息
@@ -949,9 +1111,43 @@ async function onUsage(p: AgentUsagePayload) {
   }
   if (!targetId) return
   const meta = ensureMeta(targetId)
-  meta.usage = p
-  // 同时更新底栏显示的最后一次 completion 统计
-  lastUsage.value = p
+  meta.billing = p
+}
+
+// ---------- 计费展示格式化 ----------
+// 本次询问总 token 数（缓存命中 + 未命中 + 输出）
+function billingTotal(b: AgentBillingPayload): number {
+  return b.cache_hit_tokens + b.cache_miss_tokens + b.output_tokens
+}
+
+// 元金额格式化：按量级保留有效小数，去掉尾随 0。
+// 例：0.006 -> "0.006"；0.00002 -> "0.00002"；1.5 -> "1.5"
+function fmtYuan(n: number): string {
+  if (!Number.isFinite(n)) return '—'
+  if (n === 0) return '0'
+  const abs = Math.abs(n)
+  let digits: number
+  if (abs >= 1) digits = 2
+  else if (abs >= 0.01) digits = 4
+  else if (abs >= 0.0001) digits = 6
+  else digits = 8
+  return n.toFixed(digits).replace(/\.?0+$/, '')
+}
+
+// 计费明细行：单位切换后的显示值
+// - price 模式："xxx元"（未配置价格时为 "—"）
+// - token 模式："xxx tokens"
+function billingRowValue(msgId: string, b: AgentBillingPayload, kind: 'hit' | 'miss' | 'output'): string {
+  const unit = billingUnitOf(msgId)
+  if (unit === 'price') {
+    const cost =
+      kind === 'hit' ? b.cache_hit_cost : kind === 'miss' ? b.cache_miss_cost : b.output_cost
+    if (!b.priced) return '—'
+    return `${fmtYuan(cost)}元`
+  }
+  const tokens =
+    kind === 'hit' ? b.cache_hit_tokens : kind === 'miss' ? b.cache_miss_tokens : b.output_tokens
+  return `${tokens} tokens`
 }
 
 // ---------- 图片预览 ----------
@@ -1268,10 +1464,26 @@ onMounted(async () => {
   )
 
   unlistens.push(
+    await listen<SubAgentEventPayload>('sub-agent-event', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onSubAgentEvent(p)
+    }),
+  )
+
+  unlistens.push(
     await listen<AgentUsagePayload>('agent-usage', async (e) => {
       const p = e.payload
       if (activeId.value && p.conversation_id !== activeId.value) return
       await onUsage(p)
+    }),
+  )
+
+  unlistens.push(
+    await listen<AgentBillingPayload>('agent-billing', async (e) => {
+      const p = e.payload
+      if (activeId.value && p.conversation_id !== activeId.value) return
+      await onBilling(p)
     }),
   )
 
@@ -1386,7 +1598,7 @@ onUnmounted(() => {
             <span class="home-logo-text">Buddy</span>
           </div>
           <div class="home-subtitle">
-            {{ props.backend && props.backend !== 'unknown' ? props.backend : 'Kimi K3: 2.8万亿参数' }}
+              {{ activeModelInfo?.name || 'EffiBuddy' }}
           </div>
           <div class="home-subtitle secondary">为你进化</div>
         </div>
@@ -1430,6 +1642,14 @@ onUnmounted(() => {
               v-if="getMeta(m.id)?.toolCalls.length"
               :calls="getMeta(m.id)!.toolCalls"
             />
+            <!-- 子 agent 过程卡片：仅在存在子 agent 记录时渲染 -->
+            <div v-if="getMeta(m.id)?.subAgents.length" class="msg-subagents">
+              <SubAgentCard
+                v-for="sa in getMeta(m.id)!.subAgents"
+                :key="sa.session_id"
+                :record="sa"
+              />
+            </div>
             <!-- 正文：仅在内容非空时渲染（思考/工具阶段内容可能为空） -->
             <MarkdownRender
               v-if="m.content"
@@ -1469,23 +1689,46 @@ onUnmounted(() => {
                 <div class="msg-attachment-meta">{{ att.name }}</div>
               </div>
             </div>
-            <!-- token 使用统计：每次 CompletionCall 结束后实时显示 -->
+            <!-- 计费统计：回答结束后显示本次询问的消费价格，悬浮查看明细 -->
             <div
-              v-if="getMeta(m.id)?.usage"
-              class="msg-usage"
-              :class="{ streaming: m.id === streamingBubbleId }"
-              :title="`本次：输入 ${getMeta(m.id)!.usage!.input_tokens} · 输出 ${getMeta(m.id)!.usage!.output_tokens}${getMeta(m.id)!.usage!.reasoning_tokens > 0 ? ' · 推理 ' + getMeta(m.id)!.usage!.reasoning_tokens : ''}\n累计：输入 ${getMeta(m.id)!.usage!.cumulative_input} · 输出 ${getMeta(m.id)!.usage!.cumulative_output} · 合计 ${getMeta(m.id)!.usage!.cumulative_total}`"
+              v-if="getMeta(m.id)?.billing && billingTotal(getMeta(m.id)!.billing!) > 0"
+              class="msg-usage-wrap"
             >
-              <span class="usage-label">tokens</span>
-              <span class="usage-val">{{ getMeta(m.id)!.usage!.input_tokens }}</span>
-              <span class="usage-sep">/</span>
-              <span class="usage-val">{{ getMeta(m.id)!.usage!.output_tokens }}</span>
-              <span
-                v-if="getMeta(m.id)!.usage!.reasoning_tokens > 0"
-                class="usage-val usage-reasoning"
-              >+{{ getMeta(m.id)!.usage!.reasoning_tokens }}</span>
-              <span class="usage-sep">·</span>
-              <span class="usage-cumulative">累计 {{ getMeta(m.id)!.usage!.cumulative_total }}</span>
+              <div class="msg-usage" :class="{ priced: getMeta(m.id)!.billing!.priced }">
+                <span v-if="billingUnitOf(m.id) === 'price'">
+                  {{ fmtYuan(getMeta(m.id)!.billing!.total_cost) }}元
+                </span>
+                <span v-else>{{ billingTotal(getMeta(m.id)!.billing!) }} tokens</span>
+              </div>
+              <div class="msg-usage-tip">
+                <div class="tip-head">
+                  <span class="tip-title">用量</span>
+                  <button
+                    v-if="getMeta(m.id)!.billing!.priced"
+                    type="button"
+                    class="tip-toggle"
+                    @click.stop="toggleBillingUnit(m.id)"
+                  >
+                    切换单位为{{ billingUnitOf(m.id) === 'price' ? 'token' : '元' }}
+                  </button>
+                </div>
+                <div class="tip-row">
+                  <span class="tip-label">处理轮数</span>
+                  <span class="tip-val">{{ getMeta(m.id)!.billing!.rounds }}</span>
+                </div>
+                <div class="tip-row">
+                  <span class="tip-label">缓存计费</span>
+                  <span class="tip-val">{{ billingRowValue(m.id, getMeta(m.id)!.billing!, 'hit') }}</span>
+                </div>
+                <div class="tip-row">
+                  <span class="tip-label">未缓存计费</span>
+                  <span class="tip-val">{{ billingRowValue(m.id, getMeta(m.id)!.billing!, 'miss') }}</span>
+                </div>
+                <div class="tip-row">
+                  <span class="tip-label">输出计费</span>
+                  <span class="tip-val">{{ billingRowValue(m.id, getMeta(m.id)!.billing!, 'output') }}</span>
+                </div>
+              </div>
             </div>
           </template>
           <template v-else>{{ m.content }}</template>
@@ -3154,6 +3397,14 @@ onUnmounted(() => {
   margin-top: 10px;
 }
 
+/* 子 agent 过程卡片区：位于工具调用组与正文之间 */
+.msg-subagents {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
 .msg-attachment {
   position: relative;
   display: flex;
@@ -3203,18 +3454,23 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-/* token 使用统计：assistant 气泡底部小标签
+/* 计费统计：assistant 气泡底部小标签（回答结束后显示本次询问消费价格）
  * 视觉风格对齐 .meta-pill / .ctx-stat-desc：
  * - 中性 var(--muted) 颜色，无彩色箭头
  * - 数字使用 SFMono-Regular + tabular-nums，与 char-badge / stat-value 一致
- * - · 作为分隔符，与 ctx-stat-desc（"X / Y 字符 · 约 X / Y tokens"）保持一致
  * - 边框使用 var(--border) 实线（不用 dashed），与 .meta-pill 一致
+ * 悬浮 .msg-usage 时弹出 .msg-usage-tip 明细（处理轮数 / 分项计费）。
  */
+.msg-usage-wrap {
+  position: relative;
+  display: inline-flex;
+  margin-top: 8px;
+}
+
 .msg-usage {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-top: 8px;
   padding: 2px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
@@ -3227,35 +3483,92 @@ onUnmounted(() => {
   user-select: none;
   width: fit-content;
   max-width: 100%;
+  cursor: default;
 }
 
-.msg-usage.streaming {
-  opacity: 0.8;
-}
-
-.msg-usage .usage-label {
-  color: var(--muted);
-  font-family: inherit;
-  font-weight: 500;
-}
-
-.msg-usage .usage-val {
+.msg-usage.priced {
   color: var(--text);
   font-weight: 500;
 }
 
-.msg-usage .usage-reasoning {
-  color: var(--muted);
-}
-
-.msg-usage .usage-sep {
-  color: var(--muted);
-  opacity: 0.6;
-}
-
-.msg-usage .usage-cumulative {
-  color: var(--muted);
+/* 悬浮明细浮层：回答结束后的用量/计费分项 */
+.msg-usage-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  min-width: 230px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.14));
   font-family: inherit;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    visibility 0.15s;
+  pointer-events: none;
+}
+
+.msg-usage-wrap:hover .msg-usage-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.msg-usage-tip .tip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.msg-usage-tip .tip-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.msg-usage-tip .tip-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.msg-usage-tip .tip-toggle:hover {
+  text-decoration: underline;
+}
+
+.msg-usage-tip .tip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.msg-usage-tip .tip-label {
+  color: var(--muted);
+}
+
+.msg-usage-tip .tip-val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-family: 'SFMono-Regular', Consolas, monospace;
 }
 </style>
 

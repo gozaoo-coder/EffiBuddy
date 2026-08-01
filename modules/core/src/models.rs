@@ -55,7 +55,8 @@ pub enum DeviceStatus {
 /// 单条聊天消息
 ///
 /// 字段按大小降序排列：String(24) > Vec(24) > u64(8) > enum(1)。
-/// attachments 使用 #[serde(default)] 保证旧 JSON 向后兼容。
+/// attachments / reasoning / tool_calls / usage 使用 #[serde(default)]
+/// 保证旧 JSON 向后兼容（旧消息缺省为空，新消息被旧版本读取时忽略未知字段）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
@@ -65,18 +66,111 @@ pub struct Message {
     /// 附件列表，旧文件无此字段时反序列化为空 Vec
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// 助手消息的思考过程（reasoning）全文。模型输出 thinking 时持久化，
+    /// 前端据此在历史回看时恢复折叠推理框；无则为 None。
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    /// 助手消息的工具调用记录（一次回复中模型调用的工具及其结果），
+    /// 前端据此在历史回看时恢复工具调用组。
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallRecord>,
+    /// 助手消息的 token 用量统计。模型返回 usage 时持久化，
+    /// 前端据此在历史回看时恢复用量显示（token 模式，不含价格）。
+    #[serde(default)]
+    pub usage: Option<MessageUsage>,
+    /// 助手消息的子 agent 过程记录（sub_agent 工具召唤的子 agent 全流程），
+    /// 前端据此在历史回看时恢复子 agent 过程卡片。
+    #[serde(default)]
+    pub sub_agents: Vec<SubAgentRecord>,
 }
 
+/// 单次工具调用记录（持久化到消息，供历史回看）
+///
+/// 与前端 `ToolCallRecord` 对齐（snake_case 序列化）：
+/// call_id / tool_name / arguments / result / is_error。
+/// `pending` 是运行时状态，不持久化（历史记录总是已完成）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallRecord {
+    pub call_id: String,
+    pub tool_name: String,
+    /// 工具参数 JSON 字符串
+    pub arguments: String,
+    /// 工具执行结果文本（未到达时为空字符串）
+    pub result: String,
+    /// 是否执行出错
+    pub is_error: bool,
+}
+
+/// 一条助手消息的 token 用量统计（持久化到消息，供历史回看）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub cache_hit_tokens: u64,
+    pub cache_miss_tokens: u64,
+    /// 处理轮数：该消息所有 completion 次数（含工具调用轮）
+    pub rounds: u32,
+}
+
+/// 子 agent 过程记录（持久化到消息，供历史回看恢复子 agent 卡片）
+///
+/// 字段命名与前端 `SubAgentRecord` 对齐：session_id / name / model / depth /
+/// status / task / text / toolCalls(→tool_calls) / images / error / finishedAt(→finished_at)。
+/// `toolCalls` 与 `finishedAt` 用 serde rename 保持 camelCase，前端可无转换直接消费。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubAgentRecord {
+    pub session_id: String,
+    pub name: String,
+    pub model: String,
+    /// 嵌套深度：1 = 主 agent 直接召唤，2 = 子 agent 再召唤
+    pub depth: usize,
+    /// 运行状态："running" | "done" | "error"
+    pub status: String,
+    /// 主 agent 交给子 agent 的任务
+    pub task: String,
+    /// 子 agent 回复全文
+    pub text: String,
+    /// 子 agent 内部工具调用记录
+    #[serde(default, rename = "toolCalls")]
+    pub tool_calls: Vec<ToolCallRecord>,
+    /// 子 agent 生成的图片附件（path + name）
+    #[serde(default)]
+    pub images: Vec<SubAgentImage>,
+    /// 错误信息（status=error 时）
+    #[serde(default)]
+    pub error: String,
+    /// 完成时间（Unix 毫秒）
+    #[serde(default, rename = "finishedAt")]
+    pub finished_at: Option<i64>,
+}
+
+/// 子 agent 生成的图片附件（path + name）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubAgentImage {
+    pub path: String,
+    pub name: String,
+}
 impl Message {
     /// 快速构造一条消息，id 与 timestamp 由调用方提供以避免隐式 IO。
     #[inline]
-    pub fn new(id: impl Into<String>, role: Role, content: impl Into<String>, timestamp: u64) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        role: Role,
+        content: impl Into<String>,
+        timestamp: u64,
+    ) -> Self {
         Self {
             id: id.into(),
             content: content.into(),
             timestamp,
             role,
             attachments: Vec::new(),
+            reasoning: None,
+            tool_calls: Vec::new(),
+            usage: None,
+            sub_agents: Vec::new(),
         }
     }
 
@@ -271,6 +365,83 @@ mod tests {
         let s = serde_json::to_string(&m).unwrap();
         let back: Message = serde_json::from_str(&s).unwrap();
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn message_roundtrip_with_meta_and_old_json_compat() {
+        // 新版：带 reasoning / tool_calls / usage 的消息可完整 roundtrip
+        let mut m = Message::new("m1", Role::Assistant, "answer", 1);
+        m.reasoning = Some("thinking...".to_string());
+        m.tool_calls = vec![ToolCallRecord {
+            call_id: "c1".to_string(),
+            tool_name: "read_file".to_string(),
+            arguments: "{}".to_string(),
+            result: "ok".to_string(),
+            is_error: false,
+        }];
+        m.usage = Some(MessageUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            reasoning_tokens: 3,
+            cache_hit_tokens: 4,
+            cache_miss_tokens: 6,
+            rounds: 1,
+        });
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Message = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(back.reasoning.as_deref(), Some("thinking..."));
+        assert_eq!(back.tool_calls.len(), 1);
+        assert_eq!(back.usage.unwrap().rounds, 1);
+
+        // 旧 JSON（无新字段）也能无感反序列化：新字段缺省为空
+        let old = r#"{"id":"m2","content":"hi","timestamp":1,"role":"user"}"#;
+        let old_msg: Message = serde_json::from_str(old).unwrap();
+        assert!(old_msg.reasoning.is_none());
+        assert!(old_msg.tool_calls.is_empty());
+        assert!(old_msg.usage.is_none());
+    }
+
+    #[test]
+    fn message_roundtrip_with_sub_agents() {
+        // 子 agent 过程记录 roundtrip：camelCase 字段（toolCalls/finishedAt）与前端对齐
+        let mut m = Message::new("m1", Role::Assistant, "answer", 1);
+        m.sub_agents = vec![SubAgentRecord {
+            session_id: "sa1".to_string(),
+            name: "审查员".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            depth: 1,
+            status: "done".to_string(),
+            task: "review code".to_string(),
+            text: "all good".to_string(),
+            tool_calls: vec![ToolCallRecord {
+                call_id: "sa1_0".to_string(),
+                tool_name: "read_file".to_string(),
+                arguments: "{}".to_string(),
+                result: "ok".to_string(),
+                is_error: false,
+            }],
+            images: vec![SubAgentImage {
+                path: "p.png".to_string(),
+                name: "p".to_string(),
+            }],
+            error: String::new(),
+            finished_at: Some(1234567890),
+        }];
+        let s = serde_json::to_string(&m).unwrap();
+        // camelCase rename 生效（前端可无转换直接消费）
+        assert!(s.contains("\"toolCalls\""));
+        assert!(s.contains("\"finishedAt\""));
+        let back: Message = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(back.sub_agents.len(), 1);
+        assert_eq!(back.sub_agents[0].tool_calls[0].tool_name, "read_file");
+
+        // 旧 JSON 兼容：无 sub_agents 字段的消息照常反序列化
+        let old = r#"{"id":"m2","content":"hi","timestamp":1,"role":"user"}"#;
+        let old_msg: Message = serde_json::from_str(old).unwrap();
+        assert!(old_msg.sub_agents.is_empty());
     }
 
     #[test]

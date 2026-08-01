@@ -51,7 +51,10 @@ fn tokenize_query(query: &str) -> Vec<String> {
 /// 计算消息对关键词的命中数
 fn score_message(content: &str, keywords: &[String]) -> usize {
     let lower = content.to_lowercase();
-    keywords.iter().filter(|kw| lower.contains(kw.as_str())).count()
+    keywords
+        .iter()
+        .filter(|kw| lower.contains(kw.as_str()))
+        .count()
 }
 
 /// 聊天记录存储，线程安全可廉价 clone（内部 RwLock + Arc 等价）
@@ -78,7 +81,9 @@ impl ConversationStore {
     #[inline]
     fn path_for(&self, id: &str) -> PathBuf {
         // 防止 id 含路径分隔符导致越权访问：仅取文件名部分
-        let safe = Path::new(id).file_name().unwrap_or_else(|| std::ffi::OsStr::new(id));
+        let safe = Path::new(id)
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new(id));
         self.root.join(safe).with_extension("json")
     }
 
@@ -97,7 +102,9 @@ impl ConversationStore {
     /// 排序规则：置顶在前（组内按 pinned_at 降序），未置顶按 updated_at 降序。
     /// 返回 ConversationMeta 结构体。
     pub async fn list_meta(&self) -> Result<Vec<ConversationMeta>> {
-        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
+        let mut entries = tokio::fs::read_dir(&self.root)
+            .await
+            .map_err(CoreError::Io)?;
         let mut out = Vec::with_capacity(16);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
             let path = entry.path();
@@ -128,17 +135,15 @@ impl ConversationStore {
             });
         }
         // 排序：置顶在前 → 组内按 pinned_at/created_at 降序 → 未置顶按 updated_at 降序
-        out.sort_by(|a, b| {
-            match (a.pinned, b.pinned) {
-                (true, true) => {
-                    let ap = a.pinned_at.unwrap_or(a.created_at);
-                    let bp = b.pinned_at.unwrap_or(b.created_at);
-                    bp.cmp(&ap)
-                }
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                (false, false) => b.updated_at.cmp(&a.updated_at),
+        out.sort_by(|a, b| match (a.pinned, b.pinned) {
+            (true, true) => {
+                let ap = a.pinned_at.unwrap_or(a.created_at);
+                let bp = b.pinned_at.unwrap_or(b.created_at);
+                bp.cmp(&ap)
             }
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => b.updated_at.cmp(&a.updated_at),
         });
         Ok(out)
     }
@@ -156,13 +161,12 @@ impl ConversationStore {
     /// 重命名会话
     pub async fn rename(&self, id: &str, title: String) -> Result<()> {
         let _guard = self._lock.write().await;
-        let mut conv = self
-            .load(id)
-            .await?
-            .ok_or_else(|| CoreError::Io(std::io::Error::new(
+        let mut conv = self.load(id).await?.ok_or_else(|| {
+            CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "conversation not found",
-            )))?;
+            ))
+        })?;
         conv.title = Some(title);
         self.save(&conv).await?;
         Ok(())
@@ -171,13 +175,12 @@ impl ConversationStore {
     /// 设置/取消置顶
     pub async fn set_pinned(&self, id: &str, pinned: bool, now: u64) -> Result<()> {
         let _guard = self._lock.write().await;
-        let mut conv = self
-            .load(id)
-            .await?
-            .ok_or_else(|| CoreError::Io(std::io::Error::new(
+        let mut conv = self.load(id).await?.ok_or_else(|| {
+            CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "conversation not found",
-            )))?;
+            ))
+        })?;
         conv.pinned = pinned;
         conv.pinned_at = if pinned { Some(now) } else { None };
         self.save(&conv).await?;
@@ -187,13 +190,12 @@ impl ConversationStore {
     /// 设置会话级工作区路径。传入 None 清除工作区（回退到技能级或进程默认）。
     pub async fn set_working_dir(&self, id: &str, working_dir: Option<String>) -> Result<()> {
         let _guard = self._lock.write().await;
-        let mut conv = self
-            .load(id)
-            .await?
-            .ok_or_else(|| CoreError::Io(std::io::Error::new(
+        let mut conv = self.load(id).await?.ok_or_else(|| {
+            CoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "conversation not found",
-            )))?;
+            ))
+        })?;
         conv.working_dir = working_dir;
         self.save(&conv).await?;
         Ok(())
@@ -207,7 +209,9 @@ impl ConversationStore {
         if keywords.is_empty() {
             return Ok(Vec::new());
         }
-        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
+        let mut entries = tokio::fs::read_dir(&self.root)
+            .await
+            .map_err(CoreError::Io)?;
         let mut hits = Vec::with_capacity(16);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
             let path = entry.path();
@@ -227,10 +231,12 @@ impl ConversationStore {
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            let conv_title = conv
-                .title
-                .clone()
-                .unwrap_or_else(|| conv.messages.first().map(|m| m.content.chars().take(20).collect()).unwrap_or_default());
+            let conv_title = conv.title.clone().unwrap_or_else(|| {
+                conv.messages
+                    .first()
+                    .map(|m| m.content.chars().take(20).collect())
+                    .unwrap_or_default()
+            });
             for msg in &conv.messages {
                 let score = score_message(&msg.content, &keywords);
                 if score > 0 {
@@ -273,16 +279,24 @@ impl ConversationStore {
     pub async fn save(&self, conv: &Conversation) -> Result<()> {
         let path = self.path_for(&conv.id);
         let bytes = serde_json::to_vec(conv).map_err(CoreError::Serde)?;
-        tokio::fs::write(&path, bytes).await.map_err(CoreError::Io)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(CoreError::Io)?;
         Ok(())
     }
 
     /// 追加消息到指定 conversation；若不存在则创建
-    pub async fn append_message(&self, conv_id: &str, msg: Message, created_at: u64) -> Result<Conversation> {
+    pub async fn append_message(
+        &self,
+        conv_id: &str,
+        msg: Message,
+        created_at: u64,
+    ) -> Result<Conversation> {
         let _guard = self._lock.write().await;
-        let mut conv = self.load(conv_id).await?.unwrap_or_else(|| {
-            Conversation::new(conv_id.to_string(), created_at)
-        });
+        let mut conv = self
+            .load(conv_id)
+            .await?
+            .unwrap_or_else(|| Conversation::new(conv_id.to_string(), created_at));
         conv.push(msg);
         self.save(&conv).await?;
         Ok(conv)

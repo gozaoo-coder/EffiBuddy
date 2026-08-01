@@ -156,9 +156,7 @@ impl PinnedMemoryStore {
                 .memories
                 .iter_mut()
                 .find(|m| m.id == id)
-                .ok_or_else(|| {
-                    CoreError::NotFound(format!("pinned memory {id} not found"))
-                })?;
+                .ok_or_else(|| CoreError::NotFound(format!("pinned memory {id} not found")))?;
             if let Some(c) = content {
                 m.content = c;
             }
@@ -319,7 +317,13 @@ mod tests {
     async fn update_content_and_category() {
         let store = PinnedMemoryStore::new(tmp_path()).unwrap();
         let id = store
-            .add_simple("orig", Some("cat-a".into()), PinnedMemorySource::Manual, None, 1)
+            .add_simple(
+                "orig",
+                Some("cat-a".into()),
+                PinnedMemorySource::Manual,
+                None,
+                1,
+            )
             .await
             .unwrap();
 
@@ -332,10 +336,7 @@ mod tests {
         assert_eq!(m.category.as_deref(), Some("cat-a"));
 
         // 清空 category
-        store
-            .update(&id, None, Some(None))
-            .await
-            .unwrap();
+        store.update(&id, None, Some(None)).await.unwrap();
         let m = store.get(&id).await.unwrap();
         assert!(m.category.is_none());
     }
@@ -364,7 +365,13 @@ mod tests {
             .await
             .unwrap();
         store
-            .add_simple("mid", Some("fact".into()), PinnedMemorySource::Manual, None, 200)
+            .add_simple(
+                "mid",
+                Some("fact".into()),
+                PinnedMemorySource::Manual,
+                None,
+                200,
+            )
             .await
             .unwrap();
 
@@ -384,7 +391,13 @@ mod tests {
         let path = tmp_path();
         let store_a = PinnedMemoryStore::new(&path).unwrap();
         store_a
-            .add_simple("persistent content", None, PinnedMemorySource::Manual, None, 1)
+            .add_simple(
+                "persistent content",
+                None,
+                PinnedMemorySource::Manual,
+                None,
+                1,
+            )
             .await
             .unwrap();
 

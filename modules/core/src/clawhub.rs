@@ -158,10 +158,7 @@ impl ClawHubClient {
         serde_json::from_slice::<T>(&bytes).map_err(|e| {
             // 截取前 500 字节避免错误信息过长
             let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(500)]);
-            ClawHubError::Decode(format!(
-                "{}; 原始响应（前 500 字节）：{}",
-                e, body_preview
-            ))
+            ClawHubError::Decode(format!("{}; 原始响应（前 500 字节）：{}", e, body_preview))
         })
     }
 
@@ -213,7 +210,9 @@ impl ClawHubClient {
     /// `GET /api/v1/skills/{slug}` - 获取技能详情
     pub async fn get_skill(&self, slug: &str) -> std::result::Result<SkillResponse, ClawHubError> {
         let path = format!("/api/v1/skills/{}", urlencoding_encode(slug));
-        let resp = self.handle_response(self.inner.http.get(self.url(&path)).send().await?).await?;
+        let resp = self
+            .handle_response(self.inner.http.get(self.url(&path)).send().await?)
+            .await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(ClawHubError::SlugNotFound(slug.to_string()));
         }
@@ -271,7 +270,9 @@ impl ClawHubClient {
         name: &str,
     ) -> std::result::Result<PackageResponse, ClawHubError> {
         let path = format!("/api/v1/packages/{}", urlencoding_encode(name));
-        let resp = self.handle_response(self.inner.http.get(self.url(&path)).send().await?).await?;
+        let resp = self
+            .handle_response(self.inner.http.get(self.url(&path)).send().await?)
+            .await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(ClawHubError::PackageNotFound(name.to_string()));
         }
@@ -631,7 +632,10 @@ fn urlencoding_encode(s: &str) -> String {
 /// - 创建 `dest_dir`（若不存在）
 /// - 跳过非文件条目（目录自动创建）
 /// - 防御性拒绝绝对路径与 `..` 路径（zip-slip 攻击防护）
-pub fn extract_zip_to(dest_dir: &std::path::Path, zip_bytes: &[u8]) -> std::result::Result<(), ClawHubError> {
+pub fn extract_zip_to(
+    dest_dir: &std::path::Path,
+    zip_bytes: &[u8],
+) -> std::result::Result<(), ClawHubError> {
     use std::path::{Component, Path};
     std::fs::create_dir_all(dest_dir).map_err(ClawHubError::Io)?;
     // 规范化 dest_dir 用于后续比较（canonicalize 要求路径存在，create_dir_all 已确保）
@@ -792,7 +796,10 @@ mod tests {
     #[test]
     fn urlencoding_encode_special_chars() {
         assert_eq!(urlencoding_encode("weather"), "weather");
-        assert_eq!(urlencoding_encode("@openclaw/whatsapp"), "%40openclaw%2Fwhatsapp");
+        assert_eq!(
+            urlencoding_encode("@openclaw/whatsapp"),
+            "%40openclaw%2Fwhatsapp"
+        );
         assert_eq!(urlencoding_encode("a b/c"), "a%20b%2Fc");
     }
 
@@ -841,14 +848,18 @@ mod tests {
             ],
             "nextCursor": "cursor-xyz"
         }"#;
-        let resp: SkillListResponse = serde_json::from_str(json).expect("应能解码 SkillListResponse");
+        let resp: SkillListResponse =
+            serde_json::from_str(json).expect("应能解码 SkillListResponse");
         assert_eq!(resp.items.len(), 1);
         assert_eq!(resp.items[0].slug, "weather");
         assert_eq!(resp.items[0].display_name, "Weather");
         assert_eq!(resp.items[0].created_at, 1730000000000);
         assert_eq!(resp.items[0].updated_at, 1730000001000);
         assert_eq!(resp.next_cursor.as_deref(), Some("cursor-xyz"));
-        let lv = resp.items[0].latest_version.as_ref().expect("latest_version 应存在");
+        let lv = resp.items[0]
+            .latest_version
+            .as_ref()
+            .expect("latest_version 应存在");
         assert_eq!(lv.version, "1.2.3");
         assert_eq!(lv.changelog, "init");
     }
@@ -912,7 +923,8 @@ mod tests {
             "nextCursor": "pkg-cursor",
             "totalCount": 1562
         }"#;
-        let resp: PackageListResponse = serde_json::from_str(json).expect("应能解码 PackageListResponse");
+        let resp: PackageListResponse =
+            serde_json::from_str(json).expect("应能解码 PackageListResponse");
         assert_eq!(resp.items.len(), 1);
         let item = &resp.items[0];
         assert_eq!(item.name, "@openclaw/whatsapp");
@@ -954,7 +966,10 @@ mod tests {
         assert_eq!(resp.skill.slug, "gifgrep");
         assert!(resp.moderation.is_none(), "缺 moderation 字段时应为 None");
         assert!(resp.metadata.is_none());
-        assert_eq!(resp.owner.as_ref().and_then(|o| o.handle.clone()), Some("steipete".to_string()));
+        assert_eq!(
+            resp.owner.as_ref().and_then(|o| o.handle.clone()),
+            Some("steipete".to_string())
+        );
     }
 
     #[test]

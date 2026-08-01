@@ -149,6 +149,8 @@ const BUILTIN_SVGS: Record<string, string> = {
   close: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" fill-rule="evenodd"><path d="M6.5 6.5L17.5 17.5M17.5 6.5L6.5 17.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
   // 对勾 ✓
   'check-builtin': `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" fill-rule="evenodd"><path d="M5 12.5L10 17.5L19 6.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  // 复制
+  copy: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" fill-rule="evenodd"><rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" stroke-width="2"/><path d="M16 8V6C16 5 15 4 14 4H6C5 4 4 5 4 6V14C4 15 5 16 6 16H8" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
   // 向下箭头 ▾
   'chevron-down': `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" fill-rule="evenodd"><path d="M6 9L12 15L18 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   // 向右箭头 ▸/›

@@ -136,8 +136,7 @@ impl CompressionStore {
             return Ok(None);
         }
         let bytes = tokio::fs::read(&path).await.map_err(CoreError::Io)?;
-        let state: CompressionState =
-            serde_json::from_slice(&bytes).map_err(CoreError::Serde)?;
+        let state: CompressionState = serde_json::from_slice(&bytes).map_err(CoreError::Serde)?;
         Ok(Some(state))
     }
 
@@ -146,7 +145,9 @@ impl CompressionStore {
         let _guard = self._lock.write().await;
         let path = self.path_for(conversation_id);
         let bytes = serde_json::to_vec(state).map_err(CoreError::Serde)?;
-        tokio::fs::write(&path, bytes).await.map_err(CoreError::Io)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(CoreError::Io)?;
         Ok(())
     }
 
@@ -154,9 +155,7 @@ impl CompressionStore {
     pub async fn delete(&self, conversation_id: &str) -> Result<()> {
         let path = self.path_for(conversation_id);
         if path.exists() {
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(CoreError::Io)?;
+            tokio::fs::remove_file(&path).await.map_err(CoreError::Io)?;
         }
         Ok(())
     }
@@ -216,8 +215,14 @@ fn parse_single_act(block: &str) -> Result<CompressionAction> {
     let method = method_raw.trim();
 
     let action = match method {
-        "保持" => CompressionAction::Keep { reason, message_ids },
-        "隐藏" => CompressionAction::Hide { reason, message_ids },
+        "保持" => CompressionAction::Keep {
+            reason,
+            message_ids,
+        },
+        "隐藏" => CompressionAction::Hide {
+            reason,
+            message_ids,
+        },
         "替换" => {
             let new_content_raw = extract_tag_content(block, "<newContent>", "</newContent>")
                 .ok_or_else(|| {
@@ -430,17 +435,27 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(
             actions[0].message_ids(),
-            &["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string(), "e".to_string()]
+            &[
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string()
+            ]
         );
     }
 
     #[test]
     fn parse_completion_id_without_brackets() {
         // 容错：无方括号也能解析
-        let text = r#"<act><reason>r</reason><method>保持</method><completionId>x,y</completionId></act>"#;
+        let text =
+            r#"<act><reason>r</reason><method>保持</method><completionId>x,y</completionId></act>"#;
         let actions = parse_compression_response(text).unwrap();
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].message_ids(), &["x".to_string(), "y".to_string()]);
+        assert_eq!(
+            actions[0].message_ids(),
+            &["x".to_string(), "y".to_string()]
+        );
     }
 
     #[test]
@@ -457,7 +472,8 @@ mod tests {
 
     #[test]
     fn parse_replace_missing_new_content_errors() {
-        let text = r#"<act><reason>r</reason><method>替换</method><completionId>[x]</completionId></act>"#;
+        let text =
+            r#"<act><reason>r</reason><method>替换</method><completionId>[x]</completionId></act>"#;
         let actions = parse_compression_response(text).unwrap();
         assert_eq!(actions.len(), 0); // 缺 newContent 被跳过
     }
@@ -470,7 +486,8 @@ mod tests {
 
     #[test]
     fn parse_unclosed_act_skipped() {
-        let text = r#"<act><reason>r</reason><method>保持</method><completionId>[m1]</completionId>"#;
+        let text =
+            r#"<act><reason>r</reason><method>保持</method><completionId>[m1]</completionId>"#;
         // 无 </act> 闭合 → 跳过，返回空
         let actions = parse_compression_response(text).unwrap();
         assert!(actions.is_empty());
@@ -679,7 +696,10 @@ mod tests {
         let loaded = store.load("conv1").await.unwrap().unwrap();
         assert_eq!(loaded.actions.len(), 1);
         assert_eq!(loaded.updated_at, 12345);
-        assert_eq!(loaded.actions[0].message_ids(), &["m1".to_string(), "m2".to_string()]);
+        assert_eq!(
+            loaded.actions[0].message_ids(),
+            &["m1".to_string(), "m2".to_string()]
+        );
 
         // 覆盖保存
         let state2 = CompressionState {

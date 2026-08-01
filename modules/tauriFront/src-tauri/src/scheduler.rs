@@ -70,8 +70,14 @@ pub fn spawn_scheduler(
         interval.tick().await;
         loop {
             interval.tick().await;
-            if let Err(e) =
-                run_tick(&app_handle, &schedule_store, &skill_store, &agent_lock, &store).await
+            if let Err(e) = run_tick(
+                &app_handle,
+                &schedule_store,
+                &skill_store,
+                &agent_lock,
+                &store,
+            )
+            .await
             {
                 tracing::warn!(error = %e, "scheduler tick failed");
             }
@@ -152,7 +158,14 @@ async fn execute_skill(
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "persist skill preamble failed");
-            emit_result(&app_handle, &task_id, &task_name, &conv_id, &e.to_string(), false);
+            emit_result(
+                &app_handle,
+                &task_id,
+                &task_name,
+                &conv_id,
+                &e.to_string(),
+                false,
+            );
             return;
         }
     };
@@ -168,7 +181,10 @@ async fn execute_skill(
                 reply.clone(),
                 now_ms(),
             );
-            if let Err(e) = store.append_message(&conv_id, assistant_msg, now_ms()).await {
+            if let Err(e) = store
+                .append_message(&conv_id, assistant_msg, now_ms())
+                .await
+            {
                 tracing::warn!(error = %e, "persist scheduled reply failed");
             }
             emit_result(&app_handle, &task_id, &task_name, &conv_id, &reply, true);

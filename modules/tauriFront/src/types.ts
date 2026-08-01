@@ -30,7 +30,15 @@ export interface Message {
   role: Role
   /** 消息附件（图片/文件），旧消息无此字段时为空数组 */
   attachments?: Attachment[]
-}
+  /** 助手消息的思考过程（reasoning）全文；新版持久化，旧消息无此字段 */
+  reasoning?: string | null
+  /** 助手消息的工具调用记录；新版持久化，旧消息无此字段 */
+  toolCalls?: ToolCallRecord[]
+  /** 助手消息的 token 用量统计；新版持久化，旧消息无此字段 */
+  usage?: MessageUsage | null
+  /** 助手消息的子 agent 过程记录；新版持久化，旧消息无此字段 */
+  subAgents?: SubAgentRecord[]
+  }
 
 // 引用块 chip：composer 顶部展示被引用消息的摘要
 // send() 时把所有 chips 的内容拼接到用户输入前面，作为上下文交给后端
@@ -165,7 +173,19 @@ export interface AvailableModel {
   image_quality?: string | null
   /** 模型上下文窗口大小（tokens），null 表示未设置 */
   context_window_tokens?: number | null
+  /** 计费单价（元/百万 tokens），null 表示未配置（聊天中不显示消费金额） */
+  pricing?: ModelPricing | null
   created_at: number
+}
+
+/** 模型计费单价（元/百万 tokens），由用户在模型配置面板填写，不硬编码 */
+export interface ModelPricing {
+  /** 缓存命中输入单价（元/百万 tokens） */
+  cache_hit_per_m: number
+  /** 缓存未命中输入单价（元/百万 tokens） */
+  cache_miss_per_m: number
+  /** 输出单价（元/百万 tokens） */
+  output_per_m: number
 }
 
 export interface ProviderPreset {
@@ -200,6 +220,50 @@ export interface AgentUsagePayload {
   cumulative_output: number
   cumulative_total: number
   cumulative_reasoning: number
+}
+
+/** 单条助手消息的 token 用量统计（持久化到消息，历史回看用） */
+export interface MessageUsage {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  reasoning_tokens: number
+  cache_hit_tokens: number
+  cache_miss_tokens: number
+  /** 处理轮数：该消息所有 completion 次数（含工具调用轮） */
+  rounds: number
+}
+/**
+ * 回答结束时的计费统计（agent-billing 事件 payload）
+ *
+ * 用户发送一次"询问"后，模型可能因工具调用进行多次 Completions；
+ * 全部结束（"回答结束"）时后端 emit 一次，前端据此在气泡底部
+ * 显示本次询问的最终消费价格，悬浮可查看分项明细。
+ */
+export interface AgentBillingPayload {
+  conversation_id: string
+  /** 模型名（agent 实际使用的模型） */
+  model_name: string
+  /** 处理轮数：本次询问所有 completion 次数（含工具调用轮） */
+  rounds: number
+  /** 缓存命中输入 token 总数 */
+  cache_hit_tokens: number
+  /** 缓存未命中输入 token 总数 */
+  cache_miss_tokens: number
+  /** 输出 token 总数 */
+  output_tokens: number
+  /** 总 token 数（缓存命中 + 未命中 + 输出） */
+  total_tokens: number
+  /** 是否已配置计费单价；false 时各 cost 字段为 0，只显示 token */
+  priced: boolean
+  /** 缓存计费（元） */
+  cache_hit_cost: number
+  /** 未缓存计费（元） */
+  cache_miss_cost: number
+  /** 输出计费（元） */
+  output_cost: number
+  /** 合计消费（元） */
+  total_cost: number
 }
 
 // =========================================================
@@ -328,6 +392,47 @@ export interface ToolCallRecord {
   is_error: boolean
   // 是否正在执行中
   pending: boolean
+}
+
+// 子 agent 事件 payload（sub-agent-event 事件）
+// 后端 SubAgentManager 在子 agent 执行全流程中实时推送：
+// started → token / tool_call / tool_result / attachment → done | error
+export interface SubAgentEventPayload {
+  conversation_id: string
+  session_id: string
+  name: string
+  model: string
+  /** 嵌套深度：1 = 主 agent 直接召唤，2 = 子 agent 再召唤 */
+  depth: number
+  kind: 'started' | 'token' | 'tool_call' | 'tool_result' | 'attachment' | 'done' | 'error'
+  /** token 增量 / 工具结果 / 错误信息 / 附件 JSON（ImageGenOutput） */
+  content: string
+  /** 工具名（tool_call / tool_result 时有效） */
+  tool_name: string
+  /** 工具参数 JSON（tool_call 时有效） */
+  arguments: string
+  is_error: boolean
+}
+
+// 子 agent 卡片记录（前端按 session_id 聚合事件后的结构）
+export interface SubAgentRecord {
+  session_id: string
+  name: string
+  model: string
+  depth: number
+  status: 'running' | 'done' | 'error'
+  /** 主 agent 交给子 agent 的任务 */
+  task: string
+  /** 子 agent 回复全文（流式累积） */
+  text: string
+  /** 子 agent 内部工具调用记录 */
+  toolCalls: ToolCallRecord[]
+  /** 子 agent 生成的图片附件（path + name） */
+  images: { path: string; name: string }[]
+  /** 错误信息（status=error 时） */
+  error: string
+  /** 完成时间 */
+  finishedAt: number | null
 }
 
 // =========================================================

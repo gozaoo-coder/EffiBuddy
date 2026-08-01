@@ -20,10 +20,15 @@ pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
 pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::{
-    COMPRESSION_PREAMBLE, CompressionStreamItem, RigAgent, call_compression_agent,
-    call_compression_agent_stream,
+    COMPRESSION_PREAMBLE, CompressionStreamItem, RigAgent, SUB_AGENT_DEFAULT_EXCLUDED,
+    call_compression_agent, call_compression_agent_stream,
 };
 pub use tools::{
-    DeleteFileTool, GetTimeTool, ImageGenConfig, ImageGenTool, SearchHistoryTool,
-    SearchMemoryTool, SetTitleTool, UninstallPluginTool, UninstallSkillTool,
+    AskUserTool, CallModelTool, DeleteFileTool, EditFileTool, GenerateVideoTool, GetTimeTool,
+    GlobTool, GrepTool, ImageGenConfig, ImageGenTool, ManageModelTool, ModelManagerHandle,
+    NotifyUserTool, OpenPreviewTool, ReadFileTool, ScheduleAction, ScheduleArgs, ScheduleError,
+    ScheduleTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool, SearchMemoryTool,
+    SearchResult, SetTitleTool, SubAgentEvent, SubAgentEventKind, SubAgentKit, SubAgentManager,
+    SubAgentTool, TodoItem, TodoPriority, TodoStatus, TodoWriteTool, UninstallPluginTool,
+    UninstallSkillTool, VideoGenConfig, WebSearchConfig, WebSearchTool, WriteFileTool,
 };

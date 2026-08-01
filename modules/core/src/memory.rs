@@ -295,7 +295,11 @@ impl MemoryIndex {
     pub async fn export_embeddings(&self) -> HashMap<String, Vec<f32>> {
         let s = self.state.read().await;
         let mut out = HashMap::with_capacity(s.entries.len());
-        for entry in s.entries.iter().filter_map(|e| e.embedding.as_ref().map(|emb| (e.cache_key(), emb))) {
+        for entry in s
+            .entries
+            .iter()
+            .filter_map(|e| e.embedding.as_ref().map(|emb| (e.cache_key(), emb)))
+        {
             out.insert(entry.0, entry.1.clone());
         }
         out
@@ -337,7 +341,13 @@ impl MemoryIndex {
                 .iter()
                 .filter(|e| e.embedding.is_none())
                 .take(limit)
-                .map(|e| (e.conversation_id.clone(), e.message_id.clone(), e.content.clone()))
+                .map(|e| {
+                    (
+                        e.conversation_id.clone(),
+                        e.message_id.clone(),
+                        e.content.clone(),
+                    )
+                })
                 .collect();
             (provider, to_embed)
         };
@@ -533,8 +543,7 @@ pub fn tokenize(content: &str) -> Vec<String> {
     let mut cjk_buf: Vec<char> = Vec::new();
 
     for c in content.chars() {
-        let is_sep = c.is_whitespace()
-            || "，。、；：！？,.:;!?\"'`()[]{}【】《》".contains(c);
+        let is_sep = c.is_whitespace() || "，。、；：！？,.:;!?\"'`()[]{}【】《》".contains(c);
         if is_sep {
             flush_ascii(&mut ascii_buf, &mut out);
             flush_cjk(&mut cjk_buf, &mut out);
@@ -633,8 +642,13 @@ fn bm25_search(
                 let dl = entry.dl() as f64;
                 let tf = tf as f64;
                 // BM25 tf 组件：tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / avg_dl))
-                let denom = tf + k1 * (1.0 - b + b * (if avg_dl > 0.0 { dl / avg_dl } else { 0.0 }));
-                let tf_component = if denom > 0.0 { tf * (k1 + 1.0) / denom } else { 0.0 };
+                let denom =
+                    tf + k1 * (1.0 - b + b * (if avg_dl > 0.0 { dl / avg_dl } else { 0.0 }));
+                let tf_component = if denom > 0.0 {
+                    tf * (k1 + 1.0) / denom
+                } else {
+                    0.0
+                };
                 *scores.entry(idx).or_insert(0.0) += idf * tf_component;
             }
         }
@@ -713,9 +727,15 @@ fn cosine_search(
 /// Reciprocal Rank Fusion：融合两路结果
 ///
 /// `score = Σ 1 / (k + rank)`，rank 从 1 开始。无需归一化原始分数。
-fn rrf_fuse(lexical: Vec<MemoryHit>, vector: Vec<MemoryHit>, limit: usize, k: u32) -> Vec<MemoryHit> {
+fn rrf_fuse(
+    lexical: Vec<MemoryHit>,
+    vector: Vec<MemoryHit>,
+    limit: usize,
+    k: u32,
+) -> Vec<MemoryHit> {
     // 用 (conv_id, msg_id) 作为合并键
-    let mut fused: HashMap<(String, String), (MemoryHit, f64)> = HashMap::with_capacity(lexical.len() + vector.len());
+    let mut fused: HashMap<(String, String), (MemoryHit, f64)> =
+        HashMap::with_capacity(lexical.len() + vector.len());
 
     for (rank, hit) in lexical.iter().enumerate() {
         let key = (hit.conversation_id.clone(), hit.message_id.clone());
@@ -748,7 +768,10 @@ fn rrf_fuse(lexical: Vec<MemoryHit>, vector: Vec<MemoryHit>, limit: usize, k: u3
 /// 向量 L2 范数
 #[inline]
 fn vec_norm(v: &[f32]) -> f64 {
-    v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt()
+    v.iter()
+        .map(|x| (*x as f64) * (*x as f64))
+        .sum::<f64>()
+        .sqrt()
 }
 
 /// 余弦相似度（precomputable q_norm 优化）
@@ -835,11 +858,8 @@ mod tests {
             msg("m1", Role::User, "我们讨论过异步编程的优缺点", 1),
         )
         .await;
-        idx.add(
-            "conv_b",
-            msg("m2", Role::User, "今天天气真不错适合出门", 2),
-        )
-        .await;
+        idx.add("conv_b", msg("m2", Role::User, "今天天气真不错适合出门", 2))
+            .await;
 
         // 在 conv_b 中查询 "异步",应命中 conv_a 的消息
         let hits = idx.search_lexical("异步", 5, Some("conv_b")).await;
@@ -851,13 +871,21 @@ mod tests {
     #[tokio::test]
     async fn add_and_search_lexical_basic() {
         let idx = MemoryIndex::new();
-        idx.add("c1", msg("m1", Role::User, "Rust 是一门系统编程语言", 1)).await;
-        idx.add("c1", msg("m2", Role::Assistant, "Rust 强调内存安全与零成本抽象", 2)).await;
-        idx.add("c2", msg("m3", Role::User, "今天天气真好", 3)).await;
+        idx.add("c1", msg("m1", Role::User, "Rust 是一门系统编程语言", 1))
+            .await;
+        idx.add(
+            "c1",
+            msg("m2", Role::Assistant, "Rust 强调内存安全与零成本抽象", 2),
+        )
+        .await;
+        idx.add("c2", msg("m3", Role::User, "今天天气真好", 3))
+            .await;
 
         let hits = idx.search_lexical("rust", 5, None).await;
         assert_eq!(hits.len(), 2);
-        assert!(hits.iter().all(|h| h.snippet.to_lowercase().contains("rust")));
+        assert!(hits
+            .iter()
+            .all(|h| h.snippet.to_lowercase().contains("rust")));
     }
 
     #[tokio::test]
@@ -873,8 +901,10 @@ mod tests {
     #[tokio::test]
     async fn search_excludes_current_conversation() {
         let idx = MemoryIndex::new();
-        idx.add("c1", msg("m1", Role::User, "rust programming", 1)).await;
-        idx.add("c2", msg("m2", Role::User, "rust language", 2)).await;
+        idx.add("c1", msg("m1", Role::User, "rust programming", 1))
+            .await;
+        idx.add("c2", msg("m2", Role::User, "rust language", 2))
+            .await;
 
         let hits = idx.search_lexical("rust", 5, Some("c1")).await;
         assert_eq!(hits.len(), 1);
@@ -884,7 +914,8 @@ mod tests {
     #[tokio::test]
     async fn bm25_ranks_repeated_terms_higher() {
         let idx = MemoryIndex::new();
-        idx.add("c1", msg("m1", Role::User, "rust rust rust rust", 1)).await;
+        idx.add("c1", msg("m1", Role::User, "rust rust rust rust", 1))
+            .await;
         idx.add("c2", msg("m2", Role::User, "rust once", 2)).await;
 
         let hits = idx.search_lexical("rust", 5, None).await;
@@ -897,9 +928,11 @@ mod tests {
     #[tokio::test]
     async fn empty_content_and_system_messages_are_skipped() {
         let idx = MemoryIndex::new();
-        idx.add("c1", msg("m1", Role::System, "system preamble", 1)).await;
+        idx.add("c1", msg("m1", Role::System, "system preamble", 1))
+            .await;
         idx.add("c1", msg("m2", Role::User, "", 2)).await;
-        idx.add("c1", msg("m3", Role::User, "real content", 3)).await;
+        idx.add("c1", msg("m3", Role::User, "real content", 3))
+            .await;
         let stats = idx.stats().await;
         assert_eq!(stats.total_entries, 1);
     }
@@ -910,8 +943,11 @@ mod tests {
         idx.add("c1", msg("m1", Role::User, "old data", 1)).await;
         assert_eq!(idx.stats().await.total_entries, 1);
 
-        idx.rebuild_from_messages(vec![("c2".to_string(), msg("m2", Role::User, "new data", 2))])
-            .await;
+        idx.rebuild_from_messages(vec![(
+            "c2".to_string(),
+            msg("m2", Role::User, "new data", 2),
+        )])
+        .await;
         let stats = idx.stats().await;
         assert_eq!(stats.total_entries, 1);
         let hits = idx.search_lexical("old", 5, None).await;
@@ -973,7 +1009,8 @@ mod tests {
     #[tokio::test]
     async fn hybrid_falls_back_to_lexical_without_provider() {
         let idx = MemoryIndex::new();
-        idx.add("c1", msg("m1", Role::User, "rust programming", 1)).await;
+        idx.add("c1", msg("m1", Role::User, "rust programming", 1))
+            .await;
         let hits = idx.search_hybrid("rust", 5, None).await;
         assert_eq!(hits.len(), 1);
     }

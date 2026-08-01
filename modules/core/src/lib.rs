@@ -22,23 +22,23 @@ pub mod skill_index;
 pub mod skill_store;
 pub mod storage;
 
+pub use clawhub::ClawHubClient;
 pub use compression::{
-    CompressionAction, CompressionState, CompressionStore, apply_compression,
-    build_compression_prompt, parse_compression_response,
+    apply_compression, build_compression_prompt, parse_compression_response, CompressionAction,
+    CompressionState, CompressionStore,
 };
 pub use config::{
-    AgentConfig, AvailableModel, BackendKind, ModelKind, ProviderPreset, ThemeMode,
-    builtin_presets,
+    builtin_presets, AgentConfig, AvailableModel, BackendKind, ModelKind, ModelPricing,
+    ProviderPreset, ThemeMode,
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};
-pub use clawhub::ClawHubClient;
 pub use memory::{
-    EmbeddingProvider, MemoryEntry, MemoryHit, MemoryIndex, MemoryStats, SearchMode, tokenize,
+    tokenize, EmbeddingProvider, MemoryEntry, MemoryHit, MemoryIndex, MemoryStats, SearchMode,
 };
 pub use models::{
     Attachment, AttachmentKind, Conversation, Device, DeviceStatus, InstalledPlugin, Message,
-    Role, ScheduledTask, Skill,
+    MessageUsage, Role, ScheduledTask, Skill, SubAgentImage, SubAgentRecord, ToolCallRecord,
 };
 pub use pinned_memory::{PinnedMemory, PinnedMemorySource, PinnedMemoryStore};
 pub use plugin_store::PluginStore;

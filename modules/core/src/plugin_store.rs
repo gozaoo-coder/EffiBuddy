@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use tokio::sync::RwLock;
 
-use crate::{CoreError, Result, InstalledPlugin};
+use crate::{CoreError, InstalledPlugin, Result};
 
 /// `/` 在文件名中的转义序列
 const SLUG_SEP: &str = "__";
@@ -69,7 +69,9 @@ impl PluginStore {
 
     /// 列出所有已安装插件，按 `installed_at` 降序（新的在前）。
     pub async fn list(&self) -> Result<Vec<InstalledPlugin>> {
-        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
+        let mut entries = tokio::fs::read_dir(&self.root)
+            .await
+            .map_err(CoreError::Io)?;
         let mut out = Vec::with_capacity(8);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
             let path = entry.path();
@@ -117,7 +119,9 @@ impl PluginStore {
     pub async fn save(&self, plugin: &InstalledPlugin) -> Result<()> {
         let path = self.path_for(&plugin.id);
         let bytes = serde_json::to_vec(plugin).map_err(CoreError::Serde)?;
-        tokio::fs::write(&path, bytes).await.map_err(CoreError::Io)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(CoreError::Io)?;
         Ok(())
     }
 
@@ -144,10 +148,8 @@ mod tests {
     use super::*;
 
     fn tmp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "effisuite-plugin-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("effisuite-plugin-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -255,6 +257,9 @@ mod tests {
         assert!(path.starts_with(&store.root));
         // file_name 部分不应为 `escape.json` 而应剔除 `..`
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        assert!(!file_name.contains(".."), "file_name 含 .. 是危险的: {file_name}");
+        assert!(
+            !file_name.contains(".."),
+            "file_name 含 .. 是危险的: {file_name}"
+        );
     }
 }

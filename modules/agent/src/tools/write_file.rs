@@ -35,6 +35,7 @@ use serde::Deserialize;
 use tokio::fs;
 
 use super::resolve_path;
+use super::text_utils::extract_content;
 
 /// 单次写入最大字节数（1 MiB），防止 LLM 误写入超大内容撑爆磁盘
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
@@ -85,57 +86,6 @@ impl Default for WriteFileTool {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// 内容提取的分隔符
-const CONTENT_OPEN: &str = "<content>";
-const CONTENT_CLOSE: &str = "</content>";
-const CDATA_OPEN: &str = "<![CDATA[";
-const CDATA_CLOSE: &str = "]]>";
-
-/// 从 LLM 传入的 content 字段中提取实际文件内容
-///
-/// 识别优先级：
-/// 1. **CDATA 包裹**：`<content><![CDATA[...]]></content>` 或裸 `<![CDATA[...]]>`
-///    - CDATA 内部的所有字符原样保留，包括 `<` `>` `&`
-///    - 唯一不能出现的是字面量 `]]>`
-/// 2. **XML 标签包裹**：`<content>...</content>`
-///    - 标签之间的文本原样提取，**不做 XML 实体解码**
-///    - 内容中的 `<` `>` `&` 无需转义
-/// 3. **裸文本**：不含任何上述标签时，直接当作文件内容（向后兼容）
-///
-/// 设计权衡：
-/// - 不引入 xml crate：纯字符串扫描足够，避免依赖膨胀
-/// - 不做实体解码：让 LLM 写代码时无需关心 `&lt;` `&amp;` 等转义
-/// - 容错：找不到闭合标签时退化为"去掉开标签后的全部内容"，避免写入失败
-fn extract_content(raw: &str) -> String {
-    // 优先识别 CDATA：`<![CDATA[...]]>`
-    // 允许 CDATA 被 <content> 包裹，也允许裸 CDATA
-    if let Some(cdata_start) = raw.find(CDATA_OPEN) {
-        let inner_start = cdata_start + CDATA_OPEN.len();
-        if let Some(cdata_end) = raw[inner_start..].find(CDATA_CLOSE) {
-            let inner_end = inner_start + cdata_end;
-            return raw[inner_start..inner_end].to_string();
-        }
-        // CDATA 未闭合：按"裸 CDATA 后所有内容"处理，避免丢失
-        tracing::warn!("write_file: CDATA 未闭合，按裸内容处理");
-        return raw[inner_start..].to_string();
-    }
-
-    // 其次识别 <content>...</content>
-    if let Some(open_start) = raw.find(CONTENT_OPEN) {
-        let inner_start = open_start + CONTENT_OPEN.len();
-        if let Some(close_pos) = raw[inner_start..].find(CONTENT_CLOSE) {
-            let inner_end = inner_start + close_pos;
-            return raw[inner_start..inner_end].to_string();
-        }
-        // <content> 未闭合：按"开标签后的全部内容"处理
-        tracing::warn!("write_file: <content> 未闭合，按裸内容处理");
-        return raw[inner_start..].to_string();
-    }
-
-    // 裸文本：直接返回（调用方已 JSON 解码过 \n \" 等）
-    raw.to_string()
 }
 
 impl Tool for WriteFileTool {
@@ -245,138 +195,6 @@ impl Tool for WriteFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ============ extract_content ============
-
-    #[test]
-    fn extract_xml_wrapped_content() {
-        let raw = "<content>hello world</content>";
-        assert_eq!(extract_content(raw), "hello world");
-    }
-
-    #[test]
-    fn extract_xml_wrapped_preserves_special_chars() {
-        // 内容含 < > & " \ 等无需转义
-        let raw = r#"<content>const s = "a < b && c > d"; regex = /\d+/</content>"#;
-        assert_eq!(extract_content(raw), r#"const s = "a < b && c > d"; regex = /\d+/"#);
-    }
-
-    #[test]
-    fn extract_xml_wrapped_preserves_newlines() {
-        let raw = "<content>line1\nline2\nline3</content>";
-        assert_eq!(extract_content(raw), "line1\nline2\nline3");
-    }
-
-    #[test]
-    fn extract_cdata_wrapped() {
-        let raw = "<content><![CDATA[hello <world> & friends]]></content>";
-        assert_eq!(extract_content(raw), "hello <world> & friends");
-    }
-
-    #[test]
-    fn extract_cdata_with_content_literal() {
-        // 内容含 </content> 字面量，必须用 CDATA
-        let raw = "<content><![CDATA[<content>嵌套标签</content>]]></content>";
-        assert_eq!(extract_content(raw), "<content>嵌套标签</content>");
-    }
-
-    #[test]
-    fn extract_cdata_with_cdata_close_escape() {
-        // CDATA 内不能含字面量 ]]>，这是 XML 规范限制
-        // 若出现，提取到第一个 ]]> 为止
-        let raw = "<content><![CDATA[before ]]> after]]></content>";
-        assert_eq!(extract_content(raw), "before ");
-    }
-
-    #[test]
-    fn extract_bare_cdata_without_content_tag() {
-        // 也支持裸 CDATA（无 <content> 包裹）
-        let raw = "<![CDATA[裸 CDATA 内容]]>";
-        assert_eq!(extract_content(raw), "裸 CDATA 内容");
-    }
-
-    #[test]
-    fn extract_unclosed_content_fallback() {
-        // <content> 未闭合：取开标签后的全部内容
-        let raw = "<content>未闭合的内容";
-        assert_eq!(extract_content(raw), "未闭合的内容");
-    }
-
-    #[test]
-    fn extract_unclosed_cdata_fallback() {
-        let raw = "<content><![CDATA[未闭合";
-        assert_eq!(extract_content(raw), "未闭合");
-    }
-
-    #[test]
-    fn extract_bare_text_passthrough() {
-        // 无任何标签包裹，直接返回原文
-        let raw = "plain text content";
-        assert_eq!(extract_content(raw), "plain text content");
-    }
-
-    #[test]
-    fn extract_bare_text_with_xml_like_fragments() {
-        // 内容含 `<` 但不是 <content>/<![CDATA[ 开头，按裸文本处理
-        let raw = "a < b && c > d";
-        assert_eq!(extract_content(raw), "a < b && c > d");
-    }
-
-    #[test]
-    fn extract_empty_content() {
-        assert_eq!(extract_content("<content></content>"), "");
-        assert_eq!(extract_content("<content><![CDATA[]]></content>"), "");
-    }
-
-    #[test]
-    fn extract_xml_with_leading_text() {
-        // LLM 可能在 <content> 前加说明文字，应忽略
-        let raw = "这是文件内容：\n<content>实际内容</content>";
-        assert_eq!(extract_content(raw), "实际内容");
-    }
-
-    #[test]
-    fn extract_cdata_takes_priority_over_content_tag() {
-        // 同时有 <content> 和 <![CDATA[ 时，CDATA 优先
-        let raw = "<content><![CDATA[CDATA 内容]]></content>";
-        assert_eq!(extract_content(raw), "CDATA 内容");
-    }
-
-    #[test]
-    fn extract_html_file_content() {
-        // 模拟 LLM 写 HTML 文件
-        let html = r#"<content><!DOCTYPE html>
-<html>
-<head><title>Test</title></head>
-<body>
-  <div class="a">hello & bye</div>
-  <script>if (a < b) { alert("hi"); }</script>
-</body>
-</html></content>"#;
-        let extracted = extract_content(html);
-        assert!(extracted.starts_with("<!DOCTYPE html>"));
-        assert!(extracted.contains(r#"class="a""#));
-        assert!(extracted.contains("hello & bye"));
-        assert!(extracted.contains("a < b"));
-        assert!(extracted.contains("</html>"));
-    }
-
-    #[test]
-    fn extract_rust_source_content() {
-        // 模拟 LLM 写 Rust 源码
-        let rust = r#"<content>fn main() {
-    let s = String::from("hello");
-    let arr: Vec<i32> = vec![1, 2, 3];
-    if !arr.is_empty() && arr.len() > 0 {
-        println!("{}", s);
-    }
-}</content>"#;
-        let extracted = extract_content(rust);
-        assert!(extracted.contains(r#"String::from("hello")"#));
-        assert!(extracted.contains("Vec<i32>"));
-        assert!(extracted.contains("arr.len() > 0"));
-        assert!(extracted.contains("}"));
-    }
 
     // ============ 集成测试（文件 IO） ============
 

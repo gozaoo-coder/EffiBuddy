@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use effisuite_core::{AgentConfig, ModelKind};
 use rig_core::tool::Tool;
 use serde::Deserialize;
 use tokio::sync::RwLock;
@@ -40,6 +41,10 @@ pub struct ImageGenArgs {
     /// 生成数量，默认 1
     #[serde(default)]
     pub n: Option<u32>,
+    /// 指定使用的图像模型 id（模型列表中的 kind=image_gen 模型）；
+    /// 缺省用当前激活的图像生成模型
+    #[serde(default)]
+    pub model_id: Option<String>,
 }
 
 /// 工具错误
@@ -64,8 +69,11 @@ pub struct ImageGenOutput {
 ///
 /// `config` 为共享句柄：Tauri 命令层在 set_active_model 时更新，
 /// 工具调用时读取最新配置。None 时工具不可用（返回错误）。
+/// `models` 为可选的模型列表句柄：args.model_id 指定模型时据此解析。
 pub struct ImageGenTool {
     config: Arc<RwLock<Option<ImageGenConfig>>>,
+    /// 模型列表共享句柄（可选）：支持按 model_id 指定图像模型
+    models: Option<Arc<RwLock<AgentConfig>>>,
     /// attachments 目录绝对路径，图片保存到此
     attachments_dir: PathBuf,
 }
@@ -74,8 +82,55 @@ impl ImageGenTool {
     pub fn new(config: Arc<RwLock<Option<ImageGenConfig>>>, attachments_dir: PathBuf) -> Self {
         Self {
             config,
+            models: None,
             attachments_dir,
         }
+    }
+
+    /// 附加模型列表句柄：启用 model_id 指定图像模型能力
+    pub fn with_models(mut self, models: Arc<RwLock<AgentConfig>>) -> Self {
+        self.models = Some(models);
+        self
+    }
+
+    /// 解析本次调用的图像模型配置：model_id 指定 > 当前激活配置
+    async fn resolve_config(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<ImageGenConfig, ImageGenError> {
+        if let Some(id) = model_id {
+            let models = self.models.as_ref().ok_or_else(|| {
+                ImageGenError("未启用模型列表句柄，无法按 model_id 指定图像模型".into())
+            })?;
+            let config = models.read().await;
+            let m = config
+                .models
+                .iter()
+                .find(|m| m.id == id)
+                .ok_or_else(|| ImageGenError(format!("模型 {id} 不存在（manage_model list 可查看）")))?;
+            if m.kind != ModelKind::ImageGen {
+                return Err(ImageGenError(format!(
+                    "模型 {id} 不是图像生成模型（kind 应为 image_gen）"
+                )));
+            }
+            if m.api_key.trim().is_empty() {
+                return Err(ImageGenError(format!("模型 {id} 未配置 api_key")));
+            }
+            return Ok(ImageGenConfig {
+                api_key: m.api_key.clone(),
+                base_url: m.base_url.clone(),
+                model: m.model_name.clone(),
+                default_size: m.image_size.clone(),
+                default_quality: m.image_quality.clone(),
+            });
+        }
+        self.config
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| {
+                ImageGenError("未配置图像生成模型，请先在设置中添加 kind=image_gen 的模型并激活".into())
+            })
     }
 
     /// 便捷生成方法：绕过 rig Tool trait，供 Tauri 命令层直接调用。
@@ -94,6 +149,7 @@ impl ImageGenTool {
             size,
             quality,
             n: Some(1),
+            model_id: None,
         })
         .await
     }
@@ -149,6 +205,10 @@ impl Tool for ImageGenTool {
                     "type": "integer",
                     "description": "生成数量，默认 1",
                     "default": 1
+                },
+                "model_id": {
+                    "type": "string",
+                    "description": "指定图像模型 id（模型列表中 kind=image_gen 的模型）；缺省用当前激活图像模型"
                 }
             },
             "required": ["prompt"]
@@ -159,12 +219,7 @@ impl Tool for ImageGenTool {
         let started = std::time::Instant::now();
         let n = args.n.unwrap_or(1).clamp(1, 4);
 
-        let cfg = self
-            .config
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| ImageGenError("未配置图像生成模型，请在设置中添加 kind=image_gen 的模型".into()))?;
+        let cfg = self.resolve_config(args.model_id.as_deref()).await?;
 
         // 确保 attachments 目录存在
         tokio::fs::create_dir_all(&self.attachments_dir)

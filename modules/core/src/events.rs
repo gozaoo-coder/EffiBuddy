@@ -27,17 +27,31 @@ pub enum BusEvent {
         done: bool,
     },
     /// P2P 发现新设备
-    DeviceFound {
-        device: crate::Device,
-    },
+    DeviceFound { device: crate::Device },
     /// 设备状态变更
     DeviceStatusChanged {
         device_id: String,
         status: crate::DeviceStatus,
     },
     /// 配对请求
-    PairingRequest {
-        device: crate::Device,
+    PairingRequest { device: crate::Device },
+    /// agent 向用户提问（前端展示选项卡片，用户回答经 Tauri 命令回传）
+    /// questions 为序列化后的 Vec<Question>，前端按 JSON 解析
+    AskUser {
+        conversation_id: String,
+        questions: serde_json::Value,
+    },
+    /// agent 通知用户审核文件（前端展示审核 UI）
+    NotifyUser {
+        conversation_id: String,
+        explanation: String,
+        file_paths: Vec<String>,
+    },
+    /// agent 请求前端打开预览 URL（浏览器或内嵌 webview）
+    OpenPreview {
+        conversation_id: String,
+        preview_url: String,
+        command_id: Option<String>,
     },
 }
 

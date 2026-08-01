@@ -8,9 +8,11 @@
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
 //! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`SearchMemoryTool`、
-//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`ListFilesTool`、`ShellTool`、`WebFetchTool`、
+//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`EditFileTool`、`SearchFileTool`、
+//!   `ListFilesTool`、`ShellTool`、`WebFetchTool`、
 //!   `ImageGenTool`、`DisplayImageTool`，
 //!   LLM 可主动调用以检索历史、跨会话记忆、获取时间、读写本地文件、
+//!   按行号编辑文件、工作区全文搜索、
 //!   执行 shell 命令（集成 agent-reach / browser-act）、抓取网页、
 //!   生成图片、把已有图片推送到聊天框展示
 //! - **RAG 记忆增强**：每次对话前自动通过 `MemoryIndex` 检索相关跨会话历史，
@@ -34,8 +36,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use effisuite_core::{
-    ClawHubClient, CompressionStore, ConversationStore, CoreError, MemoryIndex, Message,
-    PinnedMemoryStore, PluginStore, Result, Role, SkillIndex, SkillStore, apply_compression,
+    ClawHubClient, CompressionStore, ConversationStore, CoreError, EventBus, MemoryIndex, Message,
+    PinnedMemoryStore, PluginStore, Result, Role, ScheduledTaskStore, SkillIndex, SkillStore,
+    apply_compression,
 };
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -51,11 +54,15 @@ use tokio::sync::RwLock;
 
 use crate::agent::{AgentStreamItem, ChatAgent, ContextPreview};
 use crate::tools::{
-    DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool, GetSkillDetailTool, GetTimeTool,
-    ImageGenConfig, ImageGenTool, InstallClawHubSkillTool, ListFilesTool, ListInstalledSkillsTool,
-    ListPinnedMemoriesTool, PinMemoryTool, ReadFileTool, SearchClawHubSkillsTool,
-    SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool,
-    UninstallPluginTool, UninstallSkillTool, WebFetchTool, WriteFileTool,
+    AskUserTool, CallModelTool, DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool,
+    EditFileTool, GenerateVideoTool, GetSkillDetailTool, GetTimeTool,
+    GlobTool, GrepTool, ImageGenConfig, ImageGenTool, InstallClawHubSkillTool, ListFilesTool,
+    ListInstalledSkillsTool, ListPinnedMemoriesTool, ManageModelTool, ModelManagerHandle,
+    NotifyUserTool, OpenPreviewTool, PinMemoryTool, ReadFileTool, ScheduleTool,
+    SearchClawHubSkillsTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool,
+    SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, SubAgentManager, SubAgentTool,
+    TodoItem, TodoWriteTool, UninstallPluginTool, UninstallSkillTool, VideoGenConfig,
+    WebFetchTool, WebSearchConfig, WebSearchTool, WriteFileTool,
 };
 
 /// 自动注入的相关历史记忆条数上限
@@ -73,6 +80,11 @@ const HISTORY_TRUNCATE_CHARS: usize = 0;
 const SKILL_AUTO_INJECT_LIMIT: usize = 3;
 /// 跳过过短查询的技能检索阈值（与 memory 一致），避免单字符无意义检索
 const SKILL_SEARCH_MIN_QUERY_LEN: usize = 2;
+
+/// 子 agent 默认排除的工具：set_title（避免改名主会话）、
+/// display_image（避免图片推送到主会话）、image_gen（子 agent 生成的图片
+/// 经 attachment 事件在子 agent 卡片内展示，不走主会话附件通道）
+pub const SUB_AGENT_DEFAULT_EXCLUDED: &[&str] = &["set_title", "display_image", "image_gen"];
 
 pub struct RigAgent {
     /// 统一用 CompletionsClient（Chat Completions API），兼容所有 OpenAI 兼容 provider
@@ -123,6 +135,31 @@ pub struct RigAgent {
     /// （`messages[..last_user_idx]`）应用 Keep/Hide/Replace 决策。
     /// 当前问题（最后一条用户消息）不压缩。None 时退化为不压缩。
     compression_store: Option<Arc<CompressionStore>>,
+    /// 模型管理句柄：manage_model / call_model 工具据此读写模型列表。
+    /// None 时不注册这两个工具。
+    model_manager: Option<Arc<ModelManagerHandle>>,
+    /// 子 agent 管理器：sub_agent 工具据此召唤子 agent（可嵌套）。
+    /// None 时不注册 sub_agent 工具。
+    sub_agents: Option<Arc<SubAgentManager>>,
+    /// 工具白名单：None = 注册全部工具；Some = 仅注册列表中的工具。
+    tool_allowlist: Option<Vec<String>>,
+    /// 排除的工具名列表（优先级高于白名单）：子 agent 默认排除 set_title 等。
+    exclude_tools: Vec<String>,
+    /// 事件总线句柄，AskUserTool / NotifyUserTool / OpenPreviewTool 据此前端通信。
+    /// None 时这三个交互工具不可用。
+    event_bus: Option<Arc<EventBus>>,
+    /// 定时任务存储句柄，ScheduleTool 据此管理 cron 任务。
+    /// None 时 schedule 工具不可用。
+    scheduled_task_store: Option<Arc<ScheduledTaskStore>>,
+    /// 网络搜索配置句柄，WebSearchTool 据此调用搜索 API。
+    /// None 时 web_search 工具不可用。
+    web_search_config: Arc<RwLock<Option<WebSearchConfig>>>,
+    /// 视频生成配置句柄，GenerateVideoTool 据此调用视频生成 API。
+    /// None 时 generate_video 工具不可用。
+    video_gen_config: Arc<RwLock<Option<VideoGenConfig>>>,
+    /// 待办列表共享状态，TodoWriteTool 据此管理任务列表。
+    /// None 时 todo_write 工具不可用。
+    todo_state: Option<Arc<RwLock<Vec<TodoItem>>>>,
 }
 
 impl RigAgent {
@@ -157,6 +194,8 @@ impl RigAgent {
         skills_dir: Option<PathBuf>,
         plugin_store: Option<Arc<PluginStore>>,
         compression_store: Option<Arc<CompressionStore>>,
+        model_manager: Option<Arc<ModelManagerHandle>>,
+        sub_agents: Option<Arc<SubAgentManager>>,
     ) -> Result<Self> {
         let client = openai::CompletionsClient::from_env()
             .map_err(|e| CoreError::Agent(format!("openai completions client init: {e}")))?;
@@ -179,10 +218,81 @@ impl RigAgent {
             attachments_dir,
             store,
             compression_store,
+            model_manager,
+            sub_agents,
+            tool_allowlist: None,
+            exclude_tools: Vec::new(),
+            event_bus: None,
+            scheduled_task_store: None,
+            web_search_config: Arc::new(RwLock::new(None)),
+            video_gen_config: Arc::new(RwLock::new(None)),
+            todo_state: None,
         })
     }
 
-    /// 指定 API key + base_url 构造客户端（用于任意 OpenAI 兼容服务）
+    /// 指定工具白名单：None = 全部工具；Some = 仅注册列表中的工具
+    pub fn with_tool_allowlist(mut self, tools: Option<Vec<String>>) -> Self {
+        self.tool_allowlist = tools;
+        self
+    }
+
+    /// 排除指定工具（优先级高于白名单）
+    pub fn with_excluded_tools(mut self, tools: Vec<String>) -> Self {
+        self.exclude_tools = tools;
+        self
+    }
+
+    /// 注入事件总线句柄，启用 ask_user / notify_user / open_preview 交互工具
+    pub fn with_event_bus(mut self, bus: Option<Arc<EventBus>>) -> Self {
+        self.event_bus = bus;
+        self
+    }
+
+    /// 注入定时任务存储句柄，启用 schedule 工具
+    pub fn with_scheduled_task_store(mut self, store: Option<Arc<ScheduledTaskStore>>) -> Self {
+        self.scheduled_task_store = store;
+        self
+    }
+
+    /// 注入网络搜索配置句柄，启用 web_search 工具
+    pub fn with_web_search_config(
+        mut self,
+        config: Option<Arc<RwLock<Option<WebSearchConfig>>>>,
+    ) -> Self {
+        if let Some(c) = config {
+            self.web_search_config = c;
+        }
+        self
+    }
+
+    /// 注入视频生成配置句柄，启用 generate_video 工具
+    pub fn with_video_gen_config(
+        mut self,
+        config: Option<Arc<RwLock<Option<VideoGenConfig>>>>,
+    ) -> Self {
+        if let Some(c) = config {
+            self.video_gen_config = c;
+        }
+        self
+    }
+
+    /// 注入待办列表共享状态，启用 todo_write 工具
+    pub fn with_todo_state(mut self, state: Option<Arc<RwLock<Vec<TodoItem>>>>) -> Self {
+        self.todo_state = state;
+        self
+    }
+
+    /// 共享 web_search_config 句柄
+    #[inline]
+    pub fn web_search_config_handle(&self) -> Arc<RwLock<Option<WebSearchConfig>>> {
+        Arc::clone(&self.web_search_config)
+    }
+
+    /// 共享 video_gen_config 句柄
+    #[inline]
+    pub fn video_gen_config_handle(&self) -> Arc<RwLock<Option<VideoGenConfig>>> {
+        Arc::clone(&self.video_gen_config)
+    }
     ///
     /// - `api_key`：Bearer token，空串会被 rig 拒绝
     /// - `base_url`：可覆盖默认 `https://api.openai.com/v1`，留空则用默认
@@ -219,6 +329,8 @@ impl RigAgent {
         skills_dir: Option<PathBuf>,
         plugin_store: Option<Arc<PluginStore>>,
         compression_store: Option<Arc<CompressionStore>>,
+        model_manager: Option<Arc<ModelManagerHandle>>,
+        sub_agents: Option<Arc<SubAgentManager>>,
     ) -> Result<Self> {
         let api_key = api_key.into();
         let base_url = base_url.into();
@@ -248,6 +360,15 @@ impl RigAgent {
             attachments_dir,
             store,
             compression_store,
+            model_manager,
+            sub_agents,
+            tool_allowlist: None,
+            exclude_tools: Vec::new(),
+            event_bus: None,
+            scheduled_task_store: None,
+            web_search_config: Arc::new(RwLock::new(None)),
+            video_gen_config: Arc::new(RwLock::new(None)),
+            todo_state: None,
         })
     }
 
@@ -289,6 +410,13 @@ impl RigAgent {
             .preamble(&self.preamble);
 
         if self.enable_tools {
+            // 工具过滤：白名单（None=全部）+ 排除列表（子 agent 默认排除 set_title 等）
+            let want = |name: &str| {
+                self.tool_allowlist
+                    .as_ref()
+                    .is_none_or(|a| a.iter().any(|t| t == name))
+                    && !self.exclude_tools.iter().any(|t| t == name)
+            };
             // 注册会话内检索工具：每次 build 都重新创建工具实例，但它们共享 history
             let search = SearchHistoryTool::new(Arc::clone(&self.history));
             let time = GetTimeTool::new(Arc::clone(&self.history));
@@ -301,6 +429,14 @@ impl RigAgent {
             let write_file = match &cwd {
                 Some(p) => WriteFileTool::with_cwd(p.clone()),
                 None => WriteFileTool::new(),
+            };
+            let edit_file = match &cwd {
+                Some(p) => EditFileTool::with_cwd(p.clone()),
+                None => EditFileTool::new(),
+            };
+            let search_file = match &cwd {
+                Some(p) => SearchFileTool::with_cwd(p.clone()),
+                None => SearchFileTool::new(),
             };
             let delete_file = match &cwd {
                 Some(p) => DeleteFileTool::with_cwd(p.clone()),
@@ -317,11 +453,15 @@ impl RigAgent {
             let web_fetch = WebFetchTool::new();
             // 图像生成工具：共享 image_gen_config 句柄，调用时读取最新配置。
             // 用户切换到 kind=ImageGen 的模型时由 Tauri 命令层更新 config，
-            // LLM 可主动调用此工具为用户生成图片。
+            // LLM 可主动调用此工具为用户生成图片；支持 model_id 指定图像模型。
             let image_gen = ImageGenTool::new(
                 Arc::clone(&self.image_gen_config),
                 self.attachments_dir.clone(),
             );
+            let image_gen = match &self.model_manager {
+                Some(mm) => image_gen.with_models(Arc::clone(&mm.config)),
+                None => image_gen,
+            };
             // 图片展示工具：让 LLM 把已有图片（本地路径或 URL）推送到聊天框。
             // 与 image_gen（生成新图）互补，复用 attachments_dir 落盘。
             let display_image = match &cwd {
@@ -335,18 +475,67 @@ impl RigAgent {
                 Arc::clone(&self.current_conversation_id),
             );
 
+            // 文件名模式匹配工具：glob 语法（**/*.rs 等），与 read_file/edit_file 配合
+            // LLM 拿到文件列表后再读取/编辑，避免盲目猜测路径
+            let glob = match &cwd {
+                Some(p) => GlobTool::with_cwd(p.clone()),
+                None => GlobTool::new(),
+            };
+            // 正则内容搜索工具：跨文件按正则匹配，返回命中行（带行号、上下文）
+            // 与 search_file（关键词精确匹配）互补，与 grep CLI 对齐
+            let grep = match &cwd {
+                Some(p) => GrepTool::with_cwd(p.clone()),
+                None => GrepTool::new(),
+            };
+            // 语义代码搜索工具：自然语言查询 → Top-N 代码块
+            // 与 search_file（精确匹配）互补，适合"我想找做 X 的代码但不知道函数名"
+            let search_codebase = match &cwd {
+                Some(p) => SearchCodebaseTool::with_cwd(p.clone()),
+                None => SearchCodebaseTool::new(),
+            };
+            // 网络搜索工具：共享 web_search_config 句柄，用户切换引擎后下次调用即生效
+            let web_search = WebSearchTool::new(Arc::clone(&self.web_search_config));
+
             let mut b = builder
                 .tool(search)
                 .tool(time)
                 .tool(read_file)
                 .tool(write_file)
+                .tool(edit_file)
+                .tool(search_file)
                 .tool(delete_file)
                 .tool(list_files)
                 .tool(shell)
                 .tool(web_fetch)
                 .tool(image_gen)
                 .tool(display_image)
-                .tool(set_title);
+                .tool(set_title)
+                .tool(glob)
+                .tool(grep)
+                .tool(search_codebase)
+                .tool(web_search);
+
+            // 模型管理与调用工具：仅在 ModelManagerHandle 可用时注册
+            // manage_model：agent 自主增删改查模型列表 / 激活模型
+            // call_model：一次性调用任意已保存模型（无工具单轮）
+            if let Some(mm) = &self.model_manager {
+                if want("manage_model") {
+                    let manage = ManageModelTool::new(Arc::clone(mm));
+                    b = b.tool(manage);
+                }
+                if want("call_model") {
+                    let call = CallModelTool::new(Arc::clone(&mm.config));
+                    b = b.tool(call);
+                }
+            }
+
+            // 子 agent 工具：仅在 SubAgentManager 可用时注册
+            if let Some(sa) = &self.sub_agents {
+                if want("sub_agent") {
+                    let sub = SubAgentTool::new(Arc::clone(sa));
+                    b = b.tool(sub);
+                }
+            }
 
             // 跨会话记忆检索工具：仅在 MemoryIndex 可用时注册
             if let Some(memory) = &self.memory {
@@ -411,6 +600,70 @@ impl RigAgent {
             if let Some(plugin_store) = &self.plugin_store {
                 let uninstall_plugin = UninstallPluginTool::new(Arc::clone(plugin_store));
                 b = b.tool(uninstall_plugin);
+            }
+
+            // 用户交互工具：依赖 event_bus（前端通信通道）。
+            // ask_user：向用户提出选择题，等待回答（用于方案确认/偏好选择）
+            // notify_user：通知用户审核文件或查看重要信息
+            // open_preview：请求前端打开预览 URL（如本地 dev server）
+            // 三者均通过 BusEvent 与前端通信，event_bus 为 None 时不注册
+            // （工具调用会返回友好错误，但更优做法是直接不注册避免 LLM 误调用）
+            if let Some(bus) = &self.event_bus {
+                if want("ask_user") {
+                    let ask = AskUserTool::new(
+                        Some(Arc::clone(bus)),
+                        Arc::clone(&self.current_conversation_id),
+                    );
+                    b = b.tool(ask);
+                }
+                if want("notify_user") {
+                    let notify = NotifyUserTool::new(
+                        Some(Arc::clone(bus)),
+                        Arc::clone(&self.current_conversation_id),
+                    );
+                    b = b.tool(notify);
+                }
+                if want("open_preview") {
+                    let open = OpenPreviewTool::new(
+                        Some(Arc::clone(bus)),
+                        Arc::clone(&self.current_conversation_id),
+                    );
+                    b = b.tool(open);
+                }
+            }
+
+            // 定时任务管理工具：依赖 scheduled_task_store（与 Tauri 调度器共享同一份）
+            // 让 LLM 通过 cron 表达式创建/更新/暂停/删除定时任务
+            if let Some(store) = &self.scheduled_task_store {
+                if want("schedule") {
+                    let schedule = ScheduleTool::new(Arc::clone(store));
+                    b = b.tool(schedule);
+                }
+            }
+
+            // 待办列表工具：todo_state 为 Some 时跨调用共享同一份列表
+            // （主 agent 与子 agent 可视化任务进度）；None 时工具持有独立空列表
+            if want("todo_write") {
+                let todo = match &self.todo_state {
+                    Some(state) => TodoWriteTool::with_state(Arc::clone(state)),
+                    None => TodoWriteTool::new(),
+                };
+                b = b.tool(todo);
+            }
+
+            // 视频生成工具：共享 video_gen_config 句柄（与 image_gen 同模式），
+            // 用户切换到 kind=video_gen 的模型时由 Tauri 命令层更新 config，
+            // LLM 可主动调用此工具为用户生成视频；支持 model_id 指定视频模型
+            if want("generate_video") {
+                let video_gen = GenerateVideoTool::new(
+                    Arc::clone(&self.video_gen_config),
+                    self.attachments_dir.clone(),
+                );
+                let video_gen = match &self.model_manager {
+                    Some(mm) => video_gen.with_models(Arc::clone(&mm.config)),
+                    None => video_gen,
+                };
+                b = b.tool(video_gen);
             }
 
             b.default_max_turns(usize::MAX).build()
@@ -923,11 +1176,16 @@ impl ChatAgent for RigAgent {
                         // 前端累计所有 Usage 事件得到本轮对话的总 token 消耗。
                         // provider 未返回 usage 时所有字段为 0（rig 的零值哨兵），
                         // 前端可据此判断是否展示 token 统计。
+                        // cache_hit/cache_miss 来自 DeepSeek 的 prompt_cache_hit_tokens /
+                        // prompt_cache_miss_tokens（rig-core vendored patch 映射到
+                        // cached_input_tokens / cache_creation_input_tokens）。
                         yield Ok(AgentStreamItem::Usage {
                             input_tokens: call.usage.input_tokens,
                             output_tokens: call.usage.output_tokens,
                             total_tokens: call.usage.total_tokens,
                             reasoning_tokens: call.usage.reasoning_tokens,
+                            cache_hit_tokens: call.usage.cached_input_tokens,
+                            cache_miss_tokens: call.usage.cache_creation_input_tokens,
                         });
                     }
                     Ok(MultiTurnStreamItem::FinalResponse(_)) => {

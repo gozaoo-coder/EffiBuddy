@@ -88,7 +88,9 @@ impl SkillStore {
     ///
     /// 仅扫描 `*.json` 文件，跳过子目录（ClawHub 技能解压目录使用子文件夹存放资源）。
     pub async fn list_user(&self) -> Result<Vec<Skill>> {
-        let mut entries = tokio::fs::read_dir(&self.root).await.map_err(CoreError::Io)?;
+        let mut entries = tokio::fs::read_dir(&self.root)
+            .await
+            .map_err(CoreError::Io)?;
         let mut out = Vec::with_capacity(8);
         while let Some(entry) = entries.next_entry().await.map_err(CoreError::Io)? {
             let path = entry.path();
@@ -140,9 +142,9 @@ impl SkillStore {
     /// 遍历用户技能列表，匹配 `source_slug == slug`。O(n) 但 n 通常很小。
     pub async fn find_by_clawhub_slug(&self, slug: &str) -> Result<Option<Skill>> {
         let user_skills = self.list_user().await?;
-        Ok(user_skills
-            .into_iter()
-            .find(|s| s.source.as_deref() == Some("clawhub") && s.source_slug.as_deref() == Some(slug)))
+        Ok(user_skills.into_iter().find(|s| {
+            s.source.as_deref() == Some("clawhub") && s.source_slug.as_deref() == Some(slug)
+        }))
     }
 
     /// 保存（或覆盖）一个用户技能。
@@ -150,7 +152,9 @@ impl SkillStore {
     pub async fn save(&self, skill: &Skill) -> Result<()> {
         let path = self.path_for(&skill.id);
         let bytes = serde_json::to_vec(skill).map_err(CoreError::Serde)?;
-        tokio::fs::write(&path, bytes).await.map_err(CoreError::Io)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(CoreError::Io)?;
         Ok(())
     }
 
@@ -160,9 +164,7 @@ impl SkillStore {
     pub async fn delete(&self, id: &str) -> Result<()> {
         let path = self.path_for(id);
         if path.exists() {
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(CoreError::Io)?;
+            tokio::fs::remove_file(&path).await.map_err(CoreError::Io)?;
         }
         // 删除 ClawHub 技能解压目录（若存在）：<root>/<id>/
         let dir = self.root.join(id);
@@ -180,7 +182,8 @@ mod tests {
     use super::*;
 
     fn tmp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("effisuite-skill-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("effisuite-skill-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

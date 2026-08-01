@@ -135,7 +135,26 @@ pub struct AvailableModel {
     /// 模型上下文窗口大小（tokens），供前端显示剩余上下文
     #[serde(default)]
     pub context_window_tokens: Option<u32>,
+    /// 计费单价（元/百万 tokens），None 表示未配置价格（聊天中不显示消费金额）
+    #[serde(default)]
+    pub pricing: Option<ModelPricing>,
     pub created_at: u64,
+}
+
+/// 模型计费单价（元/百万 tokens）
+///
+/// 对应各 provider 文档中的计费规则，用户在模型配置面板自行填写，不硬编码：
+/// - 缓存命中输入（如 DeepSeek 的 prompt_cache_hit_tokens）
+/// - 缓存未命中输入（如 DeepSeek 的 prompt_cache_miss_tokens）
+/// - 输出
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ModelPricing {
+    /// 缓存命中输入单价（元/百万 tokens）
+    pub cache_hit_per_m: f64,
+    /// 缓存未命中输入单价（元/百万 tokens）
+    pub cache_miss_per_m: f64,
+    /// 输出单价（元/百万 tokens）
+    pub output_per_m: f64,
 }
 
 /// Provider 预设元数据（内置，非持久化）
@@ -302,6 +321,7 @@ mod tests {
                 image_size: None,
                 image_quality: None,
                 context_window_tokens: Some(128000),
+                pricing: None,
                 created_at: 1000,
             }],
             active_model_id: Some("m1".into()),

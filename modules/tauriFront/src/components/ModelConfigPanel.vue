@@ -16,8 +16,9 @@
  * - 表单不分步骤：所有字段在一个滚动页内，preamble 等次要字段折叠
  * - 切换视图使用淡入动画，避免突变
  */
-import { ref, watch, onMounted, computed } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import {
   BindSheet,
   Button,
@@ -88,6 +89,12 @@ const draft = ref({
   image_quality: '' as string,
   // 上下文窗口大小（tokens）
   context_window_tokens: 128000 as number,
+  // 计费单价（元/百万 tokens）：null 表示未填写
+  pricing: {
+    cache_hit_per_m: null as number | null,
+    cache_miss_per_m: null as number | null,
+    output_per_m: null as number | null,
+  },
 })
 // 当前编辑的模型 id（非空表示编辑模式）
 const editingId = ref<string | null>(null)
@@ -196,6 +203,16 @@ async function fetchRemoteModels() {
 // ---------- 数据加载 ----------
 onMounted(async () => {
   await loadAll()
+  // agent 工具（manage_model）修改模型列表/激活模型后，懒重建触发
+  // agent-backend-changed 事件；收到后重新拉取配置，保持面板与后端一致。
+  const un = await listen('agent-backend-changed', () => {
+    invoke<AgentConfig>('get_config')
+      .then((c) => {
+        config.value = c
+      })
+      .catch(() => {})
+  })
+  onUnmounted(() => un())
 })
 
 async function loadAll() {
@@ -255,6 +272,11 @@ function resetDraft() {
     image_size: '',
     image_quality: '',
     context_window_tokens: 128000,
+    pricing: {
+      cache_hit_per_m: null,
+      cache_miss_per_m: null,
+      output_per_m: null,
+    },
   }
   editingId.value = null
   saveLabel.value = ''
@@ -302,6 +324,16 @@ async function saveAsModel() {
   }
   saving.value = true
   const wasEditing = !!editingId.value
+  // 计费单价：任一单价 > 0 时保存为 ModelPricing，否则 null（未配置价格）
+  const pricingVals = {
+    cache_hit_per_m: Number(draft.value.pricing.cache_hit_per_m || 0),
+    cache_miss_per_m: Number(draft.value.pricing.cache_miss_per_m || 0),
+    output_per_m: Number(draft.value.pricing.output_per_m || 0),
+  }
+  const hasPricing =
+    pricingVals.cache_hit_per_m > 0 ||
+    pricingVals.cache_miss_per_m > 0 ||
+    pricingVals.output_per_m > 0
   try {
     const id = editingId.value ?? newId()
     const model: AvailableModel = {
@@ -324,6 +356,7 @@ async function saveAsModel() {
           ? draft.value.image_quality.trim()
           : null,
       context_window_tokens: draft.value.context_window_tokens || null,
+      pricing: hasPricing ? pricingVals : null,
       created_at: Date.now(),
     }
     await invoke('save_model', { model })
@@ -356,6 +389,9 @@ function editModel(m: AvailableModel) {
     image_size: m.image_size ?? '',
     image_quality: m.image_quality ?? '',
     context_window_tokens: m.context_window_tokens ?? 128000,
+    pricing: m.pricing
+      ? { ...m.pricing }
+      : { cache_hit_per_m: null, cache_miss_per_m: null, output_per_m: null },
   }
   editingId.value = m.id
   saveLabel.value = m.label
@@ -822,6 +858,50 @@ function onClose() {
               class="field-input"
             />
             <p class="field-hint">用于估算当前对话已用上下文比例</p>
+          </div>
+
+          <!-- 计费单价（元/百万 tokens）：仅对话模型，用于回答结束后的消费统计 -->
+          <div v-if="!isImageGen" class="field">
+            <label class="field-label">计费单价（元 / 百万 tokens）</label>
+            <div class="field-row-3col">
+              <div class="field">
+                <label class="field-label">缓存命中输入</label>
+                <input
+                  v-model.number="draft.pricing.cache_hit_per_m"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  placeholder="如 0.02"
+                  class="field-input"
+                />
+              </div>
+              <div class="field">
+                <label class="field-label">缓存未命中输入</label>
+                <input
+                  v-model.number="draft.pricing.cache_miss_per_m"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  placeholder="如 1"
+                  class="field-input"
+                />
+              </div>
+              <div class="field">
+                <label class="field-label">输出</label>
+                <input
+                  v-model.number="draft.pricing.output_per_m"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  placeholder="如 2"
+                  class="field-input"
+                />
+              </div>
+            </div>
+            <p class="field-hint">
+              对应 DeepSeek 等 provider 的计费规则（输入分缓存命中/未命中，输出单独计费）；
+              全部留空则不显示消费金额
+            </p>
           </div>
 
           <!-- 图像生成专用字段：尺寸与质量 -->
@@ -1320,6 +1400,12 @@ function onClose() {
   gap: 12px;
 }
 
+.field-row-3col {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
 /* ---------- 模型名行：Dropdown + 从 API 获取按钮 ---------- */
 .model-name-row {
   display: flex;
@@ -1690,7 +1776,8 @@ function onClose() {
 
 /* ---------- 响应式 ---------- */
 @media (max-width: 520px) {
-  .field-row-2col {
+  .field-row-2col,
+  .field-row-3col {
     grid-template-columns: 1fr;
   }
 }
