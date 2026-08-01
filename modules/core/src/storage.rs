@@ -21,11 +21,11 @@ use crate::{Conversation, CoreError, Message, Result};
 pub struct ConversationMeta {
     pub id: String,
     pub title: Option<String>,
-    pub pinned: bool,
     pub pinned_at: Option<u64>,
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: usize,
+    pub pinned: bool,
 }
 
 /// 搜索命中结果
@@ -37,8 +37,8 @@ pub struct SearchHit {
     pub snippet: String,
     pub score: usize,
     pub timestamp: u64,
-    pub pinned: bool,
     pub updated_at: u64,
+    pub pinned: bool,
 }
 
 /// 查询分词：复用 `memory::tokenize`（CJK 单字+bigram 拆分），保证索引侧与查询侧一致

@@ -57,21 +57,12 @@ pub enum ThemeMode {
 /// 同时承载：当前激活的运行时配置 + 可使用模型列表 + 主题。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    // ===== 当前激活的运行时配置 =====
     pub api_key: String,
     pub base_url: String,
     pub model_name: String,
     pub preamble: String,
-    pub backend: BackendKind,
     /// 当前激活配置所属的 provider id（"openai" / "deepseek" / "custom" ...）
     pub provider_id: String,
-    /// 是否启用工具调用（RAG 索引等）
-    pub enable_tools: bool,
-
-    // ===== 用户级偏好 =====
-    pub theme: ThemeMode,
-
-    // ===== 可使用模型列表（用户保存的预设） =====
     pub models: Vec<AvailableModel>,
     /// 当前激活的对话模型 id（指向 models 中 kind=Chat 的一项）；None 表示使用内联配置
     pub active_model_id: Option<String>,
@@ -80,6 +71,10 @@ pub struct AgentConfig {
     /// 与 active_model_id 独立：用户可同时激活一个对话模型和一个图像生成模型。
     #[serde(default)]
     pub active_image_gen_model_id: Option<String>,
+    pub backend: BackendKind,
+    /// 是否启用工具调用（RAG 索引等）
+    pub enable_tools: bool,
+    pub theme: ThemeMode,
 }
 
 impl Default for AgentConfig {
@@ -89,13 +84,13 @@ impl Default for AgentConfig {
             base_url: String::new(),
             model_name: "gpt-4o-mini".to_string(),
             preamble: "你是 EffiSuite 的 AI 助手。遵守以下准则：\n【回答】简短直接，不重复用户问题，不堆砌铺垫与废话。\n【执行】调用工具前，先用 1-3 句话简述最优实现路径（含关键步骤/文件/技术选型），再发起工具调用。\n【原则】优先最短路径，避免试错；工具失败时给出明确下一步，不空谈。".to_string(),
-            backend: BackendKind::Mock,
             provider_id: "openai".to_string(),
-            enable_tools: true,
-            theme: ThemeMode::System,
             models: Vec::new(),
             active_model_id: None,
             active_image_gen_model_id: None,
+            backend: BackendKind::Mock,
+            enable_tools: true,
+            theme: ThemeMode::System,
         }
     }
 }
@@ -121,24 +116,24 @@ pub struct AvailableModel {
     pub model_name: String,
     pub api_key: String,
     pub preamble: String,
-    pub enable_tools: bool,
-    /// 模型能力类型：Chat（对话）/ ImageGen（图像生成）/ VideoGen（视频生成，预留）
-    /// 旧配置无此字段时默认为 Chat（向后兼容）
-    #[serde(default)]
-    pub kind: ModelKind,
     /// 图像生成专用：默认尺寸（如 "1024x1024"），仅 kind=ImageGen 时有效
     #[serde(default)]
     pub image_size: Option<String>,
     /// 图像生成专用：默认质量（如 "standard"/"hd"），仅 kind=ImageGen 时有效
     #[serde(default)]
     pub image_quality: Option<String>,
-    /// 模型上下文窗口大小（tokens），供前端显示剩余上下文
-    #[serde(default)]
-    pub context_window_tokens: Option<u32>,
     /// 计费单价（元/百万 tokens），None 表示未配置价格（聊天中不显示消费金额）
     #[serde(default)]
     pub pricing: Option<ModelPricing>,
+    /// 模型上下文窗口大小（tokens），供前端显示剩余上下文
+    #[serde(default)]
+    pub context_window_tokens: Option<u32>,
     pub created_at: u64,
+    pub enable_tools: bool,
+    /// 模型能力类型：Chat（对话）/ ImageGen（图像生成）/ VideoGen（视频生成，预留）
+    /// 旧配置无此字段时默认为 Chat（向后兼容）
+    #[serde(default)]
+    pub kind: ModelKind,
 }
 
 /// 模型计费单价（元/百万 tokens）

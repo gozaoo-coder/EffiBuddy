@@ -28,7 +28,6 @@ pub enum AttachmentKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {
     pub id: String,
-    pub kind: AttachmentKind,
     /// 附件存储路径（相对 attachments 目录的文件名）
     pub path: String,
     /// 原始文件名
@@ -36,6 +35,7 @@ pub struct Attachment {
     pub mime_type: String,
     /// 字节大小
     pub size: u64,
+    pub kind: AttachmentKind,
 }
 
 /// 设备状态
@@ -66,8 +66,6 @@ pub enum DeviceStatus {
 pub struct Message {
     pub id: String,
     pub content: String,
-    pub timestamp: u64,
-    pub role: Role,
     /// 附件列表，旧文件无此字段时反序列化为空 Vec
     #[serde(default)]
     pub attachments: Vec<Attachment>,
@@ -80,15 +78,17 @@ pub struct Message {
     /// rename = "toolCalls" 对齐前端 Message.toolCalls（camelCase）。
     #[serde(default, rename = "toolCalls")]
     pub tool_calls: Vec<ToolCallRecord>,
-    /// 助手消息的 token 用量统计。模型返回 usage 时持久化，
-    /// 前端据此在历史回看时恢复用量显示（token 模式，不含价格）。
-    #[serde(default)]
-    pub usage: Option<MessageUsage>,
     /// 助手消息的子 agent 过程记录（sub_agent 工具召唤的子 agent 全流程），
     /// 前端据此在历史回看时恢复子 agent 过程卡片。
     /// rename = "subAgents" 对齐前端 Message.subAgents（camelCase）。
     #[serde(default, rename = "subAgents")]
     pub sub_agents: Vec<SubAgentRecord>,
+    /// 助手消息的 token 用量统计。模型返回 usage 时持久化，
+    /// 前端据此在历史回看时恢复用量显示（token 模式，不含价格）。
+    #[serde(default)]
+    pub usage: Option<MessageUsage>,
+    pub timestamp: u64,
+    pub role: Role,
 }
 
 /// 单次工具调用记录（持久化到消息，供历史回看）
@@ -131,8 +131,6 @@ pub struct SubAgentRecord {
     pub session_id: String,
     pub name: String,
     pub model: String,
-    /// 嵌套深度：1 = 主 agent 直接召唤，2 = 子 agent 再召唤
-    pub depth: usize,
     /// 运行状态："running" | "done" | "error"
     pub status: String,
     /// 主 agent 交给子 agent 的任务
@@ -148,6 +146,8 @@ pub struct SubAgentRecord {
     /// 错误信息（status=error 时）
     #[serde(default)]
     pub error: String,
+    /// 嵌套深度：1 = 主 agent 直接召唤，2 = 子 agent 再召唤
+    pub depth: usize,
     /// 完成时间（Unix 毫秒）
     #[serde(default, rename = "finishedAt")]
     pub finished_at: Option<i64>,
@@ -171,13 +171,13 @@ impl Message {
         Self {
             id: id.into(),
             content: content.into(),
-            timestamp,
-            role,
             attachments: Vec::new(),
             reasoning: None,
             tool_calls: Vec::new(),
-            usage: None,
             sub_agents: Vec::new(),
+            usage: None,
+            timestamp,
+            role,
         }
     }
 
@@ -214,23 +214,23 @@ pub struct Conversation {
     pub id: String,
     pub messages: Vec<Message>,
     pub device_id: Option<String>,
-    pub created_at: u64,
     /// 用户自定义标题（改名），None 时前端用首条消息摘要
     #[serde(default)]
     pub title: Option<String>,
-    /// 是否置顶
+    /// 会话级工作区路径。设置后覆盖技能级 working_dir，
+    /// read_file / list_files / shell 的相对路径以此目录为基准。
     #[serde(default)]
-    pub pinned: bool,
+    pub working_dir: Option<String>,
+    pub created_at: u64,
     /// 置顶时间戳，用于置顶组内排序
     #[serde(default)]
     pub pinned_at: Option<u64>,
     /// 最后更新时间戳（最后一条消息的时间），用于"最近活跃"排序
     #[serde(default)]
     pub updated_at: u64,
-    /// 会话级工作区路径。设置后覆盖技能级 working_dir，
-    /// read_file / list_files / shell 的相对路径以此目录为基准。
+    /// 是否置顶
     #[serde(default)]
-    pub working_dir: Option<String>,
+    pub pinned: bool,
 }
 
 impl Conversation {
@@ -239,12 +239,12 @@ impl Conversation {
             id: id.into(),
             messages: Vec::new(),
             device_id: None,
-            created_at,
             title: None,
-            pinned: false,
+            working_dir: None,
+            created_at,
             pinned_at: None,
             updated_at: created_at,
-            working_dir: None,
+            pinned: false,
         }
     }
 
@@ -287,10 +287,6 @@ pub struct Skill {
     /// 会话级 Conversation.working_dir 优先级更高，会覆盖此值。
     #[serde(default)]
     pub working_dir: Option<String>,
-    pub created_at: u64,
-    /// 是否内置（agent-reach / browser-act 等预置技能）
-    #[serde(default)]
-    pub builtin: bool,
     /// 技能来源：None 表示本地创建；"clawhub" 表示从 ClawHub 安装。
     /// 用以区分用户自定义技能与 ClawHub 安装技能，UI 显示徽章。
     #[serde(default)]
@@ -305,6 +301,10 @@ pub struct Skill {
     /// ClawHub 技能版本字符串（如 "1.0.0"），用于检测更新。
     #[serde(default)]
     pub source_version: Option<String>,
+    pub created_at: u64,
+    /// 是否内置（agent-reach / browser-act 等预置技能）
+    #[serde(default)]
+    pub builtin: bool,
 }
 
 /// 定时任务：按 cron 表达式定时执行技能

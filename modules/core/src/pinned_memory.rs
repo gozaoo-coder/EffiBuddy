@@ -50,11 +50,11 @@ pub struct PinnedMemory {
     /// 可选分类标签，如 "preference" / "fact" / "instruction"
     #[serde(default)]
     pub category: Option<String>,
-    pub created_at: u64,
-    pub source: PinnedMemorySource,
     /// 来源会话 id（若通过对话触发），用于审计回溯
     #[serde(default)]
     pub source_conversation_id: Option<String>,
+    pub created_at: u64,
+    pub source: PinnedMemorySource,
 }
 
 /// 永久记忆存储，线程安全且可廉价 clone（内部 `Arc<RwLock<..>>`）

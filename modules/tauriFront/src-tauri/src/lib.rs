@@ -2123,18 +2123,20 @@ struct AgentBillingPayload<'a> {
 }
 
 /// 一次"回答结束"的计费计算结果
+///
+/// 字段按大小降序：u64/f64(8B) → u32(4B) → bool(1B)，最小化 padding。
 #[derive(Debug, Clone, Copy)]
 struct BillingSummary {
-    rounds: u32,
     cache_hit_tokens: u64,
     cache_miss_tokens: u64,
     output_tokens: u64,
     total_tokens: u64,
-    priced: bool,
     cache_hit_cost: f64,
     cache_miss_cost: f64,
     output_cost: f64,
     total_cost: f64,
+    rounds: u32,
+    priced: bool,
 }
 
 impl BillingSummary {
@@ -2164,16 +2166,16 @@ impl BillingSummary {
         };
 
         Self {
-            rounds: summary.completion_count,
             cache_hit_tokens,
             cache_miss_tokens,
             output_tokens,
             total_tokens,
-            priced,
             cache_hit_cost,
             cache_miss_cost,
             output_cost,
             total_cost: cache_hit_cost + cache_miss_cost + output_cost,
+            rounds: summary.completion_count,
+            priced,
         }
     }
 }
