@@ -6,15 +6,26 @@
  *  1. 新建聊天按钮
  *  2. 搜索框
  *  3. 置顶（可折叠）
- *  4. 文件夹（用户自行对会话分类，localStorage 持久化）
- *  5. 会话列表（可按文件夹筛选）
+ *  4. 文件夹（全部 / 未分类 / 用户自定义，localStorage 持久化）
+ *  5. 会话列表（可按文件夹筛选，支持多选 + 自动归类）
  *
- * 会话右键/长按菜单：改名 / 置顶 / 移动到文件夹 / 删除
+ * 会话右键/长按菜单：改名 / 置顶 / 移动到文件夹 / 自动归类 / 删除
+ * 会话项内嵌按钮：更多（打开菜单） / 自动归类（AI 生成标题 + 归类）
+ *
+ * 模块拆分（减少上帝文件）：
+ * - 文件夹状态 → useConversationFolders composable
+ * - 多选状态 → useHistorySelection composable
+ * - 单条会话项渲染 → HistoryItem 组件
+ * - 批量操作浮动栏 → HistorySelectionBar 组件
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Button, Menu, Dialog, Icon, useToast, type MenuItemOption } from './basic'
-import type { ConversationMeta, SearchHit } from '../types'
+import HistoryItem from './HistoryItem.vue'
+import HistorySelectionBar from './HistorySelectionBar.vue'
+import { useConversationFolders, UNCLASSIFIED } from '../composables/useConversationFolders'
+import { useHistorySelection } from '../composables/useHistorySelection'
+import type { ConversationMeta, SearchHit, AutoClassifyResult } from '../types'
 
 const props = defineProps<{
   /** 当前选中的会话 id，用于列表高亮 */
@@ -35,52 +46,70 @@ const pinnedConversations = computed(() => conversations.value.filter((c) => c.p
 const regularConversations = computed(() => conversations.value.filter((c) => !c.pinned))
 const pinnedCollapsed = ref(false)
 
-// ---------- 文件夹（localStorage 持久化） ----------
-interface ConvFolder {
-  id: string
-  name: string
-  created_at: number
-}
-const FOLDERS_KEY = 'effisuite_conv_folders'
-const FOLDER_MAP_KEY = 'effisuite_conv_folder_map'
-
-const folders = ref<ConvFolder[]>([])
-/** conversation_id → folder_id */
-const convFolderMap = ref<Record<string, string>>({})
-/** 当前筛选的文件夹 id（null = 全部会话） */
-const activeFolderId = ref<string | null>(null)
-
-function loadFolders() {
-  try {
-    folders.value = JSON.parse(localStorage.getItem(FOLDERS_KEY) || '[]')
-    convFolderMap.value = JSON.parse(localStorage.getItem(FOLDER_MAP_KEY) || '{}')
-  } catch {
-    folders.value = []
-    convFolderMap.value = {}
-  }
-}
-
-function saveFolders() {
-  localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders.value))
-  localStorage.setItem(FOLDER_MAP_KEY, JSON.stringify(convFolderMap.value))
-}
-
-function folderConvCount(folderId: string): number {
-  return Object.values(convFolderMap.value).filter((id) => id === folderId).length
-}
+// ---------- 文件夹（composable） ----------
+const {
+  folders,
+  convFolderMap,
+  activeFolderId,
+  loadFolders,
+  saveFolders,
+  folderConvCount,
+  unclassifiedCount,
+  getConvFolder,
+  createFolder,
+  renameFolder,
+  removeFolder,
+  moveConvToFolder,
+  batchMoveConvToFolder,
+  findFolderByName,
+  folderNames,
+} = useConversationFolders()
 
 /** 当前文件夹筛选后的普通会话 */
 const filteredConversations = computed(() => {
-  if (!activeFolderId.value) return regularConversations.value
-  return regularConversations.value.filter(
-    (c) => convFolderMap.value[c.id] === activeFolderId.value,
-  )
+  if (activeFolderId.value === null) return regularConversations.value
+  if (activeFolderId.value === UNCLASSIFIED) {
+    return regularConversations.value.filter((c) => !getConvFolder(c.id))
+  }
+  return regularConversations.value.filter((c) => getConvFolder(c.id) === activeFolderId.value)
 })
 
-// 文件夹新建/改名对话框
+/** 当前视图所有会话 id（用于多选全选） */
+const currentViewIds = computed(() => filteredConversations.value.map((c) => c.id))
+
+// ---------- 多选（composable） ----------
+const {
+  selectionMode,
+  selectedCount,
+  enterSelectionMode,
+  exitSelectionMode,
+  toggleSelected,
+  isSelected,
+  selectAll,
+  selectNone,
+  getSelectedArray,
+} = useHistorySelection()
+
+const allSelected = computed(
+  () => selectedCount.value === currentViewIds.value.length && selectedCount.value > 0,
+)
+
+// ---------- 自动归类状态追踪 ----------
+/** 正在归类的会话 id 集合（单条 + 批量共用） */
+const classifyingIds = ref<Set<string>>(new Set())
+const batchClassifying = ref(false)
+
+function setClassifying(id: string, value: boolean) {
+  const next = new Set(classifyingIds.value)
+  if (value) next.add(id)
+  else next.delete(id)
+  classifyingIds.value = next
+}
+
+// ---------- 文件夹新建/改名对话框 ----------
 const folderDialogVisible = ref(false)
 const folderDialogMode = ref<'create' | 'rename'>('create')
-const folderDialogTarget = ref<ConvFolder | null>(null)
+const folderDialogTarget = ref<{ id: string; name: string; created_at: number } | null>(null)
 const folderDialogName = ref('')
 
 function openCreateFolder() {
@@ -90,7 +119,7 @@ function openCreateFolder() {
   folderDialogVisible.value = true
 }
 
-function openRenameFolder(f: ConvFolder) {
+function openRenameFolder(f: { id: string; name: string; created_at: number }) {
   folderDialogMode.value = 'rename'
   folderDialogTarget.value = f
   folderDialogName.value = f.name
@@ -104,23 +133,17 @@ function confirmFolderDialog() {
     return
   }
   if (folderDialogMode.value === 'create') {
-    folders.value.push({ id: `folder_${Date.now()}`, name, created_at: Date.now() })
+    createFolder(name)
     toast({ content: '文件夹已创建', type: 'success' })
   } else if (folderDialogTarget.value) {
-    folderDialogTarget.value.name = name
+    renameFolder(folderDialogTarget.value, name)
     toast({ content: '文件夹已重命名', type: 'success' })
   }
-  saveFolders()
   folderDialogVisible.value = false
 }
 
-function removeFolder(f: ConvFolder) {
-  folders.value = folders.value.filter((x) => x.id !== f.id)
-  for (const k of Object.keys(convFolderMap.value)) {
-    if (convFolderMap.value[k] === f.id) delete convFolderMap.value[k]
-  }
-  if (activeFolderId.value === f.id) activeFolderId.value = null
-  saveFolders()
+function removeFolderAndToast(f: { id: string }) {
+  removeFolder(f.id)
   toast({ content: '文件夹已删除', type: 'success' })
 }
 
@@ -158,6 +181,7 @@ let longPressTimer: number | null = null
 
 function onItemPointerDown(e: PointerEvent, conv: ConversationMeta) {
   if (e.pointerType === 'mouse') return
+  if (selectionMode.value) return
   longPressTimer = window.setTimeout(() => {
     openItemMenu(conv, e.clientX, e.clientY)
   }, 500)
@@ -171,8 +195,16 @@ function onItemPointerUp() {
 }
 
 function onItemContextMenu(e: MouseEvent, conv: ConversationMeta) {
+  if (selectionMode.value) return
   e.preventDefault()
   openItemMenu(conv, e.clientX, e.clientY)
+}
+
+/** more 按钮点击：在按钮下方打开菜单 */
+function onItemMore(ev: MouseEvent, conv: ConversationMeta) {
+  const target = ev.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  openItemMenu(conv, rect.left, rect.bottom + 4)
 }
 
 function openItemMenu(conv: ConversationMeta, x: number, y: number) {
@@ -184,9 +216,10 @@ function openItemMenu(conv: ConversationMeta, x: number, y: number) {
 const itemMenuItems = computed<MenuItemOption[]>(() => {
   const c = menuTargetConv.value
   if (!c) return []
-  const currentFolder = convFolderMap.value[c.id]
+  const currentFolder = getConvFolder(c.id)
   return [
     { key: 'rename', label: '改名', icon: 'edit' },
+    { key: 'auto-classify', label: '自动归类', icon: 'sparkles' },
     { key: 'pin', label: c.pinned ? '取消置顶' : '置顶', icon: c.pinned ? 'pin-filled' : 'pin' },
     {
       key: 'move-folder',
@@ -212,10 +245,8 @@ function onMenuSelect(item: MenuItemOption) {
 
   // 移动到文件夹
   if (item.key.startsWith('folder:')) {
-    const folderId = item.key === 'folder:none' ? '' : item.key.slice('folder:'.length)
-    if (folderId) convFolderMap.value[conv.id] = folderId
-    else delete convFolderMap.value[conv.id]
-    saveFolders()
+    const folderId = item.key === 'folder:none' ? null : item.key.slice('folder:'.length)
+    moveConvToFolder(conv.id, folderId)
     toast({ content: folderId ? '已移动到文件夹' : '已移出文件夹', type: 'success' })
     return
   }
@@ -223,6 +254,9 @@ function onMenuSelect(item: MenuItemOption) {
   switch (item.key) {
     case 'rename':
       startRename(conv)
+      break
+    case 'auto-classify':
+      doAutoClassify(conv)
       break
     case 'pin':
       togglePin(conv)
@@ -234,12 +268,12 @@ function onMenuSelect(item: MenuItemOption) {
   }
 }
 
-// ---------- 文件夹右键 / 长按菜单 ----------
+// ---------- 文件夹右键菜单 ----------
 const folderMenuVisible = ref(false)
 const folderMenuPosition = ref<{ x: number; y: number } | null>(null)
-const folderMenuTarget = ref<ConvFolder | null>(null)
+const folderMenuTarget = ref<{ id: string; name: string; created_at: number } | null>(null)
 
-function onFolderContextMenu(e: MouseEvent, f: ConvFolder) {
+function onFolderContextMenu(e: MouseEvent, f: { id: string; name: string; created_at: number }) {
   e.preventDefault()
   folderMenuPosition.value = { x: e.clientX, y: e.clientY }
   folderMenuTarget.value = f
@@ -256,7 +290,7 @@ function onFolderMenuSelect(item: MenuItemOption) {
   folderMenuTarget.value = null
   if (!f) return
   if (item.key === 'rename') openRenameFolder(f)
-  else if (item.key === 'delete') removeFolder(f)
+  else if (item.key === 'delete') removeFolderAndToast(f)
 }
 
 // ---------- 改名 ----------
@@ -296,6 +330,79 @@ async function togglePin(conv: ConversationMeta) {
   }
 }
 
+// ---------- 自动归类（单条） ----------
+async function doAutoClassify(conv: ConversationMeta) {
+  setClassifying(conv.id, true)
+  try {
+    const result = await invoke<AutoClassifyResult>('auto_classify_conversation', {
+      conversationId: conv.id,
+      existingFolders: folderNames(),
+    })
+    // 标题已由后端持久化；这里只需更新文件夹映射
+    if (result.folder) {
+      const folder = findFolderByName(result.folder)
+      if (folder) {
+        moveConvToFolder(conv.id, folder.id)
+      }
+    }
+    await refresh()
+    toast({
+      content: result.folder ? `已归类到「${result.folder}」` : '已设置标题',
+      type: 'success',
+    })
+  } catch (e) {
+    toast({ content: `归类失败：${e}`, type: 'error' })
+  } finally {
+    setClassifying(conv.id, false)
+  }
+}
+
+// ---------- 批量自动归类 ----------
+async function onBatchAutoClassify() {
+  const ids = getSelectedArray()
+  if (ids.length === 0) return
+  batchClassifying.value = true
+  let success = 0
+  let fail = 0
+  for (const id of ids) {
+    setClassifying(id, true)
+    try {
+      const result = await invoke<AutoClassifyResult>('auto_classify_conversation', {
+        conversationId: id,
+        existingFolders: folderNames(),
+      })
+      if (result.folder) {
+        const folder = findFolderByName(result.folder)
+        if (folder) {
+          moveConvToFolder(id, folder.id)
+        }
+      }
+      success++
+    } catch {
+      fail++
+    } finally {
+      setClassifying(id, false)
+    }
+  }
+  batchClassifying.value = false
+  await refresh()
+  if (fail === 0) {
+    toast({ content: `已归类 ${success} 条会话`, type: 'success' })
+  } else {
+    toast({ content: `成功 ${success} 条，失败 ${fail} 条`, type: 'warn' })
+  }
+  exitSelectionMode()
+}
+
+// ---------- 批量移动 ----------
+function onBatchMove(folderId: string | null) {
+  const ids = getSelectedArray()
+  if (ids.length === 0) return
+  batchMoveConvToFolder(ids, folderId)
+  toast({ content: folderId ? `已移动 ${ids.length} 条到文件夹` : `已移出 ${ids.length} 条`, type: 'success' })
+  exitSelectionMode()
+}
+
 // ---------- 删除 ----------
 const deleteDialogVisible = ref(false)
 const deleteTargetId = ref<string | null>(null)
@@ -305,8 +412,7 @@ async function confirmDelete() {
   if (!id) return
   try {
     await invoke('delete_conversation', { id })
-    delete convFolderMap.value[id]
-    saveFolders()
+    moveConvToFolder(id, null)
     await refresh()
     if (id === props.activeId) {
       const next = conversations.value[0]?.id ?? null
@@ -325,6 +431,23 @@ function onNewChat() {
   emit('select-conversation', null)
 }
 
+// ---------- 多选操作 ----------
+function onEnterSelection() {
+  enterSelectionMode()
+}
+
+function onExitSelection() {
+  exitSelectionMode()
+}
+
+function onSelectAllToggle() {
+  if (allSelected.value) {
+    selectNone()
+  } else {
+    selectAll(currentViewIds.value)
+  }
+}
+
 // ---------- 工具函数 ----------
 function displayTitle(conv: ConversationMeta): string {
   const t = conv.title?.trim()
@@ -332,18 +455,15 @@ function displayTitle(conv: ConversationMeta): string {
   return '新对话'
 }
 
-function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  if (diff < 2592000000) return `${Math.floor(diff / 86400000)}天前`
-  try {
-    return new Date(ts).toLocaleDateString()
-  } catch {
-    return ''
-  }
-}
+/** 当前视图标题 */
+const currentViewTitle = computed(() => {
+  if (activeFolderId.value === null) return '全部会话'
+  if (activeFolderId.value === UNCLASSIFIED) return '未分类'
+  return folders.value.find((f) => f.id === activeFolderId.value)?.name ?? '会话'
+})
+
+/** 全部会话 id（用于未分类计数） */
+const allConvIds = computed(() => conversations.value.filter(c => !c.pinned).map(c => c.id))
 
 // ---------- 数据加载 ----------
 async function refresh() {
@@ -388,19 +508,21 @@ defineExpose({ refresh })
     </div>
 
     <!-- 列表主体 -->
-    <div class="hr-body">
+    <div class="hr-body" :class="{ 'has-sel-bar': selectionMode }">
       <!-- 搜索结果 -->
       <template v-if="searchQuery.trim() && searchResults.length > 0">
         <div class="hr-section-title">搜索结果</div>
         <div
           v-for="hit in searchResults"
           :key="hit.conversation_id + hit.message_id"
-          class="hr-item"
+          class="hr-item hr-item--search"
           :class="{ active: hit.conversation_id === props.activeId }"
           @click="emit('select-conversation', hit.conversation_id)"
         >
-          <div class="hr-item-title">{{ hit.conversation_title || '新对话' }}</div>
-          <div class="hr-item-snippet">{{ hit.snippet }}</div>
+          <div class="hr-item-main">
+            <div class="hr-item-title">{{ hit.conversation_title || '新对话' }}</div>
+            <div class="hr-item-snippet">{{ hit.snippet }}</div>
+          </div>
         </div>
       </template>
 
@@ -424,26 +546,26 @@ defineExpose({ refresh })
             <span class="hr-section-count">{{ pinnedConversations.length }}</span>
           </div>
           <template v-if="!pinnedCollapsed">
-            <div
+            <HistoryItem
               v-for="c in pinnedConversations"
               :key="c.id"
-              class="hr-item"
-              :class="{ active: c.id === props.activeId }"
+              :conv="c"
+              :active="c.id === props.activeId"
+              :display-title="displayTitle(c)"
+              :selection-mode="selectionMode"
+              :selected="isSelected(c.id)"
+              :classifying="classifyingIds.has(c.id)"
+              :show-pin="true"
               @click="emit('select-conversation', c.id)"
+              @contextmenu="onItemContextMenu($event, c)"
               @pointerdown="onItemPointerDown($event, c)"
               @pointerup="onItemPointerUp"
               @pointerleave="onItemPointerUp"
               @pointercancel="onItemPointerUp"
-              @contextmenu="onItemContextMenu($event, c)"
-            >
-              <span class="hr-item-pin"><Icon name="pin" :size="13" /></span>
-              <div class="hr-item-main">
-                <div class="hr-item-title">{{ displayTitle(c) }}</div>
-                <div class="hr-item-meta">
-                  {{ c.message_count }} 条 · {{ formatRelativeTime(c.updated_at) }}
-                </div>
-              </div>
-            </div>
+              @toggle-select="toggleSelected(c.id)"
+              @more="onItemMore($event, c)"
+              @auto-classify="doAutoClassify(c)"
+            />
           </template>
         </template>
 
@@ -472,6 +594,16 @@ defineExpose({ refresh })
         </div>
 
         <div
+          class="hr-folder-item"
+          :class="{ active: activeFolderId === UNCLASSIFIED }"
+          @click="activeFolderId = activeFolderId === UNCLASSIFIED ? null : UNCLASSIFIED"
+        >
+          <span class="hr-folder-icon"><Icon name="folder" :size="14" /></span>
+          <span class="hr-folder-name">未分类</span>
+          <span class="hr-folder-count">{{ unclassifiedCount(allConvIds) }}</span>
+        </div>
+
+        <div
           v-for="f in folders"
           :key="f.id"
           class="hr-folder-item"
@@ -488,54 +620,81 @@ defineExpose({ refresh })
           用文件夹给会话分类，右键会话即可移动
         </div>
 
-        <!-- 会话列表 -->
-        <template v-if="activeFolderId">
-          <div class="hr-section-title folder-filter-title">
-            <span class="hr-folder-icon"><Icon name="folder" :size="13" /></span>
-            <span class="hr-section-label">{{ folders.find((f) => f.id === activeFolderId)?.name }}</span>
-            <button
-              type="button"
-              class="hr-filter-clear"
-              title="清除筛选"
-              @click="activeFolderId = null"
-            >
-              <Icon name="close" :size="12" />
-            </button>
-          </div>
-        </template>
+        <!-- 会话列表标题栏 -->
+        <div class="hr-list-header">
+          <span class="hr-folder-icon"><Icon name="folder" :size="13" /></span>
+          <span class="hr-list-title">{{ currentViewTitle }}</span>
+          <span class="hr-list-count">{{ filteredConversations.length }}</span>
+          <button
+            v-if="activeFolderId !== null"
+            type="button"
+            class="hr-list-clear"
+            title="清除筛选"
+            @click="activeFolderId = null"
+          >
+            <Icon name="close" :size="12" />
+          </button>
+          <button
+            v-if="!selectionMode && filteredConversations.length > 0"
+            type="button"
+            class="hr-list-select-btn"
+            title="多选"
+            @click="onEnterSelection"
+          >
+            <Icon name="check" :size="13" />
+            <span>多选</span>
+          </button>
+        </div>
 
-        <div
+        <!-- 会话列表 -->
+        <HistoryItem
           v-for="c in filteredConversations"
           :key="c.id"
-          class="hr-item"
-          :class="{ active: c.id === props.activeId }"
+          :conv="c"
+          :active="c.id === props.activeId"
+          :display-title="displayTitle(c)"
+          :selection-mode="selectionMode"
+          :selected="isSelected(c.id)"
+          :classifying="classifyingIds.has(c.id)"
+          :show-pin="false"
           @click="emit('select-conversation', c.id)"
+          @contextmenu="onItemContextMenu($event, c)"
           @pointerdown="onItemPointerDown($event, c)"
           @pointerup="onItemPointerUp"
           @pointerleave="onItemPointerUp"
           @pointercancel="onItemPointerUp"
-          @contextmenu="onItemContextMenu($event, c)"
-        >
-          <div class="hr-item-main">
-            <div class="hr-item-title">{{ displayTitle(c) }}</div>
-            <div class="hr-item-meta">
-              {{ c.message_count }} 条 · {{ formatRelativeTime(c.updated_at) }}
-            </div>
-          </div>
-        </div>
+          @toggle-select="toggleSelected(c.id)"
+          @more="onItemMore($event, c)"
+          @auto-classify="doAutoClassify(c)"
+        />
 
         <!-- 空状态 -->
         <div v-if="conversations.length === 0 && !loading" class="hr-empty">
           暂无会话，点击上方新建
         </div>
         <div
-          v-else-if="activeFolderId && filteredConversations.length === 0"
+          v-else-if="filteredConversations.length === 0"
           class="hr-empty"
         >
-          该文件夹暂无会话
+          {{ activeFolderId === UNCLASSIFIED ? '没有未分类的会话' : '该文件夹暂无会话' }}
         </div>
       </template>
     </div>
+
+    <!-- 多选浮动操作栏 -->
+    <HistorySelectionBar
+      v-if="selectionMode"
+      :selected-count="selectedCount"
+      :total-count="currentViewIds.length"
+      :all-selected="allSelected"
+      :folders="folders"
+      :batch-classifying="batchClassifying"
+      @select-all="onSelectAllToggle"
+      @clear="selectNone"
+      @batch-move="onBatchMove"
+      @batch-auto-classify="onBatchAutoClassify"
+      @cancel="onExitSelection"
+    />
 
     <!-- 会话上下文菜单 -->
     <Menu
@@ -666,6 +825,12 @@ defineExpose({ refresh })
   overflow-y: auto;
   min-height: 0;
   padding: 4px 8px 12px;
+  /* 多选栏出现时底部留出空间 */
+  transition: padding-bottom var(--duration-fast) var(--ease-standard);
+}
+
+.hr-body.has-sel-bar {
+  padding-bottom: 4px;
 }
 
 .hr-section-title {
@@ -793,11 +958,37 @@ defineExpose({ refresh })
   line-height: 1.5;
 }
 
-.folder-filter-title {
+/* 会话列表标题栏 */
+.hr-list-header {
+  display: flex;
+  align-items: center;
   gap: 6px;
+  padding: 10px 8px 6px;
 }
 
-.hr-filter-clear {
+.hr-list-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-list-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
+.hr-list-clear {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -809,16 +1000,38 @@ defineExpose({ refresh })
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  flex-shrink: 0;
   transition: background var(--duration-fast), color var(--duration-fast);
 }
 
-.hr-filter-clear:hover {
+.hr-list-clear:hover {
   background: var(--card);
   color: var(--text);
 }
 
-/* 会话项 */
-.hr-item {
+.hr-list-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.hr-list-select-btn:hover {
+  background: var(--card);
+  color: var(--primary);
+}
+
+/* 搜索结果项（复用 hr-item 样式） */
+.hr-item--search {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -828,28 +1041,21 @@ defineExpose({ refresh })
   transition: background var(--duration-fast) var(--ease-standard);
 }
 
-.hr-item:hover {
+.hr-item--search:hover {
   background: var(--card);
 }
 
-.hr-item.active {
+.hr-item--search.active {
   background: rgba(74, 126, 255, 0.12);
 }
 
-.hr-item.active .hr-item-title {
+.hr-item--search.active .hr-item-title {
   color: var(--primary);
 }
 
 .hr-item-main {
   flex: 1;
   min-width: 0;
-}
-
-.hr-item-pin {
-  display: inline-flex;
-  margin-top: 2px;
-  color: var(--warn);
-  flex-shrink: 0;
 }
 
 .hr-item-title {
@@ -859,12 +1065,6 @@ defineExpose({ refresh })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.hr-item-meta {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
 }
 
 .hr-item-snippet {

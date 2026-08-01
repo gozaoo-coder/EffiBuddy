@@ -20,8 +20,9 @@ pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
 pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::{
-    COMPRESSION_PREAMBLE, CompressionStreamItem, RigAgent, SUB_AGENT_DEFAULT_EXCLUDED,
-    call_compression_agent, call_compression_agent_stream,
+    AUTO_CLASSIFY_PREAMBLE, AutoClassifyResult, COMPRESSION_PREAMBLE, CompressionStreamItem,
+    RigAgent, SUB_AGENT_DEFAULT_EXCLUDED, build_auto_classify_prompt, call_auto_classify_agent,
+    call_compression_agent, call_compression_agent_stream, parse_auto_classify_response,
 };
 pub use tools::{
     AskUserTool, CallModelTool, DeleteFileTool, EditFileTool, GenerateVideoTool, GetTimeTool,

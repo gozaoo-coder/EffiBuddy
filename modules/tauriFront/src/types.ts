@@ -89,6 +89,14 @@ export interface PairingRequestPayload {
 // 会话 & 配置（与 core::{Conversation, AgentConfig} 对齐）
 // =========================================================
 
+/** 自动归类结果（与后端 AutoClassifyResult 对齐） */
+export interface AutoClassifyResult {
+  /** LLM 生成的标题（已截断到 25 字符） */
+  title: string
+  /** 匹配到的已有文件夹名；无匹配时为 null */
+  folder: string | null
+}
+
 export interface Conversation {
   id: string
   messages: Message[]

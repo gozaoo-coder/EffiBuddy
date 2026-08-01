@@ -36,13 +36,19 @@
 //! - [`context`]：上下文 prompt 构建（永久记忆 / RAG 记忆 / 技能注入 / 历史）
 //! - [`chat_agent_impl`]：`ChatAgent` trait 实现（非流式 + 流式 + 上下文预览）
 //! - [`compression`]：消息压缩 agent（独立 client + 流式 / 非流式调用）
+//! - [`auto_classify`]：自动归类 agent（一次性调用，生成标题 + 文件夹归类建议）
 
+mod auto_classify;
 mod builder;
 mod chat_agent_impl;
 mod compression;
 mod context;
 mod tools;
 
+pub use auto_classify::{
+    AUTO_CLASSIFY_PREAMBLE, AutoClassifyResult, build_auto_classify_prompt,
+    call_auto_classify_agent, parse_auto_classify_response,
+};
 pub use compression::{
     COMPRESSION_PREAMBLE, CompressionStreamItem, call_compression_agent,
     call_compression_agent_stream,

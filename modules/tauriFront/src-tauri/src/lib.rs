@@ -333,6 +333,7 @@ pub fn run() {
             rename_conversation,
             toggle_pin_conversation,
             search_conversations,
+            auto_classify_conversation,
             // RAG 记忆增强检索
             search_memory,
             get_memory_stats,
