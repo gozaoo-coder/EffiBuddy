@@ -2,8 +2,9 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import ChatWindow from './components/ChatWindow.vue'
 import TitleBar from './components/TitleBar.vue'
+import TabBar from './components/TabBar.vue'
+import TabContent from './components/TabContent.vue'
 import IconRail, { type RailView } from './components/IconRail.vue'
 import HistoryRail from './components/HistoryRail.vue'
 import DevicePanel from './components/DevicePanel.vue'
@@ -15,6 +16,8 @@ import ClawHubPanel from './components/ClawHubPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
 import { ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
+import { useTabs, NEW_CHAT_TAB_ID } from './composables/useTabs'
+import { useAsr } from './composables/useAsr'
 import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
@@ -28,9 +31,22 @@ const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
 const pluginPanelOpen = ref(false)
 const clawhubPanelOpen = ref(false)
-// 当前选中的会话 id（由 HistoryRail 选择或 ChatWindow 新建时更新）
-const currentConversationId = ref<string | null>(null)
 const { toast } = useToast()
+
+// ============= 多页签状态 =============
+const { tabs, openTab, activate, updateTab, findChatByConversationId, getActive } = useTabs()
+const activeTab = getActive()
+
+// ASR 事件监听安装句柄（onMounted 调用 install，onUnmounted 卸载）
+const { install: installAsrEvents } = useAsr()
+let uninstallAsrEvents: (() => void) | null = null
+
+// 当前激活 chat 页签的 conversationId：供 HistoryRail 高亮 + SettingsPanel 上下文
+// 非 chat 页签激活时返回 null（历史列表不高亮）
+const activeChatConvId = computed<string | null>(() => {
+  const t = activeTab.value
+  return t?.kind === 'chat' ? (t.conversationId ?? null) : null
+})
 
 // HistoryRail 实例引用：用于在会话变更时调用 refresh()
 const historyRailRef = ref<{ refresh: () => void } | null>(null)
@@ -111,10 +127,19 @@ onMounted(async () => {
   await refreshBackend()
   await refreshModelDisplay()
 
-  // 监听 set_title 工具成功更新标题事件：立即刷新 HistoryRail 列表
+  // 安装 ASR 事件监听（asr-stream-chunk / asr-session-status / asr-upload-progress / asr-record-updated）
+  // 全局单例：install 内部有 installed 标记，重复调用安全
+  uninstallAsrEvents = await installAsrEvents()
+
+  // 监听 set_title 工具成功更新标题事件：刷新 HistoryRail 列表 + 同步页签标题
   unlistens.push(
-    await listen<ConversationTitlePayload>('conversation-title-updated', () => {
+    await listen<ConversationTitlePayload>('conversation-title-updated', (e) => {
       historyRailRef.value?.refresh()
+      const { conversation_id, title } = e.payload
+      if (title) {
+        const tab = findChatByConversationId(conversation_id)
+        if (tab && tab.title !== title) updateTab(tab.id, { title })
+      }
     }),
   )
 })
@@ -122,6 +147,8 @@ onMounted(async () => {
 onUnmounted(() => {
   unlistens.forEach((fn) => fn?.())
   unlistens = []
+  uninstallAsrEvents?.()
+  uninstallAsrEvents = null
 })
 
 function onSettingsSaved(backend: string) {
@@ -131,12 +158,42 @@ function onSettingsSaved(backend: string) {
   toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
 
-// HistoryRail 选择会话（null 表示新建聊天）
-function handleSelectConv(id: string | null) {
-  currentConversationId.value = id
+// HistoryRail 选择会话（null 表示新建聊天，title 仅已有会话携带）
+// 多页签语义：已打开则激活，未打开则新建页签；新建聊天复用全局唯一 __new_chat__ 页签
+function handleSelectConv(id: string | null, title?: string | null) {
+  if (id === null) {
+    // 新建聊天：复用已存在的 __new_chat__ 页签，避免多个空对话页签
+    const sentinel = tabs.value.find((t) => t.id === NEW_CHAT_TAB_ID)
+    if (sentinel) {
+      activate(sentinel.id)
+      return
+    }
+    openTab({
+      id: NEW_CHAT_TAB_ID,
+      kind: 'chat',
+      title: '新对话',
+      closable: true,
+      instanceKey: '',
+    })
+    return
+  }
+  // 已有会话：按 conversationId 去重
+  const found = findChatByConversationId(id)
+  if (found) {
+    activate(found.id)
+    return
+  }
+  openTab({
+    id,
+    kind: 'chat',
+    title: title?.trim() || '对话',
+    closable: true,
+    conversationId: id,
+    instanceKey: '',
+  })
 }
 
-// ChatWindow 会话变更（流式结束 / 新建会话）→ 刷新 HistoryRail 列表
+// 页签内容会话变更（新建会话建立 / 流式结束）→ 刷新 HistoryRail 列表
 function onConversationChanged() {
   historyRailRef.value?.refresh()
 }
@@ -148,6 +205,23 @@ function openDevicePanel() {
 
 function openSettingsPanel() {
   settingsOpen.value = true
+}
+
+// 从 IconRail 打开 ASR 页签（流式录入 / 文件转写 / 历史记录）
+// 单例页签：相同 id 已存在则仅激活，避免重复打开
+function openAsrTab(kind: 'asr-stream' | 'asr-upload' | 'asr-history') {
+  const titleMap = {
+    'asr-stream': 'ASR 录入',
+    'asr-upload': 'ASR 转写',
+    'asr-history': 'ASR 历史',
+  } as const
+  openTab({
+    id: kind,
+    kind,
+    title: titleMap[kind],
+    closable: true,
+    instanceKey: '',
+  })
 }
 
 function openClawHub() {
@@ -173,21 +247,21 @@ const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
         @open-clawhub="openClawHub"
         @open-device="openDevicePanel"
         @open-settings="openSettingsPanel"
+        @open-asr="openAsrTab"
       />
 
       <!-- 第二栏：历史记录（新建聊天 / 置顶 / 文件夹分类） -->
       <HistoryRail
         ref="historyRailRef"
-        :active-id="currentConversationId"
+        :active-id="activeChatConvId"
         @select-conversation="handleSelectConv"
       />
 
-      <!-- 主聊天区 -->
+      <!-- 主内容区：多页签栏 + 页签内容容器 -->
       <section class="chat-area">
-        <ChatWindow
+        <TabBar />
+        <TabContent
           :backend="agentBackend"
-          :conversation-id="currentConversationId"
-          @update:conversation-id="currentConversationId = $event"
           @conversation-changed="onConversationChanged"
         />
       </section>
@@ -205,7 +279,7 @@ const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
 
     <SettingsPanel
       :open="settingsOpen"
-      :conversation-id="currentConversationId"
+      :conversation-id="activeChatConvId"
       @close="settingsOpen = false"
     />
 

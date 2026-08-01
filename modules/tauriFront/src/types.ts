@@ -704,3 +704,154 @@ export interface InstalledPlugin {
   install_path?: string | null
   installed_at: number
 }
+
+// =========================================================
+// 多页签系统（Tab System）
+// 主内容栏从单一 ChatWindow 重构为多页签，允许同时打开多个活跃页签。
+// chat 页签 id = conversation_id（新对话用 `__new_chat__` 哨兵，会话建立后迁移为真实 id）
+// asr-* 页签 id = 业务 uuid
+// =========================================================
+
+export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history'
+
+export interface TabItem {
+  /** 唯一 id（chat 用 conversation_id，asr-* 用 uuid） */
+  id: string
+  kind: TabKind
+  title: string
+  icon?: string
+  /** chat 类型默认 true；asr-stream 录音中不可关 */
+  closable: boolean
+  status?: 'idle' | 'loading' | 'recording' | 'active' | 'error'
+  /** 仅 chat 类型：关联的会话 id */
+  conversationId?: string
+  /**
+   * 页签实例稳定 key（openTab 时自动生成，永不变更）。
+   * 用途：作为 Vue <component :key> 的取值。
+   * 为什么不直接用 id：chat 页签在新建会话建立后会由 updateTab 把 id 从
+   * `__new_chat__` 迁移为真实 conversation_id；若用 id 作 :key 会触发组件
+   * 重新挂载，导致流式传输中的 ChatWindow 实例被销毁、Tauri 事件监听丢失。
+   * instanceKey 与 id 解耦，迁移 id 时组件实例保持不变，流式持续可用。
+   */
+  instanceKey: string
+}
+
+// =========================================================
+// ASR 语音转写（与 core::asr::types + commands::asr 对齐）
+// 后端 serde 均为 snake_case（未启用 rename_all = "camelCase"）：
+//   - AsrStatus / AsrSource / AsrProvider: #[serde(rename_all = "snake_case")]
+//   - AsrRecord / AsrConfig / AsrSummaryHit / AsrSessionInfo / AsrFinishResult: 字段名直传
+// BusEvent: #[serde(tag = "kind", rename_all = "snake_case")]
+// =========================================================
+
+/** ASR 服务商（与 AsrProvider 枚举对齐，snake_case 变体） */
+export type AsrProvider = 'volc_engine' | 'qwen'
+
+/** ASR 转写状态机 */
+export type AsrStatus =
+  | 'pending'
+  | 'transcribing'
+  | 'transcribed'
+  | 'summarizing'
+  | 'completed'
+  | 'failed'
+
+/** ASR 音频来源 */
+export type AsrSource = 'streaming' | 'upload'
+
+/** 一条 ASR 转写记录（list_records 不含 transcript，get_record 含） */
+export interface AsrRecord {
+  id: string
+  audio_path: string
+  /** 完整转写文本；list_records 返回时可能为空字符串 */
+  transcript: string
+  title: string
+  language: string
+  summary: string | null
+  error_message: string | null
+  tags: string[]
+  /** ISO 8601 字符串 */
+  created_at: string
+  updated_at: string
+  duration_ms: number
+  sample_rate: number
+  provider: AsrProvider
+  status: AsrStatus
+  source: AsrSource
+}
+
+/** 摘要 RAG 命中条目（asr_search_summaries 返回） */
+export interface AsrSummaryHit {
+  record_id: string
+  title: string
+  summary_snippet: string
+  created_at: string
+  /** BM25 相关性得分，越大越相关 */
+  score: number
+}
+
+/** 活跃流式会话信息（asr_list_sessions 返回） */
+export interface AsrSessionInfo {
+  session_id: string
+  record_id: string | null
+  language: string
+  state: string
+}
+
+/** ASR 配置（与 core::config::AsrConfig 对齐，snake_case 字段） */
+export interface AsrConfig {
+  provider: AsrProvider
+  volc_app_id: string
+  volc_access_token: string
+  volc_cluster: string
+  qwen_api_key: string
+  qwen_base_url: string
+  qwen_audio_model: string
+  default_language: string
+  enable_auto_summary: boolean
+  summary_model: string | null
+}
+
+/** finish_streaming / transcribe_file 的返回结果 */
+export interface AsrFinishResult {
+  transcript: string
+  record_id: string | null
+  summary: string | null
+}
+
+/** asr_update_record 可选字段补丁 */
+export interface AsrRecordPatch {
+  title?: string
+  tags?: string[]
+  summary?: string
+}
+
+// ============= ASR 事件 payload（BusEvent 子类型，kind 标签已固定） =============
+
+export interface AsrStreamChunkPayload {
+  kind: 'asr_stream_chunk'
+  session_id: string
+  text: string
+  is_final: boolean
+}
+
+export interface AsrSessionStatusPayload {
+  kind: 'asr_session_status'
+  session_id: string
+  /** "started" | "transcribing" | "completed" | "failed" | "cancelled" */
+  status: string
+  error?: string | null
+}
+
+export interface AsrUploadProgressPayload {
+  kind: 'asr_upload_progress'
+  record_id: string
+  /** 0–1 */
+  progress: number
+  status: string
+}
+
+export interface AsrRecordUpdatedPayload {
+  kind: 'asr_record_updated'
+  record_id: string
+}

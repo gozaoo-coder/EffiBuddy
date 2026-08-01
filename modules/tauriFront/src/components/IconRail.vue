@@ -23,6 +23,7 @@ const emit = defineEmits<{
   (e: 'open-clawhub'): void
   (e: 'open-device'): void
   (e: 'open-settings'): void
+  (e: 'open-asr', kind: 'asr-stream' | 'asr-upload' | 'asr-history'): void
 }>()
 
 // 主栏图标（纯 icon，无文字）
@@ -44,6 +45,16 @@ const moreItems: MenuItemOption[] = [
   { key: 'settings', label: '设置', icon: 'settings' },
 ]
 
+// ASR 弹出菜单
+const asrMenuVisible = ref(false)
+const asrBtnRef = ref<HTMLElement | null>(null)
+
+const asrItems: MenuItemOption[] = [
+  { key: 'asr-stream', label: '流式录入', icon: 'mic' },
+  { key: 'asr-upload', label: '文件转写', icon: 'attachment' },
+  { key: 'asr-history', label: '历史记录', icon: 'clock' },
+]
+
 function onMoreSelect(item: MenuItemOption) {
   moreMenuVisible.value = false
   switch (item.key) {
@@ -57,6 +68,11 @@ function onMoreSelect(item: MenuItemOption) {
       emit('open-settings')
       break
   }
+}
+
+function onAsrSelect(item: MenuItemOption) {
+  asrMenuVisible.value = false
+  emit('open-asr', item.key as 'asr-stream' | 'asr-upload' | 'asr-history')
 }
 
 function select(view: RailView) {
@@ -79,6 +95,18 @@ function select(view: RailView) {
         <Icon :name="item.icon" :size="21" />
         <span class="rail-tip">{{ item.label }}</span>
       </button>
+
+      <!-- ASR 语音转写（弹出菜单选择录入/上传/历史） -->
+      <button
+        ref="asrBtnRef"
+        type="button"
+        class="rail-btn"
+        :class="{ active: asrMenuVisible }"
+        @click="asrMenuVisible = true"
+      >
+        <Icon name="mic" :size="21" />
+        <span class="rail-tip">语音转写</span>
+      </button>
     </div>
 
     <!-- 底部：更多 -->
@@ -94,6 +122,16 @@ function select(view: RailView) {
         <span class="rail-tip">更多</span>
       </button>
     </div>
+
+    <!-- ASR 菜单 -->
+    <Menu
+      v-model:visible="asrMenuVisible"
+      :items="asrItems"
+      :trigger-ref="asrBtnRef"
+      placement="right-start"
+      :min-width="176"
+      @select="onAsrSelect"
+    />
 
     <!-- 更多菜单 -->
     <Menu

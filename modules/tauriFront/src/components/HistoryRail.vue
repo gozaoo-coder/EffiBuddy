@@ -33,7 +33,9 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'select-conversation', id: string | null): void
+  // title 可选：打开已有会话时携带标题，供多页签系统直接设置页签标题，
+  // 避免 App.vue 再发起一次后端请求。新建聊天（id=null）不传 title。
+  (e: 'select-conversation', id: string | null, title?: string | null): void
 }>()
 
 const { toast } = useToast()
@@ -415,8 +417,8 @@ async function confirmDelete() {
     moveConvToFolder(id, null)
     await refresh()
     if (id === props.activeId) {
-      const next = conversations.value[0]?.id ?? null
-      emit('select-conversation', next)
+      const nextConv = conversations.value[0] ?? null
+      emit('select-conversation', nextConv?.id ?? null, nextConv?.title ?? null)
     }
     toast({ content: '会话已删除', type: 'success' })
   } catch (e) {
@@ -517,7 +519,7 @@ defineExpose({ refresh })
           :key="hit.conversation_id + hit.message_id"
           class="hr-item hr-item--search"
           :class="{ active: hit.conversation_id === props.activeId }"
-          @click="emit('select-conversation', hit.conversation_id)"
+          @click="emit('select-conversation', hit.conversation_id, hit.conversation_title)"
         >
           <div class="hr-item-main">
             <div class="hr-item-title">{{ hit.conversation_title || '新对话' }}</div>
@@ -556,7 +558,7 @@ defineExpose({ refresh })
               :selected="isSelected(c.id)"
               :classifying="classifyingIds.has(c.id)"
               :show-pin="true"
-              @click="emit('select-conversation', c.id)"
+              @click="emit('select-conversation', c.id, c.title)"
               @contextmenu="onItemContextMenu($event, c)"
               @pointerdown="onItemPointerDown($event, c)"
               @pointerup="onItemPointerUp"
@@ -657,7 +659,7 @@ defineExpose({ refresh })
           :selected="isSelected(c.id)"
           :classifying="classifyingIds.has(c.id)"
           :show-pin="false"
-          @click="emit('select-conversation', c.id)"
+          @click="emit('select-conversation', c.id, c.title)"
           @contextmenu="onItemContextMenu($event, c)"
           @pointerdown="onItemPointerDown($event, c)"
           @pointerup="onItemPointerUp"
