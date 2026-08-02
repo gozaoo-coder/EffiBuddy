@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { animate } from 'animejs'
 import MarkdownRender from 'markstream-vue'
 import { useTheme } from '../composables/useTheme'
+import { NEW_CHAT_TAB_ID } from '../composables/useTabs'
 import { Button, IconButton, BindSheet, Chips, Icon, Menu, ContextRing, useToast, type MenuItemOption } from './basic'
 import ReasoningBox from './ReasoningBox.vue'
 import ToolCallGroup from './ToolCallGroup.vue'
@@ -790,22 +791,43 @@ function restoreBubbleMetaFromHistory() {
 
 // ---------- 会话级工作区管理 ----------
 // 优先级：会话级 > 技能级（apply_skill 写入） > 进程默认 cwd
+// 新建对话页签尚无真实会话（conversationId 为 null 或 __new_chat__ 哨兵）：
+// 需要真实会话 id 的操作（设置工作区 / 发消息）先经此创建会话并回传真实 id，
+// 同时触发页签迁移（TabContent 将 __new_chat__ 迁移为真实 conversation_id）。
+async function ensureConversation(): Promise<string | null> {
+  let id = activeId.value
+  if (id && id !== NEW_CHAT_TAB_ID) return id
+  try {
+    id = await invoke<string>('create_conversation')
+    activeId.value = id
+    emit('update:conversation-id', id)
+    emit('conversation-changed')
+    return id
+  } catch (e) {
+    toast({ content: `新建会话失败：${e}`, type: 'error' })
+    return null
+  }
+}
+
 async function pickWorkingDir() {
-  const id = activeId.value
-  if (!id) {
-    toast({ content: '请先选择或新建会话', type: 'warn' })
+  // 先选目录再建会话：用户取消选择时不会凭空产生一个空会话
+  let path: string | null = null
+  try {
+    path = await invoke<string | null>('pick_directory')
+  } catch (e) {
+    toast({ content: `选择目录失败：${e}`, type: 'error' })
     return
   }
+  if (!path) return
+  const id = await ensureConversation()
+  if (!id) return
   try {
-    const path = await invoke<string | null>('pick_directory')
-    if (path) {
-      await invoke('set_conversation_working_dir', {
-        conversationId: id,
-        workingDir: path,
-      })
-      workingDir.value = path
-      toast({ content: `已设置工作区：${path}`, type: 'success' })
-    }
+    await invoke('set_conversation_working_dir', {
+      conversationId: id,
+      workingDir: path,
+    })
+    workingDir.value = path
+    toast({ content: `已设置工作区：${path}`, type: 'success' })
   } catch (e) {
     toast({ content: `设置工作区失败：${e}`, type: 'error' })
   }
@@ -1292,19 +1314,9 @@ async function send() {
   // 用户主动发送：强制跟随到底部
   stickToBottom.value = true
 
-  // 没有当前会话时新建一个
-  let id = activeId.value
-  if (!id) {
-    try {
-      id = await invoke<string>('create_conversation')
-      activeId.value = id
-      emit('update:conversation-id', id)
-      emit('conversation-changed')
-    } catch (e) {
-      toast({ content: `新建会话失败：${e}`, type: 'error' })
-      return
-    }
-  }
+  // 没有当前会话时新建一个（新建对话页签：id 为 null 或 __new_chat__ 哨兵）
+  const id = await ensureConversation()
+  if (!id) return
 
   sending.value = true
   input.value = ''
