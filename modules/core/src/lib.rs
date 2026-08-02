@@ -46,7 +46,7 @@ pub use models::{
 };
 pub use pinned_memory::{PinnedMemory, PinnedMemorySource, PinnedMemoryStore};
 pub use plugin_store::PluginStore;
-pub use remote_task::RemoteTaskDispatcher;
+pub use remote_task::{remote_task_now, RemoteTaskDispatcher};
 pub use schedule_store::ScheduledTaskStore;
 pub use skill_index::{SkillEntry, SkillHit, SkillIndex};
 pub use skill_store::SkillStore;

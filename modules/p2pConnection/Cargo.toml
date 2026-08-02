@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "EffiSuite P2P 模块：局域网可信设备发现、配对与数据共享"
+description = "EffiSuite P2P 模块：局域网可信设备发现、配对、加密传输与镜像/主机模式同步"
 
 [dependencies]
 effisuite-core.workspace = true
@@ -13,5 +13,21 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# 加密：X25519 ECDH + Ed25519 签名 + AES-256-GCM 会话密钥 + HKDF 派生 + SHA-256
+aes-gcm.workspace = true
+x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+hkdf.workspace = true
+rand.workspace = true
+# 长度前缀帧编解码
+bytes.workspace = true
+# 信任库与配对状态持久化目录解析
+dirs.workspace = true
+# 时间戳 / UUID（配对请求 id、设备 id）
+chrono.workspace = true
+uuid.workspace = true
+base64.workspace = true
