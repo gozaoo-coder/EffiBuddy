@@ -4,9 +4,6 @@
 //! 统一的 [`DiscoveryService`] / [`PairingService`] / [`SyncService`] trait
 //! 与 [`effisuite_core::RemoteTaskDispatcher`] 实现。
 //!
-//! **本文件为占位实现**，正式实现见 [`crate::pairing`] / [`crate::sync`] /
-//! [`crate::discovery`] 完成后由 manager 整合。当前仅满足 lib.rs 编译。
-//!
 //! 设计要点（遵循 user_rules）：
 //! - 内部状态用 `tokio::sync::RwLock`（读多写少）+ 原子类型，临界区极短
 //! - 事件通过 `EventBus`（broadcast）传递，不共享可变内存
@@ -19,11 +16,10 @@ use effisuite_core::{BusEvent, CoreError, Device, DeviceStatus, EventBus, Result
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::crypto::IdentityKey;
 use crate::discovery::Discovery;
 use crate::pairing::{Pairing, PairingRequest};
 use crate::protocol::SyncKind;
-use crate::sync::Sync;
+use crate::sync::{Sync, SyncDataStore};
 use crate::traits::{DiscoveryService, PairingService, SyncService};
 use crate::transport::Transport;
 use crate::trust::{PairRole, TrustStore};
@@ -34,9 +30,6 @@ use crate::trust::{PairRole, TrustStore};
 pub struct P2pManager {
     /// 信任库（持久化已配对设备公钥与角色）
     trust: TrustStore,
-    /// 本机身份（Ed25519）
-    #[allow(dead_code)]
-    identity: IdentityKey,
     /// 事件总线
     event_bus: EventBus,
     /// 加密 TCP 传输层
@@ -56,21 +49,18 @@ pub struct P2pManager {
 }
 
 impl P2pManager {
-    /// 创建一个新的 P2pManager（不启动，需调用 `start` 启动广播与监听）
+    /// 创建一个新的 P2pManager（不启动，需调用 `start_with_trust` 启动广播与监听）。
+    /// 身份与信任库在 `start_with_trust` 时注入，此前各模块句柄均为空。
     pub fn new(event_bus: EventBus) -> Self {
-        // 临时身份（实际使用时应在外部加载 trust store 后通过 `start_with_trust` 启动）
-        let identity = IdentityKey::generate();
-        let self_device_id = format!("dev-anon-{:08x}", rand::random::<u32>());
         Self {
             trust: TrustStore::placeholder(),
-            identity,
             event_bus,
             transport: RwLock::new(None),
             discovery: RwLock::new(None),
             pairing: RwLock::new(None),
             sync: RwLock::new(None),
             pending_pairing_requests: RwLock::new(Vec::new()),
-            self_device_id: RwLock::new(self_device_id),
+            self_device_id: RwLock::new("dev-anon".to_string()),
             started: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -83,7 +73,7 @@ impl P2pManager {
     pub async fn start_with_trust(
         self: &Arc<Self>,
         trust: TrustStore,
-        identity: IdentityKey,
+        identity: crate::crypto::IdentityKey,
         bind_addr: std::net::SocketAddr,
     ) -> Result<()> {
         if self
@@ -95,12 +85,6 @@ impl P2pManager {
 
         let self_device_id = trust.self_device_id().await;
         *self.self_device_id.write().await = self_device_id.clone();
-        // 替换占位身份与信任库
-        {
-            // trust 是 Clone（内部 Arc），可直接替换字段
-            // 注意：这里仅替换 manager 内持有的句柄；transport 也持同一份 trust
-            // 占位 trust 与正式 trust 是不同 Arc，故需重新构造 transport
-        }
         // 构造 transport（用正式 trust + identity）
         let transport = Arc::new(Transport::new(
             trust.clone(),
@@ -131,15 +115,11 @@ impl P2pManager {
             self_device_id.clone(),
         ));
         // 构造 sync
-        let sync = Arc::new(Sync::new(
-            Arc::clone(&transport),
-            self.event_bus.clone(),
-        ));
+        let sync = Arc::new(Sync::new(Arc::clone(&transport)));
 
         // 启动入站消息路由 task：把 transport 收到的消息分发到 pairing / sync / 事件总线
         let pairing_handle = Arc::clone(&pairing);
         let sync_handle = Arc::clone(&sync);
-        let bus_clone = self.event_bus.clone();
         let transport_for_task = Arc::clone(&transport);
         tokio::spawn(async move {
             let mut rx = incoming_rx;
@@ -156,33 +136,30 @@ impl P2pManager {
                         // Pong 已在 transport reader 静默消费，不应到达
                     }
                     WireMessage::TaskRequest { request_id, task } => {
-                        // 远端任务请求：发布事件，由本机 agent 处理后回 TaskResponse
-                        bus_clone.publish(BusEvent::PairingRequest {
-                            device: Device {
-                                id: msg.device_id.clone(),
-                                name: msg.device_id.clone(),
-                                address: String::new(),
-                                last_seen: 0,
-                                status: DeviceStatus::Paired,
-                            },
-                        });
-                        // 实际远端任务由 manager 处理（dispatch_remote_task 的反向）
-                        // 这里转发到 sync 内部队列
-                        let _ = (request_id, task);
+                        // 远端任务请求：接收端需本机 agent 处理后回 TaskResponse。
+                        // agent 集成尚未接入，明确回错误，避免发送方挂起 120s 超时。
+                        tracing::warn!(
+                            device = %msg.device_id,
+                            request_id = %request_id,
+                            task = %task.chars().take(64).collect::<String>(),
+                            "remote task request received but receiver not wired to agent"
+                        );
+                        if let Some(ch) = transport_for_task.get_channel(&msg.device_id).await {
+                            let _ = ch
+                                .send(WireMessage::TaskResponse {
+                                    request_id,
+                                    result: "远端任务执行器尚未接入本机 agent".to_string(),
+                                    is_error: true,
+                                })
+                                .await;
+                        }
                     }
-                    WireMessage::SyncRequest { since, kinds } => {
-                        let _ = sync_handle.handle_request(&msg.device_id, since, &kinds).await;
-                    }
-                    WireMessage::SyncFetch {
-                        conversation_id,
-                        since_msg_ts,
-                    } => {
-                        let _ = sync_handle
-                            .handle_fetch(&msg.device_id, &conversation_id, since_msg_ts)
-                            .await;
-                    }
-                    WireMessage::SyncMessages { .. }
-                    | WireMessage::SyncManifest { .. } => {
+                    WireMessage::SyncRequest { .. }
+                    | WireMessage::SyncFetch { .. }
+                    | WireMessage::SyncManifest { .. }
+                    | WireMessage::SyncMessages { .. }
+                    | WireMessage::SyncData { .. } => {
+                        // 同步相关消息统一由 sync 路由（请求→响应，响应→等待者/落盘）
                         let _ = sync_handle.handle_incoming(&msg.device_id, msg.message).await;
                     }
                     WireMessage::TaskResponse { .. }
@@ -272,9 +249,17 @@ impl P2pManager {
         self.started.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// 本机设备 id（启动前为占位 `dev-anon-xxxx`，启动后为信任库中的正式 id）
+    /// 本机设备 id（启动前为占位 `dev-anon`，启动后为信任库中的正式 id）
     pub async fn self_device_id(&self) -> String {
         self.self_device_id.read().await.clone()
+    }
+
+    /// 注入镜像同步数据源（业务层在 `start_with_trust` 后调用）。
+    /// 同步器据此读写会话 / 插件 / 永久记忆与同步游标。
+    pub async fn set_sync_data_store(&self, store: Arc<dyn SyncDataStore>) {
+        if let Some(s) = self.sync.read().await.as_ref() {
+            s.set_data_store(store).await;
+        }
     }
 
     /// 当前待处理配对请求列表（前端据此展示 pairing-request bubble）

@@ -88,6 +88,9 @@ pub enum WireMessage {
         conversation_id: String,
         messages: Vec<Message>,
     },
+    /// 响应 SyncRequest / 主动推送：非会话种类数据块（插件 / 用户缓存，
+    /// `payload` 为 JSON 编码的 `Vec<InstalledPlugin>` / `Vec<PinnedMemory>`）
+    SyncData { kind: SyncKind, payload: String },
 
     // ── 远端任务派发（镜像模式：AI 跨设备指派任务） ──────────────────────
     /// 请求远端设备执行任务（远端 AI 处理后回 TaskResponse）
@@ -204,6 +207,24 @@ mod tests {
                 assert_eq!(messages[0].content, "hi");
             }
             _ => panic!("期望 SyncMessages 变体"),
+        }
+    }
+
+    #[test]
+    fn wire_message_roundtrip_sync_data() {
+        let msg = WireMessage::SyncData {
+            kind: SyncKind::UserCache,
+            payload: r#"[]"#.to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"sync_data\""));
+        let back: WireMessage = serde_json::from_str(&json).unwrap();
+        match back {
+            WireMessage::SyncData { kind, payload } => {
+                assert_eq!(kind, SyncKind::UserCache);
+                assert_eq!(payload, "[]");
+            }
+            _ => panic!("期望 SyncData 变体"),
         }
     }
 

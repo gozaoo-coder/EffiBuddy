@@ -42,6 +42,7 @@ mod events;
 mod paths;
 mod scheduler;
 mod state;
+mod sync_store;
 
 pub use state::AppState;
 pub(crate) use state::now_ms;
@@ -339,6 +340,12 @@ pub fn run() {
             //    + pairing（配对协议）+ sync（镜像同步），并自动收集 PairingRequest 事件
             let p2p_manager = Arc::clone(&state.p2p);
             let p2p_trust_path = p2p_trust_path();
+            // 镜像同步数据源：基于本地会话 / 插件 / 永久记忆存储
+            let sync_store = sync_store::P2pSyncStore::new(
+                Arc::clone(&state.store),
+                state.plugin_store.clone(),
+                Arc::clone(&state.pinned_memory),
+            );
             tauri::async_runtime::spawn(async move {
                 // 确保目录存在（load_or_create 仅写文件，不创建父目录）
                 if let Some(parent) = p2p_trust_path.parent() {
@@ -372,9 +379,13 @@ pub fn run() {
                     .await
                 {
                     tracing::error!(error = %e, "P2P 服务启动失败");
-                } else {
-                    tracing::info!("P2P 服务已启动（transport + discovery + pairing + sync）");
+                    return;
                 }
+                // 注入镜像同步数据源（同步器读写会话/插件/永久记忆）
+                p2p_manager
+                    .set_sync_data_store(Arc::new(sync_store))
+                    .await;
+                tracing::info!("P2P 服务已启动（transport + discovery + pairing + sync）");
             });
 
             Ok(())

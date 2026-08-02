@@ -30,6 +30,7 @@ pub mod trust;
 pub use manager::P2pManager;
 pub use pairing::PairingRequest;
 pub use protocol::{SyncKind, SyncManifest, ConvManifestEntry, WireMessage};
+pub use sync::SyncDataStore;
 pub use traits::{DiscoveryService, PairingService, SyncService};
 pub use transport::DEFAULT_P2P_PORT;
 pub use trust::{PairRole, TrustedPeer, TrustStore};
