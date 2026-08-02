@@ -173,8 +173,12 @@ impl Transport {
         let listener = TcpListener::bind(bind)
             .await
             .map_err(|e| CoreError::P2p(format!("bind {bind}: {e}")))?;
-        *self.bind_addr.write().await = Some(bind);
-        info!(addr = %bind, "P2P transport listening");
+        // 写入实际监听地址（bind 用 0 端口时由 OS 分配，需读 listener.local_addr）
+        let actual_bind = listener
+            .local_addr()
+            .map_err(|e| CoreError::P2p(format!("local_addr: {e}")))?;
+        *self.bind_addr.write().await = Some(actual_bind);
+        info!(addr = %actual_bind, "P2P transport listening");
 
         let (incoming_tx, incoming_rx) = mpsc::channel(64);
         *self.incoming_tx.write().await = Some(incoming_tx.clone());
@@ -655,6 +659,8 @@ mod tests {
     fn temp_dir() -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("effisuite-p2p-test-{}", uuid::Uuid::new_v4()));
+        // 创建目录（TrustStore::load_or_create 写文件时需要父目录存在）
+        let _ = std::fs::create_dir_all(&p);
         p
     }
 
@@ -710,7 +716,8 @@ mod tests {
         let port_b = transport_b.bind_addr.read().await.unwrap().port();
 
         let transport_a = Arc::new(Transport::from_trust(store_a, identity_a, bus.clone()).await);
-        transport_a
+        // 保留 incoming_rx：drop 会导致 incoming_tx.send 失败 → reader task 退出 → cleanup_conn 移除 channel
+        let mut _incoming_rx_a = transport_a
             .start("127.0.0.1:0".parse::<SocketAddr>().unwrap())
             .await
             .unwrap();

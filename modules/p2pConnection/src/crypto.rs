@@ -148,13 +148,14 @@ impl EphemeralKeypair {
     /// 与对端临时公钥协商共享秘密，HKDF 派生为 32 字节 AES-256 会话密钥
     ///
     /// 双方调用顺序无关：`Hkdf(local_priv, remote_pub) == Hkdf(remote_priv, local_pub)`。
+    /// ikm 用双方公钥按字典序拼接（避免 alice 拼 alice||bob、bob 拼 bob||alice 导致 ikm 不同）。
     pub fn derive_session_key(&self, peer_pub: &[u8; EPHEMERAL_PUB_LEN]) -> [u8; SESSION_KEY_LEN] {
         let peer = X25519PublicKey::from(*peer_pub);
         let shared = self.secret.diffie_hellman(&peer);
-        // HKDF-SHA256：salt = 共享秘密（32B），ikm = 双方公钥拼接（防未知密钥共享攻击）
+        // HKDF-SHA256：salt = 共享秘密（32B），ikm = 双方公钥按字典序拼接（防未知密钥共享攻击 + 双方一致）
         let hk = Hkdf::<Sha256>::new(
             Some(shared.as_bytes()),
-            &concat_pubkeys(&self.public_bytes(), peer_pub),
+            &sorted_concat_pubkeys(&self.public_bytes(), peer_pub),
         );
         let mut okm = [0u8; SESSION_KEY_LEN];
         // expand 单次 32B，prk 长度足够，不会失败
@@ -164,12 +165,17 @@ impl EphemeralKeypair {
     }
 }
 
-/// 拼接双方临时公钥作为 HKDF ikm（顺序敏感：local || peer）
+/// 按字典序拼接双方临时公钥作为 HKDF ikm（双方一致，防未知密钥共享攻击）
 #[inline]
-fn concat_pubkeys(local: &[u8; EPHEMERAL_PUB_LEN], peer: &[u8; EPHEMERAL_PUB_LEN]) -> [u8; 64] {
+fn sorted_concat_pubkeys(a: &[u8; EPHEMERAL_PUB_LEN], b: &[u8; EPHEMERAL_PUB_LEN]) -> [u8; 64] {
     let mut out = [0u8; 64];
-    out[..EPHEMERAL_PUB_LEN].copy_from_slice(local);
-    out[EPHEMERAL_PUB_LEN..].copy_from_slice(peer);
+    if a <= b {
+        out[..EPHEMERAL_PUB_LEN].copy_from_slice(a);
+        out[EPHEMERAL_PUB_LEN..].copy_from_slice(b);
+    } else {
+        out[..EPHEMERAL_PUB_LEN].copy_from_slice(b);
+        out[EPHEMERAL_PUB_LEN..].copy_from_slice(a);
+    }
     out
 }
 
