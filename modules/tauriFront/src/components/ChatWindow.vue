@@ -27,6 +27,7 @@ import CompressionSheet from './chat/CompressionSheet.vue'
 import ToolSheet from './chat/ToolSheet.vue'
 import WorkingDirSheet from './chat/WorkingDirSheet.vue'
 import ImagePreview from './chat/ImagePreview.vue'
+import AskUserDialog from './chat/AskUserDialog.vue'
 import { CHAT_STORE_KEY } from '../composables/chat/store'
 import { useAutoScroll } from '../composables/chat/useAutoScroll'
 import { useChatCore } from '../composables/chat/useChatCore'
@@ -35,6 +36,7 @@ import { useTaskMode } from '../composables/chat/useTaskMode'
 import { useMessageMenu } from '../composables/chat/useMessageMenu'
 import { useChatCompression } from '../composables/chat/useChatCompression'
 import { useImagePreview } from '../composables/chat/useImagePreview'
+import { useAskUser } from '../composables/chat/useAskUser'
 import { useChatEvents } from '../composables/chat/useChatEvents'
 
 // 后端名称(来自 App.vue 顶部模型药丸)+ 当前会话 id(由 App 传入)
@@ -58,6 +60,7 @@ const taskMode = useTaskMode(core)
 const menu = useMessageMenu(core, streaming)
 const compression = useChatCompression(core)
 const preview = useImagePreview()
+const askUser = useAskUser(core, streaming)
 
 // ---------- 会话级生命周期钩子 ----------
 // loadConversation 在会话切换/清空时调用 resetAll,加载成功后调用 afterLoad。
@@ -66,6 +69,7 @@ core.setSessionHooks({
     streaming.resetAll()
     taskMode.resetAll()
     menu.resetAll()
+    askUser.resetAll()
     // 注:压缩浮窗状态按原行为不随会话切换重置,
     // compressExistingState 由事件层 watch conversationId → loadExistingCompression 更新。
   },
@@ -84,7 +88,7 @@ core.setSessionHooks({
 useChatEvents(core, streaming, compression, taskMode)
 
 // ---------- 共享 store 下发 ----------
-provide(CHAT_STORE_KEY, { core, streaming, compression, taskMode, menu, preview, autoscroll })
+provide(CHAT_STORE_KEY, { core, streaming, compression, taskMode, menu, preview, autoscroll, askUser })
 
 // ---------- 卸载清理 ----------
 onUnmounted(() => {
@@ -154,6 +158,9 @@ const { msgMenuVisible, msgMenuPosition, msgMenuItems, onMsgMenuSelect } = menu
     <CompressionSheet />
     <ToolSheet />
     <WorkingDirSheet />
+
+    <!-- AI 询问用户对话框(ask_user 工具触发) -->
+    <AskUserDialog />
 
     <!-- 图片全屏预览(Teleport 到 body) -->
     <ImagePreview />

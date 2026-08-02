@@ -1068,3 +1068,28 @@ export interface TodoNode {
   summary?: string | null
   children: TodoNode[]
 }
+
+// =========================================================
+// ask_user 工具（与后端 BusEvent::AskUser 对齐）
+// =========================================================
+
+/** ask_user 工具的选项 */
+export interface AskUserOption {
+  label: string
+  description: string
+}
+
+/** ask_user 工具的单个问题 */
+export interface AskUserQuestion {
+  question: string
+  header: string
+  options: AskUserOption[]
+  multi_select?: boolean
+}
+
+/** agent 向用户提问事件（ask-user 事件 payload，BusEvent::AskUser） */
+export interface AskUserPayload {
+  kind: 'ask_user'
+  conversation_id: string
+  questions: AskUserQuestion[]
+}

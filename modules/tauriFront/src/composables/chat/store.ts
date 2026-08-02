@@ -15,6 +15,7 @@ import type { useTaskMode } from './useTaskMode'
 import type { useMessageMenu } from './useMessageMenu'
 import type { useImagePreview } from './useImagePreview'
 import type { useAutoScroll } from './useAutoScroll'
+import type { useAskUser } from './useAskUser'
 
 export interface ChatStore {
   core: ReturnType<typeof useChatCore>
@@ -24,6 +25,7 @@ export interface ChatStore {
   menu: ReturnType<typeof useMessageMenu>
   preview: ReturnType<typeof useImagePreview>
   autoscroll: ReturnType<typeof useAutoScroll>
+  askUser: ReturnType<typeof useAskUser>
 }
 
 export const CHAT_STORE_KEY: InjectionKey<ChatStore> = Symbol('chat-store')
