@@ -9,6 +9,7 @@
  */
 import { computed, ref } from 'vue'
 import { animate } from 'animejs'
+import Icon from '../Icon.vue'
 
 export type IconButtonSize = 'sm' | 'md' | 'lg'
 export type IconButtonVariant = 'normal' | 'primary' | 'danger'
@@ -43,13 +44,16 @@ const emit = defineEmits<{
 }>()
 
 const classes = computed(() => {
-  const list: string[] = ['icon-btn']
-  list.push(`icon-btn--${props.size}`)
-  list.push(`icon-btn--${props.variant}`)
-  if (props.container) list.push('icon-btn--container')
-  if (props.disabled) list.push('icon-btn--disabled')
-  return list
-})
+    const list: string[] = ['icon-btn']
+    list.push(`icon-btn--${props.size}`)
+    list.push(`icon-btn--${props.variant}`)
+    if (props.container) list.push('icon-btn--container')
+    if (props.disabled) list.push('icon-btn--disabled')
+    return list
+  })
+
+  // icon 为语义名时按按钮尺寸渲染对应图标（与 <Icon> 组件同源）
+  const iconSize = computed(() => (props.size === 'sm' ? 16 : props.size === 'lg' ? 22 : 18))
 
 function onClick(ev: MouseEvent) {
   if (props.disabled) return
@@ -108,9 +112,11 @@ function onPointerLeave() {
     @pointerup="onPointerUp"
     @pointerleave="onPointerLeave"
   >
-    <span class="icon-btn-glyph">
-      <slot>{{ icon }}</slot>
-    </span>
+      <span class="icon-btn-glyph">
+        <slot>
+          <Icon v-if="icon" :name="icon" :size="iconSize" />
+        </slot>
+      </span>
     <span v-if="dot" class="icon-btn-dot" aria-hidden="true"></span>
   </button>
 </template>

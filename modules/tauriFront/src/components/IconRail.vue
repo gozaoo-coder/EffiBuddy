@@ -11,15 +11,18 @@ import { ref } from 'vue'
 import Icon from './Icon.vue'
 import { Menu, type MenuItemOption } from './basic'
 
-export type RailView = 'chat' | 'model-config' | 'automation' | 'skills' | 'plugins'
+export type RailView = 'chat' | 'model-config' | 'automation' | 'skills' | 'plugins' | 'pool'
 
 const props = withDefaults(defineProps<{
   /** 当前激活的视图（用于高亮对应图标） */
   active?: RailView | ''
   /** P2P 待配对请求计数（>0 时在 P2P 按钮上显示气泡角标） */
   pendingPairCount?: number
+  /** 交流池活跃条目数（>0 时在交流池按钮上显示气泡角标） */
+  poolActiveCount?: number
 }>(), {
   pendingPairCount: 0,
+  poolActiveCount: 0,
 })
 
 const emit = defineEmits<{
@@ -34,6 +37,7 @@ const emit = defineEmits<{
 // 主栏图标（纯 icon，无文字）
 const railItems: { key: RailView; label: string; icon: string }[] = [
   { key: 'chat', label: '聊天', icon: 'chat' },
+  { key: 'pool', label: 'Agent 交流池', icon: 'merge' },
   { key: 'model-config', label: '模型配置', icon: 'robot' },
   { key: 'automation', label: '自动化', icon: 'alarm' },
   { key: 'skills', label: '技能', icon: 'bolt' },
@@ -99,6 +103,14 @@ function select(view: RailView) {
       >
         <Icon :name="item.icon" :size="21" />
         <span class="rail-tip">{{ item.label }}</span>
+        <!-- 交流池活跃条目角标（仅 pool 项；>0 时显示） -->
+        <span
+          v-if="item.key === 'pool' && props.poolActiveCount > 0"
+          :key="props.poolActiveCount"
+          class="pool-badge"
+        >
+          {{ props.poolActiveCount > 99 ? '99+' : props.poolActiveCount }}
+        </span>
       </button>
 
       <!-- ASR 语音转写（弹出菜单选择录入/上传/历史） -->
@@ -279,6 +291,26 @@ function select(view: RailView) {
   padding: 0 4px;
   border-radius: var(--radius-full);
   background: #f56565;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  border: 2px solid var(--bg-2);
+  animation: badge-pop 300ms var(--ease-decelerated);
+  pointer-events: none;
+}
+
+/* 交流池活跃条目角标（与 p2p-badge 同样 pointer-events: none，点击穿透到父按钮） */
+.pool-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--primary, #4a7eff);
   color: white;
   font-size: 10px;
   font-weight: 600;

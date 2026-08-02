@@ -6,6 +6,7 @@
  * - 显示已选数量 / 全选切换
  * - 批量移动到文件夹（内嵌 Menu 展示文件夹列表）
  * - 批量自动归类
+ * - 批量删除（danger 样式，触发确认对话框由父组件处理）
  * - 退出多选模式
  *
  * 动画管线设计（全流程）：
@@ -13,6 +14,8 @@
  * - 离开：向底部滑出（translateY 0→100%）+ fade，240ms ease-inOut(2)
  * - 中断处理：anime.js onComplete 驱动 Vue done()，过渡中被 v-if 移除也能平滑退出
  * - 父级 padding 同步过渡：选中栏出现时父级底部留出空间，避免遮挡最后一条 item
+ * - 删除按钮 hover：CSS background/color 过渡（150ms），天然处理中断
+ * - 删除进行中：loader 图标 CSS rotate 无限旋转，按钮禁用避免重复触发
  */
 import { ref, computed } from 'vue'
 import { Icon, Menu, type MenuItemOption } from './basic'
@@ -29,6 +32,8 @@ const props = defineProps<{
   folders: ConvFolder[]
   /** 批量自动归类进行中 */
   batchClassifying: boolean
+  /** 批量删除进行中 */
+  batchDeleting: boolean
 }>()
 
 const emit = defineEmits<{
@@ -36,6 +41,7 @@ const emit = defineEmits<{
   (e: 'clear'): void
   (e: 'batch-move', folderId: string | null): void
   (e: 'batch-auto-classify'): void
+  (e: 'batch-delete'): void
   (e: 'cancel'): void
 }>()
 
@@ -85,7 +91,10 @@ function onMoveMenuSelect(item: MenuItemOption) {
   emit('batch-move', folderId)
 }
 
-const canBatch = computed(() => props.selectedCount > 0 && !props.batchClassifying)
+/** 批量操作可用：有选中且不在任何批量操作进行中 */
+const canBatch = computed(
+  () => props.selectedCount > 0 && !props.batchClassifying && !props.batchDeleting,
+)
 </script>
 
 <template>
@@ -106,30 +115,49 @@ const canBatch = computed(() => props.selectedCount > 0 && !props.batchClassifyi
 
       <!-- 右侧：批量操作 -->
       <div class="hr-sel-actions">
+        <!-- 主操作组：移动 / 自动归类 / 删除 -->
+        <div class="hr-sel-group">
+          <button
+            ref="moveBtnRef"
+            type="button"
+            class="hr-sel-btn"
+            title="移动到文件夹"
+            aria-label="移动到文件夹"
+            :disabled="!canBatch"
+            @click="onMoveClick"
+          >
+            <Icon name="move" :size="15" />
+          </button>
+          <button
+            type="button"
+            class="hr-sel-btn hr-sel-btn--primary"
+            :title="batchClassifying ? '归类中…' : '自动归类'"
+            :aria-label="batchClassifying ? '归类中' : '自动归类'"
+            :disabled="!canBatch"
+            @click="emit('batch-auto-classify')"
+          >
+            <Icon :name="batchClassifying ? 'loader' : 'sparkles'" :size="15" :class="{ spin: batchClassifying }" />
+          </button>
+          <button
+            type="button"
+            class="hr-sel-btn hr-sel-btn--danger"
+            :title="batchDeleting ? '删除中…' : '删除'"
+            :aria-label="batchDeleting ? '删除中' : '删除'"
+            :disabled="!canBatch"
+            @click="emit('batch-delete')"
+          >
+            <Icon :name="batchDeleting ? 'loader' : 'delete'" :size="15" :class="{ spin: batchDeleting }" />
+          </button>
+        </div>
+        <!-- 分隔线：主操作 ↔ 退出 -->
+        <span class="hr-sel-divider" aria-hidden="true"></span>
+        <!-- 退出多选 -->
         <button
-          ref="moveBtnRef"
           type="button"
           class="hr-sel-btn"
-          :disabled="!canBatch"
-          @click="onMoveClick"
-        >
-          <Icon name="move" :size="14" />
-          <span>移动</span>
-        </button>
-        <button
-          type="button"
-          class="hr-sel-btn hr-sel-btn--primary"
-          :disabled="!canBatch"
-          @click="emit('batch-auto-classify')"
-        >
-          <Icon :name="batchClassifying ? 'loader' : 'sparkles'" :size="14" :class="{ spin: batchClassifying }" />
-          <span>{{ batchClassifying ? '归类中' : '自动归类' }}</span>
-        </button>
-        <button
-          type="button"
-          class="hr-sel-btn hr-sel-btn--icon"
           title="退出多选"
           aria-label="退出多选"
+          :disabled="batchClassifying || batchDeleting"
           @click="emit('cancel')"
         >
           <Icon name="close" :size="16" />
@@ -227,26 +255,50 @@ const canBatch = computed(() => props.selectedCount > 0 && !props.batchClassifyi
 .hr-sel-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
+/* 主操作分组：紧凑排列 */
+.hr-sel-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+/* 竖向分隔线：主操作 ↔ 退出 */
+.hr-sel-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+/* 统一图标按钮：正方形 28x28 */
 .hr-sel-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: 12px;
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
 }
 
 .hr-sel-btn:hover:not(:disabled) {
-  background: var(--card);
+  background: var(--card-2);
+}
+
+.hr-sel-btn:active:not(:disabled) {
+  transform: scale(0.94);
 }
 
 .hr-sel-btn:disabled {
@@ -259,11 +311,16 @@ const canBatch = computed(() => props.selectedCount > 0 && !props.batchClassifyi
 }
 
 .hr-sel-btn--primary:hover:not(:disabled) {
-  background: rgba(74, 126, 255, 0.1);
+  background: rgba(74, 126, 255, 0.12);
 }
 
-.hr-sel-btn--icon {
-  padding: 5px;
+/* danger 删除按钮：红色文字 + 红色淡背景 hover */
+.hr-sel-btn--danger {
+  color: var(--danger);
+}
+
+.hr-sel-btn--danger:hover:not(:disabled) {
+  background: rgba(255, 92, 92, 0.12);
 }
 
 /* loader 旋转 */

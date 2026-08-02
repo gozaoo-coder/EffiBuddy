@@ -7,9 +7,9 @@ import TabBar from './components/TabBar.vue'
 import TabContent from './components/TabContent.vue'
 import IconRail, { type RailView } from './components/IconRail.vue'
 import HistoryRail from './components/HistoryRail.vue'
+import AgentPoolRail from './components/AgentPoolRail.vue'
 import P2pPanel from './components/P2pPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import ModelConfigPanel from './components/ModelConfigPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import PluginPanel from './components/PluginPanel.vue'
 import ClawHubPanel from './components/ClawHubPanel.vue'
@@ -21,6 +21,7 @@ import { applyThemeNow } from './composables/useTheme'
 import { useTabs, NEW_CHAT_TAB_ID } from './composables/useTabs'
 import { useAsr } from './composables/useAsr'
 import { useP2p } from './composables/useP2p'
+import { useAgentPool } from './composables/useAgentPool'
 import { useAnimeTransition } from './composables/useAnimeTransition'
 import type { ConversationTitlePayload } from './types'
 
@@ -28,6 +29,8 @@ const agentBackend = ref('')
 // 各功能面板状态（均从 IconRail 触发）
 // P2P 设备 composable：pendingCount 驱动角标、refreshAll 在面板打开时刷新数据
 const { pendingCount, refreshAll } = useP2p()
+// 交流池 composable：activeCount 驱动 IconRail 角标（实时刷新由 composable 内部事件监听负责）
+const { activeCount: poolActiveCount } = useAgentPool()
 const p2pPanelOpen = ref(false)
 const settingsOpen = ref(false)
 const scheduledTasksOpen = ref(false)
@@ -43,6 +46,12 @@ const { toast } = useToast()
 // modelSettingsView 记录当前选中的二级子项（'' 表示未选中，显示默认介绍页）
 const modelConfigOpen = ref(false)
 const modelSettingsView = ref<ModelSettingsView | ''>('')
+
+// ============= 交流池模式 =============
+// poolOpen 为 true 时左2栏从 HistoryRail 切换为 AgentPoolRail（展示运行时
+// agent 公共会话交流池的全部条目，含状态 / 任务 / 研究报告 / @ 消息）。
+// 与 modelConfigOpen 互斥（同一时刻左2栏只能展示一种二级栏目）。
+const poolOpen = ref(false)
 
 // ============= 多页签状态 =============
 const { tabs, openTab, activate, updateTab, findChatByConversationId, getActive } = useTabs()
@@ -68,6 +77,7 @@ let unlistens: UnlistenFn[] = []
 // IconRail 当前高亮视图：有面板打开时高亮对应图标，否则默认聊天
 const activeView = computed<RailView | ''>(() => {
   if (modelConfigOpen.value) return 'model-config'
+  if (poolOpen.value) return 'pool'
   if (scheduledTasksOpen.value) return 'automation'
   if (skillPanelOpen.value) return 'skills'
   if (pluginPanelOpen.value) return 'plugins'
@@ -79,6 +89,7 @@ function closeAllPanels() {
   settingsOpen.value = false
   modelConfigOpen.value = false
   modelSettingsView.value = ''
+  poolOpen.value = false
   scheduledTasksOpen.value = false
   skillPanelOpen.value = false
   pluginPanelOpen.value = false
@@ -95,12 +106,25 @@ function onRailSelect(view: RailView) {
     case 'chat':
       closeAllPanels()
       break
+    case 'pool':
+      // 切换交流池模式：再次点击关闭
+      if (poolOpen.value) {
+        poolOpen.value = false
+      } else {
+        // 关闭其它二级栏目（互斥）
+        modelConfigOpen.value = false
+        modelSettingsView.value = ''
+        poolOpen.value = true
+      }
+      break
     case 'model-config':
       // 切换模型配置模式：再次点击关闭
       if (modelConfigOpen.value) {
         modelConfigOpen.value = false
         modelSettingsView.value = ''
       } else {
+        // 关闭其它二级栏目（互斥）
+        poolOpen.value = false
         modelConfigOpen.value = true
         // 默认进入 AI服务商 子项
         modelSettingsView.value = 'providers'
@@ -123,7 +147,7 @@ function onModelSettingsSelect(view: ModelSettingsView) {
   modelSettingsView.value = view
 }
 
-// 模型配置面板保存后的回调（兼容旧 ModelConfigPanel 的 saved 事件）
+// 模型配置面板保存后的回调（model-settings 各子面板的 saved 事件）
 function onModelSettingsSaved() {
   void refreshBackend()
 }
@@ -291,6 +315,7 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       <IconRail
         :active="activeView"
         :pending-pair-count="pendingCount"
+        :pool-active-count="poolActiveCount"
         @select="onRailSelect"
         @open-clawhub="openClawHub"
         @open-p2p="openP2pPanel"
@@ -298,20 +323,25 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
         @open-asr="openAsrTab"
       />
 
-      <!-- 第二栏：根据模式切换（聊天模式=HistoryRail / 模型配置模式=ModelSettingsRail） -->
+      <!-- 第二栏：根据模式切换（聊天=HistoryRail / 交流池=AgentPoolRail / 模型配置=ModelSettingsRail）
+           三态互斥：poolOpen 与 modelConfigOpen 不会同时为 true（onRailSelect 中保证） -->
       <Transition :css="false" @enter="onSecondRailEnter" @leave="onSecondRailLeave" mode="out-in">
+        <AgentPoolRail
+          v-if="poolOpen"
+          key="pool"
+        />
+        <ModelSettingsRail
+          v-else-if="modelConfigOpen"
+          key="model-settings"
+          :active="modelSettingsView"
+          @select="onModelSettingsSelect"
+        />
         <HistoryRail
-          v-if="!modelConfigOpen"
+          v-else
           key="history"
           ref="historyRailRef"
           :active-id="activeChatConvId"
           @select-conversation="handleSelectConv"
-        />
-        <ModelSettingsRail
-          v-else
-          key="model-settings"
-          :active="modelSettingsView"
-          @select="onModelSettingsSelect"
         />
       </Transition>
 
@@ -347,13 +377,6 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       :open="settingsOpen"
       :conversation-id="activeChatConvId"
       @close="settingsOpen = false"
-    />
-
-    <!-- 旧版 ModelConfigPanel 保留作为弹窗回退入口（暂不渲染，避免重复） -->
-    <ModelConfigPanel
-      :open="false"
-      @close="() => {}"
-      @saved="onModelSettingsSaved"
     />
 
     <SkillPanel

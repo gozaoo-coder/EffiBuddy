@@ -116,6 +116,14 @@ export interface AutoClassifyResult {
   folder: string | null
 }
 
+/** 批量删除会话结果：成功数 + 失败 id 列表 */
+export interface BatchDeleteResult {
+  /** 成功删除的会话数 */
+  success: number
+  /** 删除失败的会话 id（IO 错误等） */
+  failed: string[]
+}
+
 export interface Conversation {
   id: string
   messages: Message[]
@@ -139,6 +147,49 @@ export interface ConversationMeta {
   message_count: number
 }
 
+// =========================================================
+// 运行时 agent 公共会话交流池（与 agent::agent_pool::* 对齐）
+// =========================================================
+
+// PoolStatus: #[serde(rename_all = "snake_case")]
+export type PoolStatus = 'in_progress' | 'waiting' | 'completed'
+
+// PoolKind: #[serde(rename_all = "snake_case")]
+export type PoolKind = 'main' | 'sub_agent'
+
+// AtStatus: #[serde(rename_all = "snake_case")]
+export type AtStatus = 'pending' | 'answered'
+
+/** @ 消息（目标 agent 收件箱条目） */
+export interface AtMessage {
+  at_id: string
+  from: string
+  from_name: string
+  question: string
+  status: AtStatus
+  reply?: string | null
+  created_at: number
+  answered_at?: number | null
+}
+
+/** 交流池条目：一个长任务的完整登记信息（含收件箱 @ 消息） */
+export interface PoolEntry {
+  agent_id: string
+  conversation_id: string
+  name: string
+  kind: PoolKind
+  task: string
+  research_report: string
+  todo_summary: string
+  status: PoolStatus
+  last_report: string
+  created_at: number
+  updated_at: number
+  inbox: AtMessage[]
+}
+
+/** 会话在交流池中的运行状态（由该会话的全部条目聚合而来） */
+export type ConversationPoolStatus = 'idle' | 'in_progress' | 'waiting' | 'completed'
 export type BackendKind = 'mock' | 'openai'
 
 // =========================================================
@@ -168,6 +219,17 @@ export interface PickedFile {
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
+export interface CompressionSettings {
+  /** 自动压缩阈值（百分比 1-100）：上下文使用达到该比例时自动触发压缩 */
+  threshold_percent: number
+  /** 是否启用自动压缩（达到阈值时在回复完成后自动压缩历史） */
+  auto_compress: boolean
+  /** 是否压缩工具调用 / 工具返回 */
+  compress_tool_calls: boolean
+  /** 是否逐句对话压缩 */
+  compress_sentences: boolean
+}
+
 export interface AgentConfig {
   backend: BackendKind
   api_key: string
@@ -189,6 +251,8 @@ export interface AgentConfig {
   asr_stream_model_id?: string | null
   /** 音频转文字模型 id（文件转写）；None 时回退到 asr_config 原生配置 */
   asr_transcribe_model_id?: string | null
+  /** 会话历史压缩机制设置 */
+  compression_settings?: CompressionSettings
 }
 
 export interface AvailableModel {
@@ -477,6 +541,46 @@ export interface SubAgentRecord {
   /** 完成时间 */
   finishedAt: number | null
 }
+
+// 后台命令会话（shell_session_* 工具 + 前端底栏便签）
+// 会话事件（shell-session-event）payload：后端 ShellSessionManager 实时推送
+// started → command / output → exited | error
+export interface ShellSessionEventPayload {
+  /** 当前对话 conversation_id（前端据此过滤） */
+  conversation_id: string
+  /** 会话短 ID（如 a1b2） */
+  session_id: string
+  kind: 'started' | 'command' | 'output' | 'exited' | 'error'
+  /** 输出行 / 命令文本 / 错误信息 / 退出码 */
+  content: string
+  is_error: boolean
+}
+
+// 命令会话列表条目（list_shell_sessions 命令返回）
+export interface ShellSessionInfo {
+  id: string
+  name: string
+  shell: string
+  cwd: string
+  running: boolean
+  last_command: string
+  last_active: number
+}
+
+// 前端底栏便签聚合后的会话记录
+export interface ShellSessionRecord {
+  id: string
+  name: string
+  shell: string
+  cwd: string
+  running: boolean
+  last_command: string
+  /** 会话日志行（含命令标记） */
+  lines: { kind: 'cmd' | 'out' | 'err' | 'info'; text: string }[]
+  /** 最近活跃时间戳 */
+  last_active: number
+}
+
 
 // =========================================================
 // 技能 & 定时任务（与 core::{Skill, ScheduledTask} 对齐）
@@ -929,4 +1033,38 @@ export interface ServiceRoleMeta {
     | 'compression_model_id'
     | 'asr_stream_model_id'
     | 'asr_transcribe_model_id'
+      | 'active_image_gen_model_id'
+      | 'title_model_id'
+      | 'compression_model_id'
+      | 'asr_stream_model_id'
+      | 'asr_transcribe_model_id'
+}
+
+// =========================================================
+// 每会话 todoTree（与 agent::todo_store / tools::todo_write 对齐）
+// =========================================================
+
+export type TodoPriority = 'high' | 'medium' | 'low'
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+/** 单个待办项（扁平列表，parent_id 指针表达树形层级） */
+export interface TodoItem {
+  id: string
+  content: string
+  priority: TodoPriority
+  status: TodoStatus
+  /** 仅在 completed 时可选填入的完成总结 */
+  summary?: string | null
+  /** 父任务 id；null/缺省表示根任务，Some(id) 表示该 id 任务的子任务 */
+  parent_id?: string | null
+}
+
+/** 树形节点（前端由 TodoItem 列表还原） */
+export interface TodoNode {
+  id: string
+  content: string
+  priority: TodoPriority
+  status: TodoStatus
+  summary?: string | null
+  children: TodoNode[]
 }

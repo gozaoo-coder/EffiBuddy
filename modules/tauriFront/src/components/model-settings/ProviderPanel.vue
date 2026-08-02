@@ -14,7 +14,7 @@
  * - 保存/删除/激活模型通过 invoke 调用后端命令，刷新 config 后视图同步
  * - emit saved 通知父组件（ModelSettingsContent → App.vue）刷新后端信息
  *
- * 与旧 ModelConfigPanel 的差异：
+ * 设计特点（与弹窗版模型配置的区别）：
  * - 不再使用 BindSheet 弹窗，直接嵌入主内容区
  * - 按 ModelKind 分组的 folder 替代原 SegmentedButton 的 list/form 切换
  * - 表单作为子组件 ProviderModelForm 独立，减少本文件复杂度

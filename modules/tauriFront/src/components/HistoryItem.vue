@@ -32,8 +32,11 @@ const props = defineProps<{
   classifying: boolean
   /** 是否显示置顶标记 */
   showPin: boolean
+  /** 交流池运行状态（进行中/等待中；null = 无活跃长任务，不展示） */
+  poolStatus?: 'in_progress' | 'waiting' | 'completed' | null
+  /** 交流池登记的任务描述（badge hover 提示） */
+  poolTask?: string
 }>()
-
 const emit = defineEmits<{
   (e: 'click'): void
   (e: 'contextmenu', ev: MouseEvent): void
@@ -124,13 +127,21 @@ function formatRelativeTime(ts: number): string {
     <!-- 置顶标记 -->
     <span v-if="showPin" class="hr-item-pin"><Icon name="pin" :size="13" /></span>
 
-    <!-- 主体内容 -->
-    <div class="hr-item-main">
-      <div class="hr-item-title">{{ displayTitle }}</div>
-      <div class="hr-item-meta">
-        {{ conv.message_count }} 条 · {{ formatRelativeTime(conv.updated_at) }}
+      <div class="hr-item-main">
+        <div class="hr-item-title">{{ displayTitle }}</div>
+        <div class="hr-item-meta">
+          {{ conv.message_count }} 条 · {{ formatRelativeTime(conv.updated_at) }}
+          <span
+            v-if="poolStatus"
+            class="hr-item-status"
+            :class="`status-${poolStatus}`"
+            :title="poolTask ? `交流池任务：${poolTask}` : '交流池运行状态'"
+          >
+            <span class="hr-item-status-dot" />
+            {{ poolStatus === 'in_progress' ? '进行中' : poolStatus === 'waiting' ? '等待中' : '已完成' }}
+          </span>
+        </div>
       </div>
-    </div>
 
     <!-- 操作按钮（多选模式下隐藏） -->
     <div v-if="!selectionMode" class="hr-item-actions">
@@ -261,7 +272,49 @@ function formatRelativeTime(ts: number): string {
   margin-top: 2px;
 }
 
-/* 操作按钮组 */
+/* 交流池运行状态 badge */
+.hr-item-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.hr-item-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.hr-item-status.status-in_progress .hr-item-status-dot {
+  background: var(--primary, #4a7eff);
+  animation: hr-item-pulse 1.2s ease-in-out infinite;
+}
+
+.hr-item-status.status-waiting .hr-item-status-dot {
+  background: var(--warn, #f5a623);
+}
+
+.hr-item-status.status-completed .hr-item-status-dot {
+  background: var(--success, #34c759);
+}
+
+@keyframes hr-item-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* 操作按钮容器 */
 .hr-item-actions {
   display: flex;
   align-items: center;

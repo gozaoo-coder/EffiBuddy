@@ -18,14 +18,15 @@
  * - 单条会话项渲染 → HistoryItem 组件
  * - 批量操作浮动栏 → HistorySelectionBar 组件
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { Button, Menu, Dialog, Icon, useToast, type MenuItemOption } from './basic'
 import HistoryItem from './HistoryItem.vue'
 import HistorySelectionBar from './HistorySelectionBar.vue'
 import { useConversationFolders, UNCLASSIFIED } from '../composables/useConversationFolders'
 import { useHistorySelection } from '../composables/useHistorySelection'
-import type { ConversationMeta, SearchHit, AutoClassifyResult } from '../types'
+import type { ConversationMeta, SearchHit, AutoClassifyResult, BatchDeleteResult, PoolEntry, PoolStatus } from '../types'
 
 const props = defineProps<{
   /** 当前选中的会话 id，用于列表高亮 */
@@ -48,6 +49,44 @@ const pinnedConversations = computed(() => conversations.value.filter((c) => c.p
 const regularConversations = computed(() => conversations.value.filter((c) => !c.pinned))
 const pinnedCollapsed = ref(false)
 
+// ---------- 交流池运行状态（会话列表展示各会话 agent 工作状态） ----------
+const poolEntries = ref<PoolEntry[]>([])
+
+/** 每个会话聚合后的交流池状态：in_progress > waiting；已完成不展示 */
+const poolStatusByConv = computed<Map<string, PoolStatus>>(() => {
+  const m = new Map<string, PoolStatus>()
+  for (const e of poolEntries.value) {
+    if (e.status === 'completed') continue
+    const cur = m.get(e.conversation_id)
+    if (!cur || (cur === 'waiting' && e.status === 'in_progress')) {
+      m.set(e.conversation_id, e.status)
+    }
+  }
+  return m
+})
+
+/** 会话的活跃交流池状态（无条目 / 全部完成 → null，不展示 badge） */
+function poolStatusFor(id: string): PoolStatus | null {
+  return poolStatusByConv.value.get(id) ?? null
+}
+
+/** 会话在交流池登记的最新任务描述（badge hover 提示） */
+function poolTaskFor(id: string): string {
+  const e = poolEntries.value.find(
+    (x) => x.conversation_id === id && x.status !== 'completed',
+  )
+  return e ? e.task : ''
+}
+
+async function loadPool() {
+  try {
+    poolEntries.value = await invoke<PoolEntry[]>('list_pool')
+  } catch {
+    poolEntries.value = []
+  }
+}
+
+let unlistenPool: (() => void) | null = null
 // ---------- 文件夹（composable） ----------
 const {
   folders,
@@ -428,6 +467,71 @@ async function confirmDelete() {
   }
 }
 
+// ---------- 批量删除 ----------
+const batchDeleteDialogVisible = ref(false)
+const batchDeleting = ref(false)
+
+/** 多选模式下点击删除按钮：打开确认对话框 */
+function onBatchDeleteClick() {
+  if (selectedCount.value === 0 || batchDeleting.value) return
+  batchDeleteDialogVisible.value = true
+}
+
+/**
+ * 批量删除确认：
+ * 1. 调用 delete_conversations 一次性删除所有选中会话（后端单次锁清理交流池）
+ * 2. 清理本地文件夹映射（批量移出）
+ * 3. 刷新会话列表
+ * 4. 若当前激活会话在删除集合中，切换到第一条剩余会话
+ * 5. 根据成功/失败数提示；最后退出多选模式（驱动选中栏滑出动画）
+ */
+async function confirmBatchDelete() {
+  const ids = getSelectedArray()
+  if (ids.length === 0) {
+    batchDeleteDialogVisible.value = false
+    return
+  }
+  batchDeleting.value = true
+  try {
+    const result = await invoke<BatchDeleteResult>('delete_conversations', { ids })
+    // 仅清理成功删除的会话的文件夹映射；失败的会话仍保留其文件夹归属
+    const failedSet = new Set(result.failed)
+    const successIds = ids.filter((id) => !failedSet.has(id))
+    if (successIds.length > 0) {
+      batchMoveConvToFolder(successIds, null)
+    }
+    await refresh()
+
+    // 当前激活会话已被删除（不在列表中）→ 切换到第一条剩余会话
+    // 若激活会话删除失败仍存在，则保持不变
+    if (props.activeId && !conversations.value.some((c) => c.id === props.activeId)) {
+      const nextConv = conversations.value[0] ?? null
+      emit('select-conversation', nextConv?.id ?? null, nextConv?.title ?? null)
+    }
+
+    // 结果提示
+    const failedCount = result.failed.length
+    if (failedCount === 0) {
+      toast({ content: `已删除 ${result.success} 条会话`, type: 'success' })
+    } else if (result.success === 0) {
+      toast({ content: `删除失败（${failedCount} 条）`, type: 'error' })
+    } else {
+      toast({
+        content: `成功删除 ${result.success} 条，失败 ${failedCount} 条`,
+        type: 'warn',
+      })
+    }
+
+    // 退出多选模式（HistorySelectionBar 触发滑出动画）
+    exitSelectionMode()
+  } catch (e) {
+    toast({ content: `批量删除失败：${e}`, type: 'error' })
+  } finally {
+    batchDeleting.value = false
+    batchDeleteDialogVisible.value = false
+  }
+}
+
 // ---------- 新建聊天 ----------
 function onNewChat() {
   emit('select-conversation', null)
@@ -483,6 +587,17 @@ async function refresh() {
 onMounted(() => {
   loadFolders()
   refresh()
+  loadPool()
+  // 交流池更新（pool_report / pool_at / pool_reply 后）→ 刷新会话列表运行状态
+  listen<{ conversation_id: string }>('agent-pool-updated', () => {
+    loadPool()
+  }).then((fn) => {
+    unlistenPool = fn
+  })
+})
+
+onUnmounted(() => {
+  unlistenPool?.()
 })
 
 defineExpose({ refresh })
@@ -508,6 +623,9 @@ defineExpose({ refresh })
         placeholder="搜索会话..."
       />
     </div>
+
+    <!-- 顶部固定区与滚动主体的分割线 -->
+    <div class="hr-divider hr-divider--top" />
 
     <!-- 列表主体 -->
     <div class="hr-body" :class="{ 'has-sel-bar': selectionMode }">
@@ -558,6 +676,8 @@ defineExpose({ refresh })
               :selected="isSelected(c.id)"
               :classifying="classifyingIds.has(c.id)"
               :show-pin="true"
+              :pool-status="poolStatusFor(c.id)"
+              :pool-task="poolTaskFor(c.id)"
               @click="emit('select-conversation', c.id, c.title)"
               @contextmenu="onItemContextMenu($event, c)"
               @pointerdown="onItemPointerDown($event, c)"
@@ -570,6 +690,9 @@ defineExpose({ refresh })
             />
           </template>
         </template>
+
+        <!-- 置顶与文件夹分组的分割线（仅有置顶时显示） -->
+        <div v-if="pinnedConversations.length > 0" class="hr-divider" />
 
         <!-- 文件夹分组 -->
         <div class="hr-folder-head">
@@ -622,6 +745,9 @@ defineExpose({ refresh })
           用文件夹给会话分类，右键会话即可移动
         </div>
 
+        <!-- 文件夹分组与会话列表的分割线 -->
+        <div class="hr-divider" />
+
         <!-- 会话列表标题栏 -->
         <div class="hr-list-header">
           <span class="hr-folder-icon"><Icon name="folder" :size="13" /></span>
@@ -658,7 +784,9 @@ defineExpose({ refresh })
           :selection-mode="selectionMode"
           :selected="isSelected(c.id)"
           :classifying="classifyingIds.has(c.id)"
-          :show-pin="false"
+            :show-pin="false"
+            :pool-status="poolStatusFor(c.id)"
+            :pool-task="poolTaskFor(c.id)"
           @click="emit('select-conversation', c.id, c.title)"
           @contextmenu="onItemContextMenu($event, c)"
           @pointerdown="onItemPointerDown($event, c)"
@@ -691,10 +819,12 @@ defineExpose({ refresh })
       :all-selected="allSelected"
       :folders="folders"
       :batch-classifying="batchClassifying"
+      :batch-deleting="batchDeleting"
       @select-all="onSelectAllToggle"
       @clear="selectNone"
       @batch-move="onBatchMove"
       @batch-auto-classify="onBatchAutoClassify"
+      @batch-delete="onBatchDeleteClick"
       @cancel="onExitSelection"
     />
 
@@ -748,7 +878,7 @@ defineExpose({ refresh })
       />
     </Dialog>
 
-    <!-- 删除确认对话框 -->
+    <!-- 删除确认对话框（单条） -->
     <Dialog
       v-model:visible="deleteDialogVisible"
       title="删除会话"
@@ -759,6 +889,21 @@ defineExpose({ refresh })
       @confirm="confirmDelete"
     >
       <div class="hr-dialog-delete">确定删除该会话？此操作不可撤销。</div>
+    </Dialog>
+
+    <!-- 批量删除确认对话框（多选模式） -->
+    <Dialog
+      v-model:visible="batchDeleteDialogVisible"
+      title="批量删除会话"
+      danger
+      confirm-text="删除"
+      cancel-text="取消"
+      :close-on-click-overlay="false"
+      @confirm="confirmBatchDelete"
+    >
+      <div class="hr-dialog-delete">
+        确定删除选中的 <strong>{{ selectedCount }}</strong> 条会话？此操作不可撤销。
+      </div>
     </Dialog>
   </aside>
 </template>
@@ -819,6 +964,26 @@ defineExpose({ refresh })
 
 .hr-search-input::placeholder {
   color: var(--muted);
+}
+
+/* 分割线：统一细线，配合 opacity 过渡以适配折叠/搜索模式切换 */
+.hr-divider {
+  height: 1px;
+  background: var(--border);
+  flex-shrink: 0;
+  opacity: 1;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* 顶部固定区与滚动主体之间的分割线（位于 .hr-body 之外，左右对齐搜索框 12px） */
+.hr-divider--top {
+  margin: 0 12px;
+}
+
+/* 主体内部分割线（位于 .hr-body 内，body 已有 8px 横向 padding，故 4px 即可对齐 12px）
+   上方 4px + 前置 item padding-bottom(7~9px) ≈ 11~13px，与下方标题栏 padding-top(10~12px) 对称 */
+.hr-body > .hr-divider {
+  margin: 4px 4px 0;
 }
 
 /* 主体滚动区 */
