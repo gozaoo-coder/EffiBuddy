@@ -24,6 +24,11 @@ modules/tauriFront/src-tauri/gen/
 # agent工具
 .pi/
 
+# 桌面端本地元数据（主题命名、会话源等，随会话自动生成）
+.reasonix/
+
+# 功能测试笔记（一次性产物，不入库）
+功能测试*.md
 
 # 系统
 .DS_Store
