@@ -34,14 +34,15 @@ pub(crate) async fn get_active_model_info(
                 id: m.id.clone(),
                 name: m.model_name.clone(),
                 context_window_tokens: m.context_window_tokens,
+                pricing: m.pricing,
             });
         }
     }
-    // 无激活模型时回退到运行时配置
     Ok(ActiveModelInfo {
         id: String::new(),
         name: config.model_name.clone(),
         context_window_tokens: Some(128000),
+        pricing: None,
     })
 }
 

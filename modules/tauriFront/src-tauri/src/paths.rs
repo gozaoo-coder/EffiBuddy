@@ -36,6 +36,20 @@ pub(crate) fn compression_dir() -> std::path::PathBuf {
     appdata_root().join("compression")
 }
 
+/// 每会话 todoTree 存储目录：`<appdata>/todos`
+/// 每会话 todoTree 存储目录：`<appdata>/todos`
+pub(crate) fn todo_dir() -> std::path::PathBuf {
+    appdata_root().join("todos")
+}
+
+/// 运行时 agent 公共会话交流池存储目录：`<appdata>/pool`
+///
+/// `AgentPoolStore::new` 在此目录下维护 `pool.json`，存放全部会话 agent 与
+/// 子 agent 的长任务登记状态与收件箱 @ 消息（崩溃重启后可恢复）。
+pub(crate) fn pool_dir() -> std::path::PathBuf {
+    appdata_root().join("pool")
+}
+
 /// 定时任务存储目录：`<appdata>/schedules`
 pub(crate) fn schedules_dir() -> std::path::PathBuf {
     appdata_root().join("schedules")

@@ -31,6 +31,7 @@ use tokio::sync::RwLock;
 use super::image_gen::ImageGenConfig;
 use super::model_manager::ModelManagerHandle;
 use crate::agent::{AgentStreamItem, ChatAgent};
+use crate::agent_pool::{AgentPoolStore, PoolEntry, PoolKind, PoolStatus};
 use crate::rig_agent::RigAgent;
 
 /// 嵌套深度上限：主 agent=0，子 agent=1，孙 agent=2，再深拒绝
@@ -55,16 +56,20 @@ pub struct SubAgentKit {
     pub skills_dir: Option<PathBuf>,
     pub plugin_store: Option<PluginStore>,
     pub compression_store: Option<CompressionStore>,
-    /// 模型配置共享句柄（解析子 agent 使用的模型）
+    /// 模型管理句柄（子 agent 也可管理模型列表）
     /// `Arc<RwLock<Arc<AgentConfig>>>` 快照模式：读 clone Arc（廉价）
     pub model_config: Arc<RwLock<Arc<AgentConfig>>>,
     /// 模型管理句柄（子 agent 也可管理模型列表）
     pub model_manager: Option<Arc<ModelManagerHandle>>,
+    /// 运行时 agent 公共会话交流池存储：子 agent 创建时自动加入交流池并按
+    /// 长任务周期上报状态（开始→进行中，完成→已完成）。None 时不参与交流池。
+    pub agent_pool: Option<AgentPoolStore>,
 }
 
 /// 子 agent 事件：经 Tauri 层转发为前端 `sub-agent-event`
 #[derive(Debug, Clone, Serialize)]
 pub struct SubAgentEvent {
+    /// 主会话 conversation_id（前端据此过滤）
     /// 主会话 conversation_id（前端据此过滤）
     pub conversation_id: String,
     /// 子 agent 会话 id
@@ -169,8 +174,18 @@ pub struct SubAgentManager {
 }
 
 /// 当前 Unix 毫秒时间戳
+/// 当前 Unix 毫秒时间戳
 fn now_ms() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
+}
+
+/// 截断文本到指定字符数（子 agent 交流池上报用，避免研究报告过长撑爆 pool.json）
+fn truncate_for_pool(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push('…');
+    }
+    out
 }
 
 impl SubAgentManager {
@@ -244,7 +259,7 @@ impl SubAgentManager {
                     .name
                     .clone()
                     .unwrap_or_else(|| format!("子 agent · {}", &session_id[3..8]));
-                let (agent, model_name) = self.build_sub_agent(args, &name, depth).await?;
+                  let (agent, model_name) = self.build_sub_agent(args, &name, &session_id, depth).await?;
                 let session = SubAgentSession {
                     name: name.clone(),
                     model_name: model_name.clone(),
@@ -258,6 +273,34 @@ impl SubAgentManager {
             }
         };
 
+        // 2.0. 子 agent 自动登记交流池：长任务开始 → 进行中（若有交流池）
+        //     agent_id = sa:<session_id>，conversation_id = 主会话 id，kind = SubAgent。
+        //     其他 agent 可 pool_lookup 到本子任务、pool_at @ 询问状态。
+        if let Some(pool) = &self.kit.agent_pool {
+            let conv_id = self
+                .kit
+                .current_conversation_id
+                .read()
+                .await
+                .clone()
+                .unwrap_or_default();
+            pool.register(PoolEntry {
+                agent_id: PoolEntry::sub_agent_id(&session_id),
+                conversation_id: conv_id,
+                name: name.clone(),
+                kind: PoolKind::SubAgent,
+                task: args.prompt.clone(),
+                research_report: String::new(),
+                todo_summary: String::new(),
+                status: PoolStatus::InProgress,
+                last_report: format!("子 agent「{name}」已开始执行任务"),
+                created_at: 0,
+                updated_at: 0,
+                inbox: Vec::new(),
+            })
+            .await
+            .ok();
+        }
         // 2. 追加用户消息并推送 started
         messages.push(Message::new(
             uuid::Uuid::new_v4().to_string(),
@@ -351,6 +394,22 @@ impl SubAgentManager {
                         true,
                     )
                     .await;
+                    // 交流池：出错也上报为已完成（last_report 记录错误摘要，避免卡在"进行中"）
+                    if let Some(pool) = &self.kit.agent_pool {
+                        pool.update(
+                            &PoolEntry::sub_agent_id(&session_id),
+                            args.prompt.clone(),
+                            String::new(),
+                            String::new(),
+                            PoolStatus::Completed,
+                            format!(
+                                "子 agent「{name}」执行出错：{}",
+                                truncate_for_pool(&err_text, 300)
+                            ),
+                        )
+                        .await
+                        .ok();
+                    }
                     return Err(SubAgentError(format!(
                         "子 agent「{name}」执行失败: {err_text}"
                     )));
@@ -380,6 +439,26 @@ impl SubAgentManager {
             }
         }
 
+        // 4.5. 子 agent 自动上报交流池：完成 → 已完成（最终文本摘要作为 last_report）
+        if let Some(pool) = &self.kit.agent_pool {
+            let summary = truncate_for_pool(&full, 500);
+            let report = if summary.is_empty() {
+                format!("子 agent「{name}」已执行完成")
+            } else {
+                format!("子 agent「{name}」已完成：{summary}")
+            };
+            pool.update(
+                &PoolEntry::sub_agent_id(&session_id),
+                args.prompt.clone(),
+                String::new(),
+                String::new(),
+                PoolStatus::Completed,
+                report,
+            )
+            .await
+            .ok();
+        }
+
         // 5. 推送完成事件并返回最终文本
         self.emit(SubAgentEventKind::Done, &ctx, full.clone(), "", "", false)
             .await;
@@ -388,11 +467,13 @@ impl SubAgentManager {
         ))
     }
 
-    /// 构造子 agent 的 RigAgent：解析模型配置 + 组装 preamble + 应用工具白名单
+    /// 构造子 agent 的 RigAgent：解析模型配置 + 组装 preamble + 应用工具白名单 +
+    /// 注入运行时 agent 公共会话交流池（agent_pool + 子 agent 身份）。
     async fn build_sub_agent(
         self: &Arc<Self>,
         args: &SubAgentArgs,
         name: &str,
+        session_id: &str,
         depth: usize,
     ) -> Result<(Arc<RigAgent>, String), SubAgentError> {
         let (api_key, base_url, model_name, model_tools) = {
@@ -406,7 +487,7 @@ impl SubAgentManager {
         let allowlist = args.tools.clone();
         let enable_tools = !tools_disabled && model_tools;
 
-        let agent = RigAgent::from_key(
+        let mut agent = RigAgent::from_key(
             &api_key,
             &base_url,
             &model_name,
@@ -436,6 +517,12 @@ impl SubAgentManager {
                 .map(|s| s.to_string())
                 .collect(),
         );
+
+        // 注入运行时 agent 公共会话交流池：子 agent 拥有 pool_* 工具与
+        // `[Agent 交流池]` 上下文段，agent_id 按 `sa:<session_id>` 推导，显示名用子 agent 名。
+        agent = agent
+            .with_agent_pool(self.kit.agent_pool.clone())
+            .with_pool_sub_agent_identity(Some(session_id.to_string()), Some(name.to_string()));
 
         Ok((Arc::new(agent), model_name))
     }
@@ -659,6 +746,7 @@ mod tests {
             compression_store: None,
             model_config: Arc::new(RwLock::new(Arc::new(AgentConfig::default()))),
             model_manager: None,
+            agent_pool: None,
         };
         let manager = Arc::new(SubAgentManager::new(kit, Box::new(|_| {})));
         // 直接推高深度计数模拟嵌套
@@ -702,6 +790,7 @@ mod tests {
             compression_store: None,
             model_config: Arc::new(RwLock::new(Arc::new(AgentConfig::default()))),
             model_manager: None,
+            agent_pool: None,
         };
         let manager = Arc::new(SubAgentManager::new(kit, Box::new(|_| {})));
         let r = manager
@@ -746,6 +835,7 @@ mod tests {
             compression_store: None,
             model_config: Arc::new(RwLock::new(Arc::new(config))),
             model_manager: None,
+            agent_pool: None,
         };
         let manager = Arc::new(SubAgentManager::new(kit, Box::new(|_| {})));
         let r = manager

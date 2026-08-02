@@ -146,10 +146,50 @@ pub struct AgentConfig {
     /// ASR（语音转写）配置
     #[serde(default)]
     pub asr_config: AsrConfig,
+    /// 会话历史压缩机制设置（阈值自动压缩 / 工具调用压缩 / 逐句压缩）
+    #[serde(default)]
+    pub compression_settings: CompressionSettings,
     pub backend: BackendKind,
     /// 是否启用工具调用（RAG 索引等）
     pub enable_tools: bool,
     pub theme: ThemeMode,
+}
+
+/// 会话历史压缩机制设置
+///
+/// 控制压缩触发的阈值、自动压缩开关，以及压缩时对工具调用 / 逐句对话的处理方式。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionSettings {
+    /// 自动压缩阈值（百分比 1-100）：上下文使用达到该比例时自动触发压缩
+    #[serde(default = "default_compress_threshold")]
+    pub threshold_percent: u32,
+    /// 是否启用自动压缩（达到阈值时在回复完成后自动压缩历史）
+    #[serde(default = "default_true")]
+    pub auto_compress: bool,
+    /// 是否压缩工具调用 / 工具返回（长会话中工具调用占大量 token）
+    #[serde(default = "default_true")]
+    pub compress_tool_calls: bool,
+    /// 是否逐句对话压缩（按消息粒度 Keep/Hide/Replace 精简长句）
+    #[serde(default = "default_true")]
+    pub compress_sentences: bool,
+}
+
+fn default_compress_threshold() -> u32 {
+    80
+}
+fn default_true() -> bool {
+    true
+}
+
+impl Default for CompressionSettings {
+    fn default() -> Self {
+        Self {
+            threshold_percent: default_compress_threshold(),
+            auto_compress: true,
+            compress_tool_calls: true,
+            compress_sentences: true,
+        }
+    }
 }
 
 impl Default for AgentConfig {
@@ -168,12 +208,14 @@ impl Default for AgentConfig {
             asr_stream_model_id: None,
             asr_transcribe_model_id: None,
             asr_config: AsrConfig::default(),
+            compression_settings: CompressionSettings::default(),
             backend: BackendKind::Mock,
             enable_tools: true,
             theme: ThemeMode::System,
-        }
-    }
+      }
+  }
 }
+
 
 impl AgentConfig {
     /// 判断当前配置是否可启动 RigAgent（backend=openai 且有 api_key）
@@ -458,6 +500,7 @@ mod tests {
             asr_stream_model_id: None,
             asr_transcribe_model_id: None,
             asr_config: AsrConfig::default(),
+            compression_settings: CompressionSettings::default(),
         };
         let s = serde_json::to_string(&c).unwrap();
         let back: AgentConfig = serde_json::from_str(&s).unwrap();

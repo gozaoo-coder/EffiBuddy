@@ -45,9 +45,73 @@ pub(crate) async fn delete_conversation(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
+    // 删除会话的同时清理其交流池条目（含子 agent），避免残留"进行中"状态
+    state
+        .agent_pool
+        .remove_by_conversation(&id)
+        .await
+        .map_err(|e| e.to_string())?;
     state.store.delete(&id).await.map_err(|e| e.to_string())
 }
 
+/// 批量删除会话结果：成功数 + 失败 id 列表（部分失败时前端据此提示）
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct BatchDeleteResult {
+    /// 成功删除的会话数
+    pub success: usize,
+    /// 删除失败的会话 id（IO 错误等，不短路其余删除）
+    pub failed: Vec<String>,
+}
+
+/// 批量删除多个会话。
+///
+/// 相比循环调用 `delete_conversation`：
+/// - 交流池清理：单次写锁 + 最多一次持久化（`remove_by_conversations`）
+/// - 会话文件删除：逐个执行但不短路，收集失败项继续删除剩余会话
+/// - 返回 `BatchDeleteResult`，前端据此展示「成功 N 条 / 失败 M 条」
+#[tauri::command]
+pub(crate) async fn delete_conversations(
+    state: tauri::State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<BatchDeleteResult, String> {
+    if ids.is_empty() {
+        return Ok(BatchDeleteResult {
+            success: 0,
+            failed: vec![],
+        });
+    }
+
+    // 1. 批量清理交流池条目（单次锁临界区）
+    state
+        .agent_pool
+        .remove_by_conversations(&ids)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 2. 逐个删除会话文件；不短路，收集失败项
+    let store = state.store.clone();
+    let mut success = 0usize;
+    // 预分配容量，多数情况下失败为 0
+    let mut failed = Vec::with_capacity(0);
+    for id in &ids {
+        match store.delete(id).await {
+            Ok(()) => success += 1,
+            Err(e) => {
+                tracing::warn!(conversation_id = %id, error = %e, "批量删除会话失败");
+                failed.push(id.clone());
+            }
+        }
+    }
+
+    tracing::info!(
+        total = ids.len(),
+        success,
+        failed = failed.len(),
+        "批量删除会话完成"
+    );
+
+    Ok(BatchDeleteResult { success, failed })
+}
 /// 重命名会话标题
 #[tauri::command]
 pub(crate) async fn rename_conversation(

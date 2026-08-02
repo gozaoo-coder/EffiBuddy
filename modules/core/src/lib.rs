@@ -27,12 +27,12 @@ pub mod storage;
 
 pub use clawhub::ClawHubClient;
 pub use compression::{
-    apply_compression, build_compression_prompt, parse_compression_response, CompressionAction,
-    CompressionState, CompressionStore,
+    apply_compression, build_compression_prompt, build_compression_prompt_with_settings,
+    parse_compression_response, CompressionAction, CompressionState, CompressionStore,
 };
 pub use config::{
-    builtin_presets, AgentConfig, AsrConfig, AsrProvider, AvailableModel, BackendKind, ModelKind,
-    ModelPricing, ProviderPreset, ThemeMode,
+    builtin_presets, AgentConfig, AsrConfig, AsrProvider, AvailableModel, BackendKind,
+    CompressionSettings, ModelKind, ModelPricing, ProviderPreset, ThemeMode,
 };
 pub use error::{CoreError, Result};
 pub use events::{BusEvent, EventBus};

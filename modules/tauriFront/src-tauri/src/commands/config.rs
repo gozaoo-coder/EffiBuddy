@@ -20,6 +20,8 @@ pub(crate) struct ActiveModelInfo {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) context_window_tokens: Option<u32>,
+    /// 当前激活模型的计费单价（元/百万 tokens）；未配置时为 None
+    pub(crate) pricing: Option<effisuite_core::ModelPricing>,
 }
 
 #[tauri::command]

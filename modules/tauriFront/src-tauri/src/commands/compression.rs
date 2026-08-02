@@ -7,7 +7,8 @@ use effisuite_agent::{
     call_compression_agent, call_compression_agent_stream, CompressionStreamItem,
 };
 use effisuite_core::{
-    build_compression_prompt, parse_compression_response, CompressionAction, CompressionState,
+    build_compression_prompt_with_settings, parse_compression_response, CompressionAction,
+    CompressionState,
 };
 use futures::StreamExt;
 use tauri::Emitter;
@@ -49,8 +50,9 @@ pub(crate) async fn compress_messages(
         return Err("未配置 api_key 或 backend 非 openai，无法调用压缩 agent".to_string());
     }
 
-    // 3. 构造压缩 prompt
-    let prompt = build_compression_prompt(&conv.messages);
+    // 3. 构造压缩 prompt（根据压缩机制设置调整指导语）
+    let prompt =
+        build_compression_prompt_with_settings(&conv.messages, &config.compression_settings);
 
     // 4. 调用压缩 agent（优先使用 compression_model_id，回退到 active_model_id）
     let (api_key, base_url, model_name) = config
@@ -215,9 +217,10 @@ pub(crate) async fn compress_messages_stream(
         return Err(msg);
     }
 
-    // 3. 构造压缩 prompt
+    // 3. 构造压缩 prompt（根据压缩机制设置调整指导语）
     emit_status("building_prompt", "正在构造压缩 prompt…");
-    let prompt = build_compression_prompt(&conv.messages);
+    let prompt =
+        build_compression_prompt_with_settings(&conv.messages, &config.compression_settings);
 
     // 4. 流式调用压缩 agent（优先使用 compression_model_id，回退到 active_model_id）
     emit_status("streaming", "压缩 agent 正在分析…");

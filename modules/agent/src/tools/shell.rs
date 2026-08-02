@@ -76,13 +76,16 @@ impl Tool for ShellTool {
             .unwrap_or_else(|| "未设置工作区，命令在进程工作目录执行".to_string());
         format!(
             "在本地执行 shell 命令并返回 stdout+stderr。跨平台：Windows 用 cmd /c，Unix 用 sh -c。\
-             默认超时 30 秒，输出截断到 8 KiB。\
-             可用于调用已安装的 CLI 工具，例如：\n\
-              - agent-reach: `agent-reach doctor`、`agent-reach install --env=auto --safe`、`opencli twitter search \"query\"`\n\
-              - browser-act: `browser-act browser list`、`browser-act fetch \"url\"`\n\
-              **Windows 环境提示**：cmd 没有 head/tail/findstr/grep 等 Unix 工具，\
-              可用 `powershell -Command` 执行复杂命令；中文输出乱码时可先 `chcp 65001`。\n\
-                注意：这是本地命令执行，请谨慎调用可能修改系统的命令。\n{cwd_hint}"
+              默认超时 30 秒，输出截断到 8 KiB。\
+              可用于调用已安装的 CLI 工具，例如：\n\
+               - agent-reach: `agent-reach doctor`、`agent-reach install --env=auto --safe`、`opencli twitter search \"query\"`\n\
+               - browser-act: `browser-act browser list`、`browser-act fetch \"url\"`\n\
+               **注意**：本工具一次性执行（每次新进程，不保留状态）。\
+               如需多步操作、保持工作目录、长任务或交互式命令，改用 shell_session_start +\
+               shell_session_send + shell_session_read（后台常驻会话，前端底栏可见）。\
+               **Windows 环境提示**：cmd 没有 head/tail/findstr/grep 等 Unix 工具，\
+               可用 `powershell -Command` 执行复杂命令；中文输出乱码时可先 `chcp 65001`。\n\
+                 注意：这是本地命令执行，请谨慎调用可能修改系统的命令。\n{cwd_hint}"
         )
     }
 

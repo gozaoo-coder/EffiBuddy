@@ -23,9 +23,10 @@
 use std::sync::Arc;
 
 use effisuite_agent::{
-    AsrService, ChatAgent, ImageGenConfig, ModelManagerHandle, SubAgentEvent, SubAgentKit,
-    SubAgentManager,
+    AsrService, ChatAgent, ImageGenConfig, ModelManagerHandle, ShellSessionEvent,
+    ShellSessionManager, SubAgentEvent, SubAgentKit, SubAgentManager,
 };
+use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
     AgentConfig, AsrStore, AsrSummaryIndex, CompressionStore, ConversationStore, EventBus,
@@ -131,9 +132,30 @@ pub fn run() {
         }
     };
 
+    // 每会话 todoTree 存储：与 agent 共享同一份 Arc，build_context_parts 每轮注入任务清单
+    let todo_store = match TodoStore::new(todo_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "TodoStore 初始化失败，回退到临时目录");
+            TodoStore::new(std::env::temp_dir().join("effisuite-todos"))
+                .expect("临时目录 TodoStore 必须成功")
+        }
+    };
     // 技能 RAG 索引：启动时从 SkillStore 全量重建，技能增删后由对应命令 rebuild
     let skill_index = Arc::new(effisuite_core::SkillIndex::new());
     let skills_root = skills_dir();
+
+    // 运行时 agent 公共会话交流池存储：跨会话长任务登记 / 状态上报 / 收件箱 @ 消息。
+    // 与主 agent、子 agent 共享同一份 Arc；pool.json 持久化，崩溃重启可恢复。
+    let agent_pool = match effisuite_agent::AgentPoolStore::new(pool_dir()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "AgentPoolStore 初始化失败，回退到临时目录");
+            effisuite_agent::AgentPoolStore::new(std::env::temp_dir().join("effisuite-pool"))
+                .expect("临时目录 AgentPoolStore 必须成功")
+        }
+    };
+
 
     // ===== 模型管理句柄 + 子 agent 管理器（注入 agent，供新工具使用） =====
     // 配置版本号：manage_model 工具修改配置后 bump，send_message 时懒重建 agent
@@ -179,12 +201,30 @@ pub fn run() {
             skills_dir: Some(skills_root.clone()),
             plugin_store: Some(plugin_store.clone()),
             compression_store: Some(compression_store.clone()),
-            model_config: Arc::clone(&config_lock),
-            model_manager: Some(Arc::clone(&model_manager)),
-        },
-        emitter,
-    ));
+              model_config: Arc::clone(&config_lock),
+              model_manager: Some(Arc::clone(&model_manager)),
+              agent_pool: Some(agent_pool.clone()),
+          },
+          emitter,
+      ));
 
+    // 后台命令会话管理器：agent 的 shell_session_* 工具启用/交互常驻 cmd/sh 会话。
+    // 会话事件（started/command/output/exited/error）经 emitter 转发为前端
+    // shell-session-event，前端在 main-content 底栏以便签展示 AI 工作状态。
+    let shell_emitter_slot: Arc<std::sync::Mutex<Option<tauri::AppHandle>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let shell_emitter = {
+        let slot = Arc::clone(&shell_emitter_slot);
+        Box::new(move |ev: &ShellSessionEvent| {
+            if let Some(handle) = slot.lock().unwrap().as_ref() {
+                let _ = handle.emit("shell-session-event", ev);
+            }
+        })
+    };
+    let shell_sessions = Arc::new(ShellSessionManager::new(
+        shell_emitter,
+        Arc::clone(&current_conversation_id),
+    ));
     // 事件总线：ASR 服务与 P2P 均需注入，须在 build_agent 之前构造
     let event_bus = EventBus::new(64);
 
@@ -229,11 +269,14 @@ pub fn run() {
         skills_root.clone(),
         plugin_store.clone(),
         compression_store.clone(),
+        todo_store.clone(),
         Arc::clone(&model_manager),
         Arc::clone(&sub_agents),
         Arc::clone(&asr_service),
-        p2p.clone(),
-    );
+          p2p.clone(),
+          Arc::clone(&shell_sessions),
+          agent_pool.clone(),
+      );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
         Err(e) => {
@@ -254,6 +297,7 @@ pub fn run() {
         schedule_store,
         plugin_store,
         compression_store,
+        todo_store,
         clawhub: clawhub_client,
         agent: Arc::clone(&agent_lock),
         store: Arc::clone(&store),
@@ -271,9 +315,11 @@ pub fn run() {
         agent_rev,
         model_manager,
         sub_agents,
-        sub_agent_records,
-        asr_service,
-    };
+          sub_agent_records,
+          asr_service,
+          shell_sessions,
+          agent_pool,
+      };
 
     tauri::Builder::default()
         .manage(state)
@@ -283,6 +329,8 @@ pub fn run() {
         .setup(move |app| {
             // 回填子 agent 事件发射器所需的 AppHandle（setup 阶段才可用）
             *emitter_slot.lock().unwrap() = Some(app.handle().clone());
+            // 回填命令会话事件发射器所需的 AppHandle
+            *shell_emitter_slot.lock().unwrap() = Some(app.handle().clone());
 
             // 订阅内部事件总线，转发为前端 Tauri 事件。
             // 使用 tauri::async_runtime::spawn 以兼容桌面与 mobile 运行时。
@@ -415,6 +463,7 @@ pub fn run() {
             get_conversation,
             create_conversation,
             delete_conversation,
+            delete_conversations,
             rename_conversation,
             toggle_pin_conversation,
             search_conversations,
@@ -430,11 +479,17 @@ pub fn run() {
             clear_pinned_memories,
             // 上下文注入预览
             get_context_preview,
+            // 上下文注入预览
+            get_context_preview,
             // 消息压缩
             compress_messages,
             compress_messages_stream,
             get_compression_state,
             clear_compression_state,
+            // 每会话 todoTree
+            get_todo_tree,
+            save_todo_tree,
+            clear_todo_tree,
             // chat
             send_message,
             send_message_stream,
@@ -500,7 +555,14 @@ pub fn run() {
             asr_get_config,
             asr_update_config,
             asr_generate_summary,
-        ])
+              // 后台命令会话（前端底栏便签）
+              list_shell_sessions,
+              kill_shell_session,
+              // 运行时 agent 公共会话交流池（会话列表运行状态）
+              list_pool,
+              get_pool_entry,
+              clear_pool,
+            ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

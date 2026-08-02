@@ -63,6 +63,7 @@ pub enum TodoStatus {
 }
 
 /// 单个待办项
+/// 单个待办项
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
     pub id: String,
@@ -72,6 +73,10 @@ pub struct TodoItem {
     /// 仅在标记为 completed 时可选填入的完成总结
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// 父任务 id（树形层级）。None 表示根任务；Some(id) 表示该 id 任务的子任务。
+    /// 旧数据无此字段时默认 None（根任务），保证向后兼容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 /// 工具参数
@@ -90,10 +95,15 @@ pub struct TodoWriteError(String);
 
 /// 工具结构体 - 持有共享的待办列表
 ///
-/// 单字段结构体；`Arc<RwLock<..>>` 内部已是堆上的共享句柄，
-/// 拷贝仅增加一个引用计数（原子递增），无堆分配。
+/// `Arc<RwLock<..>>` 内部已是堆上的共享句柄，拷贝仅增加一个引用计数（原子递增）。
 pub struct TodoWriteTool {
     todos: Arc<RwLock<Vec<TodoItem>>>,
+    /// 可选：每会话 TodoStore 句柄，写入后同步持久化到当前会话
+    store: Option<crate::todo_store::TodoStore>,
+    /// 可选：当前会话 id 句柄（与 RigAgent 共享），持久化 key 用
+    conv_id: Option<Arc<RwLock<Option<String>>>>,
+    /// 可选：事件总线，写入后 emit todo-tree-updated 通知前端刷新
+    event_bus: Option<Arc<effisuite_core::EventBus>>,
 }
 
 impl TodoWriteTool {
@@ -101,12 +111,34 @@ impl TodoWriteTool {
     pub fn new() -> Self {
         Self {
             todos: Arc::new(RwLock::new(Vec::new())),
+            store: None,
+            conv_id: None,
+            event_bus: None,
         }
     }
 
     /// 用已存在的共享句柄构造（多组件共享同一份列表时使用）
     pub fn with_state(todos: Arc<RwLock<Vec<TodoItem>>>) -> Self {
-        Self { todos }
+        Self {
+            todos,
+            store: None,
+            conv_id: None,
+            event_bus: None,
+        }
+    }
+
+    /// 注入每会话持久化存储 + 会话 id 句柄 + 事件总线：
+    /// 每次写入后同步持久化到当前会话，并通知前端刷新 todoTree 卡片。
+    pub fn with_persistence(
+        mut self,
+        store: crate::todo_store::TodoStore,
+        conv_id: Arc<RwLock<Option<String>>>,
+        event_bus: Option<Arc<effisuite_core::EventBus>>,
+    ) -> Self {
+        self.store = Some(store);
+        self.conv_id = Some(conv_id);
+        self.event_bus = event_bus;
+        self
     }
 
     /// 返回内部共享句柄的克隆，供 agent 把当前待办注入 prompt 上下文
@@ -129,14 +161,17 @@ impl Tool for TodoWriteTool {
     type Output = String;
 
     fn description(&self) -> String {
-        "创建、更新并管理结构化待办列表，用于跟踪复杂多步任务的进度。\
-         支持 merge 模式：merge=false（默认）替换整个列表；merge=true 按 id 合并\
-         （已有 id 更新字段，新 id 追加，未提及的 id 保留）。\
-         任务有 pending / in_progress / completed 三种状态，同一时间只允许一个 in_progress\
-         （多个时自动只保留第一个）。列表按状态（in_progress > pending > completed）\
-         和优先级（high > medium > low）自动排序。\
-         调用时机：开始一个 3 步以上的复杂任务时先建立清单；每完成一步或转移焦点时更新状态；\
-         不要为简单任务建清单。".to_string()
+        "创建、更新并管理结构化待办列表（todoTree），用于跟踪复杂多步任务的进度。\
+          支持 merge 模式：merge=false（默认）替换整个列表；merge=true 按 id 合并\
+          （已有 id 更新字段，新 id 追加，未提及的 id 保留）。\
+          支持树形层级：parent_id 为 None 表示根任务；Some(id) 表示该 id 任务的子任务，\
+          子任务排在父任务之后作为从属。\
+          任务有 pending / in_progress / completed 三种状态，同一时间只允许一个 in_progress\
+          （多个时自动只保留第一个）。列表按状态（in_progress > pending > completed）\
+          和优先级（high > medium > low）自动排序。\
+          调用时机：开始一个 3 步以上的复杂任务时先建立清单；每完成一步或转移焦点时更新状态；\
+          不要为简单任务建清单。该清单会永久保存在本会话上下文中，每轮对话都会注入。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -170,6 +205,10 @@ impl Tool for TodoWriteTool {
                             "summary": {
                                 "type": "string",
                                 "description": "可选；仅在 status=completed 时显示的完成总结"
+                            },
+                            "parent_id": {
+                                "type": "string",
+                                "description": "可选；父任务 id。None/缺省表示根任务（平行或顺序执行），Some(id) 表示作为该 id 任务的子任务（从属）"
                             }
                         },
                         "required": ["id", "content", "priority", "status"]
@@ -217,7 +256,36 @@ impl Tool for TodoWriteTool {
             format_todos(&*guard)
         };
 
+        // 3. 持久化到当前会话（每会话 todoTree）+ 通知前端刷新
+        //    持久化失败仅记录日志，不影响工具主流程（agent 仍可继续任务）。
+        self.persist().await;
+
         Ok(out)
+    }
+}
+
+impl TodoWriteTool {
+    /// 把当前内存清单持久化到当前会话的 todoTree 存储，并通知前端刷新。
+    ///
+    /// - 无 store 或当前无会话 id 时静默跳过（与旧的纯内存模式兼容）
+    /// - 事件总线存在时 emit `todo-tree-updated`，前端据此刷新右栏 todoTree 卡片
+    async fn persist(&self) {
+        let Some(store) = &self.store else { return };
+        let Some(conv_handle) = &self.conv_id else { return };
+        let conv_id = match conv_handle.read().await.as_deref() {
+            Some(id) => id.to_string(),
+            None => return,
+        };
+        let snapshot = self.todos.read().await.clone();
+        if let Err(e) = store.save(&conv_id, &snapshot).await {
+            tracing::warn!(error = %e, conversation_id = %conv_id, "持久化 todoTree 失败");
+            return;
+        }
+        if let Some(bus) = &self.event_bus {
+            bus.publish(effisuite_core::BusEvent::TodoTreeUpdated {
+                conversation_id: conv_id,
+            });
+        }
     }
 }
 
@@ -414,6 +482,7 @@ mod tests {
             priority: p,
             status: s,
             summary: None,
+            parent_id: None,
         }
     }
 
@@ -469,6 +538,7 @@ mod tests {
                     priority: TodoPriority::High,
                     status: TodoStatus::Completed,
                     summary: Some("已完成A".to_string()),
+                    parent_id: None,
                 }],
                 merge: Some(true),
             })
@@ -591,6 +661,7 @@ mod tests {
                     priority: TodoPriority::High,
                     status: TodoStatus::Pending,
                     summary: Some("不该出现的总结".to_string()),
+                    parent_id: None,
                 }],
                 merge: Some(false),
             })
@@ -609,6 +680,7 @@ mod tests {
                     priority: TodoPriority::High,
                     status: TodoStatus::Completed,
                     summary: Some("已完成的总结".to_string()),
+                    parent_id: None,
                 }],
                 merge: Some(true),
             })

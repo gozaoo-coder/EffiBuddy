@@ -26,9 +26,12 @@ pub struct ContextPreview {
     pub memory_section: String,
     /// `[可用技能]` 段格式化字符串（含头部说明），空表示无技能自动注入
     pub skill_section: String,
+    /// `[当前任务清单]` 段格式化字符串（含头部说明），空表示该会话无任务
+    pub todo_section: String,
+    /// `[Agent 交流池]` 段格式化字符串（含头部说明），空表示交流池未启用
+    pub pool_section: String,
     /// `[当前对话最近]` 段格式化字符串（含头部说明），空表示无历史
     pub history_section: String,
-    /// 当前用户问题文本（最后一条 user 消息）
     pub current_question: String,
     /// 拼装后的完整 prompt（与实际发给 LLM 的内容一致）
     pub full_prompt: String,

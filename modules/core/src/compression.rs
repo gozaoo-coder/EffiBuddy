@@ -19,7 +19,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::{CoreError, Message, Result, Role};
+use crate::{CoreError, Message, Result, Role, CompressionSettings};
 
 /// `/` 在文件名中的转义序列（与 [`crate::PluginStore`] 一致）
 const SLUG_SEP: &str = "__";
@@ -316,6 +316,18 @@ pub fn apply_compression(messages: &[Message], state: &CompressionState) -> Vec<
 /// 做决策（用户原始需求明确包含"用户语义表述混乱"的替换场景，故不能只喂 assistant 消息）。
 /// 最后一条用户消息标注为"当前问题"，提示压缩 agent 不要对其输出 act。
 pub fn build_compression_prompt(messages: &[Message]) -> String {
+    build_compression_prompt_with_settings(messages, &CompressionSettings::default())
+}
+
+/// 构造发送给压缩 agent 的 prompt，并附带压缩机制设置（阈值 / 工具调用压缩 / 逐句压缩）。
+///
+/// 与 [`build_compression_prompt`] 相同，额外根据设置调整给压缩 agent 的指导语：
+/// - `compress_tool_calls=false`：要求保留工具调用 / 工具返回详情（不压缩工具类消息）
+/// - `compress_sentences=false`：要求保留逐句原文（不压缩普通对话长句）
+pub fn build_compression_prompt_with_settings(
+    messages: &[Message],
+    settings: &CompressionSettings,
+) -> String {
     // 找到最后一条用户消息位置（与 build_context_parts 一致的"当前问题"定义）
     let last_user_idx = messages
         .iter()
@@ -342,7 +354,14 @@ pub fn build_compression_prompt(messages: &[Message]) -> String {
         s.push_str(&m.content);
         s.push('\n');
     }
-    s.push_str("\n请按照规定的 XML 格式输出压缩决策。不需要压缩的消息可以不输出 act。");
+    s.push_str("\n请按照规定的 XML 格式输出压缩决策。不需要压缩的消息可以不输出 act。\n");
+    // 压缩机制指导语：根据用户设置决定对工具调用 / 逐句对话的处理
+    if !settings.compress_tool_calls {
+        s.push_str("注意：用户关闭了\"工具调用压缩\"，工具调用与工具返回相关的助手消息请保持原样，不要隐藏或替换。\n");
+    }
+    if !settings.compress_sentences {
+        s.push_str("注意：用户关闭了\"逐句压缩\"，普通对话消息请保持原样，仅可压缩工具类消息。\n");
+    }
     s
 }
 

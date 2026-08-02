@@ -6,7 +6,8 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use effisuite_agent::{ChatAgent, AsrService, ImageGenConfig, ModelManagerHandle, SubAgentManager};
+use effisuite_agent::{AsrService, ChatAgent, ImageGenConfig, ModelManagerHandle, SubAgentManager};
+use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
     AgentConfig, CompressionStore, ConversationStore, EventBus, MemoryIndex, PinnedMemoryStore,
@@ -33,6 +34,13 @@ pub struct AppState {
     /// 消息压缩状态存储（PathBuf+Arc，4 usize），与 agent 共享同一份 Arc
     /// 存放每会话的 Keep/Hide/Replace 决策，build_context_parts 据此压缩历史段
     pub compression_store: CompressionStore,
+    /// 每会话 todoTree 存储（PathBuf+Arc，4 usize），与 agent 共享同一份 Arc
+    /// 存放每会话的任务树，build_context_parts 每轮注入 `[当前任务清单]`
+    pub todo_store: TodoStore,
+    /// 运行时 agent 公共会话交流池存储（PathBuf+Arc，4 usize），与 agent / 子 agent
+    /// 共享同一份 Arc：跨会话长任务登记、状态上报、收件箱 @ 消息（pool.json 持久化）。
+    /// Tauri 命令层据此提供会话列表运行状态查询，会话删除时联动清理。
+    pub agent_pool: effisuite_agent::AgentPoolStore,
     /// ClawHub 客户端（Clone 廉价，内部 Arc<reqwest::Client>）
     pub clawhub: ClawHubClient,
     /// 可热替换的 agent：RwLock 写少读多，内层 Arc 让 async 命令可跨 await 持有
@@ -76,7 +84,12 @@ pub struct AppState {
         Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>>,
     /// ASR 语音转写服务句柄（火山引擎/千问），注入 agent 启用 ASR 工具，
     /// 亦供 Tauri 命令层直接调用流式录音 API。
+    /// ASR 语音转写服务句柄（火山引擎/千问），注入 agent 启用 ASR 工具，
+    /// 亦供 Tauri 命令层直接调用流式录音 API。
     pub asr_service: Arc<AsrService>,
+    /// 后台命令会话管理器：agent 的 shell_session_* 工具据此启用/交互常驻 cmd/sh 会话，
+    /// 亦供 Tauri 命令层（list_shell_sessions / kill_shell_session）给前端底栏便签用。
+    pub shell_sessions: Arc<effisuite_agent::ShellSessionManager>,
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。

@@ -76,6 +76,14 @@ pub enum BusEvent {
     AsrRecordUpdated {
         record_id: String,
     },
+    /// 会话 todoTree 更新（todo_write 工具写入后），前端据此刷新右栏 todoTree 卡片
+    TodoTreeUpdated {
+        conversation_id: String,
+    },
+    /// 交流池更新（pool_report / pool_at / pool_reply 后），前端据此刷新会话列表运行状态
+    AgentPoolUpdated {
+        conversation_id: String,
+    },
 }
 
 /// 事件总线句柄，可被廉价 clone（broadcast 内部已是 Arc 共享）

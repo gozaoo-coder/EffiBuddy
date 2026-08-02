@@ -14,9 +14,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use effisuite_agent::{
-    AsrService, ChatAgent, ImageGenConfig, MockAgent, OpenAIEmbeddingProvider, RigAgent,
-    DEFAULT_EMBEDDING_MODEL,
+    AgentPoolStore, AsrService, ChatAgent, ImageGenConfig, MockAgent, OpenAIEmbeddingProvider,
+    RigAgent, ShellSessionManager, DEFAULT_EMBEDDING_MODEL,
 };
+use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
     AgentConfig, BackendKind, CompressionStore, ConversationStore, MemoryIndex, Message,
@@ -57,11 +58,14 @@ pub(crate) fn build_agent(
     skills_dir: std::path::PathBuf,
     plugin_store: PluginStore,
     compression_store: CompressionStore,
+    todo_store: TodoStore,
     model_manager: Arc<effisuite_agent::ModelManagerHandle>,
     sub_agents: Arc<effisuite_agent::SubAgentManager>,
     asr_service: Arc<AsrService>,
     remote_task_dispatcher: Arc<dyn RemoteTaskDispatcher>,
-) -> Arc<dyn ChatAgent> {
+    shell_sessions: Arc<ShellSessionManager>,
+    agent_pool: AgentPoolStore,
+  ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
             match RigAgent::from_key(
@@ -88,8 +92,11 @@ pub(crate) fn build_agent(
             ) {
                 Ok(agent) => Arc::new(
                     agent
+                        .with_todo_store(Some(todo_store))
                         .with_asr_service(Some(asr_service))
-                        .with_remote_task_dispatcher(Some(remote_task_dispatcher)),
+                        .with_remote_task_dispatcher(Some(remote_task_dispatcher))
+                        .with_shell_sessions(Some(shell_sessions))
+                        .with_agent_pool(Some(agent_pool)),
                 ),
                 Err(e) => {
                     tracing::warn!(error = %e, "RigAgent 构造失败，回退到 MockAgent");
@@ -126,14 +133,16 @@ pub(crate) fn build_agent_from_state(
         skills_dir(),
         state.plugin_store.clone(),
         state.compression_store.clone(),
+        state.todo_store.clone(),
         Arc::clone(&state.model_manager),
         Arc::clone(&state.sub_agents),
-        Arc::clone(&state.asr_service),
-        dispatcher,
-    )
-}
+          Arc::clone(&state.asr_service),
+          dispatcher,
+          Arc::clone(&state.shell_sessions),
+          state.agent_pool.clone(),
+      )
+  }
 
-/// 同步 image_gen_config 句柄到当前配置快照。
 /// 在 set_config / ensure_agent_synced 路径中复用。
 #[inline]
 pub(crate) async fn sync_image_gen_config(state: &AppState, config: &AgentConfig) {

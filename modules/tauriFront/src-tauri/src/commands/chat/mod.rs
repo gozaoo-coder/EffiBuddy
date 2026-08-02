@@ -358,6 +358,38 @@ pub(crate) async fn send_message_stream(
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "stream error");
+                    // 异常路径也要持久化已产生的部分回复与 thinking：
+                    // 避免推理模型流式中断后，思考过程完全不保存到会话上下文。
+                    // 仅当确有内容（正文/推理/工具/图片）时才落盘，纯错误则跳过。
+                    let has_partial = !full.is_empty()
+                        || !reasoning_full.is_empty()
+                        || !tool_call_records.is_empty()
+                        || !image_attachments.is_empty();
+                    if has_partial {
+                        let mut partial = Message::new(
+                            uuid::Uuid::new_v4().to_string(),
+                            Role::Assistant,
+                            full.clone(),
+                            now_ms(),
+                        );
+                        if !image_attachments.is_empty() {
+                            partial.attachments = image_attachments.clone();
+                        }
+                        if !reasoning_full.is_empty() {
+                            partial.reasoning = Some(reasoning_full);
+                        }
+                        partial.tool_calls = tool_call_records.clone();
+                        if let Some(recs) = sub_agent_records.lock().unwrap().remove(&conv_id) {
+                            if !recs.is_empty() {
+                                partial.sub_agents = recs;
+                            }
+                        }
+                        let partial_for_memory = partial.clone();
+                        if let Err(pe) = store.append_message(&conv_id, partial, now_ms()).await {
+                            tracing::warn!(error = %pe, "persist partial assistant reply failed");
+                        }
+                        memory.add(&conv_id, partial_for_memory).await;
+                    }
                     // 回答结束（异常路径）：如有已消耗的 token，同样下发计费统计
                     emit_billing(&usage_summary);
                     let _ = handle.emit(
