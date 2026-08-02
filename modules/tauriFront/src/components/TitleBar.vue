@@ -5,21 +5,20 @@
  * - 左侧品牌区 + 中间区域为拖拽区域（data-tauri-drag-region）
  * - 右上角窗口控件：最小化 / 最大化(还原) / 关闭
  * - 非 Tauri 环境（纯浏览器预览）自动降级：控件空操作、不报错
+ *
+ * 注：模型显示已迁移至"模型配置"二级栏目（ModelSettingsRail），标题栏不再展示模型胶囊。
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     /** 窗口标题（左侧品牌名） */
     title?: string
-    /** 中间展示的当前模型名称（可选） */
-    modelName?: string
   }>(),
   {
     title: 'EffiBuddy',
-    modelName: '',
   },
 )
 
@@ -86,13 +85,8 @@ async function close() {
       <span class="titlebar-title" data-tauri-drag-region>{{ title }}</span>
     </div>
 
-    <!-- 中间模型胶囊：可拖拽 -->
-    <div class="titlebar-center" data-tauri-drag-region>
-      <div v-if="modelName" class="titlebar-model" data-tauri-drag-region>
-        <span class="titlebar-model-dot" data-tauri-drag-region></span>
-        <span class="titlebar-model-name" data-tauri-drag-region>{{ modelName }}</span>
-      </div>
-    </div>
+    <!-- 中间拖拽区（不再显示模型胶囊） -->
+    <div class="titlebar-center" data-tauri-drag-region></div>
 
     <!-- 右上角窗口控件：非拖拽区域 -->
     <div class="titlebar-controls">
@@ -181,7 +175,7 @@ async function close() {
   white-space: nowrap;
 }
 
-/* 中间模型胶囊 */
+/* 中间拖拽区（不再显示模型胶囊） */
 .titlebar-center {
   flex: 1;
   display: flex;
@@ -189,35 +183,6 @@ async function close() {
   justify-content: center;
   min-width: 0;
   height: 100%;
-}
-
-.titlebar-model {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 14px;
-  border-radius: var(--radius-full);
-  background: var(--card);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm);
-  max-width: 360px;
-}
-
-.titlebar-model-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 6px rgba(62, 207, 142, 0.7);
-  flex-shrink: 0;
-}
-
-.titlebar-model-name {
-  font-size: 12px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* 右上角窗口控件 */

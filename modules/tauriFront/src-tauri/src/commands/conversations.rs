@@ -126,11 +126,14 @@ pub(crate) async fn auto_classify_conversation(
     // 3. 构造归类 prompt
     let prompt = build_auto_classify_prompt(&conv.messages, &existing_folders);
 
-    // 4. 调用归类 agent
+    // 4. 调用归类 agent（优先使用 title_model_id，回退到 active_model_id）
+    let (api_key, base_url, model_name) = config
+        .resolve_title_model()
+        .ok_or_else(|| "未配置命名模型".to_string())?;
     let result = call_auto_classify_agent(
-        &config.api_key,
-        &config.base_url,
-        &config.model_name,
+        &api_key,
+        &base_url,
+        &model_name,
         &prompt,
         &existing_folders,
     )

@@ -342,6 +342,7 @@ pub fn run() {
             delete_model,
             set_active_model,
             set_image_gen_model,
+            set_service_model_role,
             list_remote_models,
             get_remote_model,
             generate_image,

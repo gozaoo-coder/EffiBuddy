@@ -131,6 +131,11 @@ pub(crate) async fn set_active_model(
             Ok(id)
         }
         ModelKind::VideoGen => Err("视频生成模型暂未实现".to_string()),
+        // 音频转文字模型不通过 set_active_model 激活：
+        // 它属于"服务模型"角色（asr_stream / asr_transcribe），由 set_service_model_role 配置
+        ModelKind::AudioTranscribe => Err(
+            "音频转文字模型暂不支持通过 set_active_model 激活，请在服务模型面板配置".to_string(),
+        ),
         ModelKind::Chat => {
             // 对话模型：写入运行时字段并重建 agent
             config.api_key = model.api_key.clone();
@@ -209,6 +214,184 @@ pub(crate) async fn set_image_gen_model(
         std::sync::atomic::Ordering::SeqCst,
     );
     Ok(id)
+}
+
+/// 服务模型角色枚举：对应 AgentConfig 中的服务角色字段。
+///
+/// 每个角色对应一个"使用场景"，前端"服务模型"面板据此配置默认模型。
+/// - `chat`：聊天模型（写入 active_model_id，重建对话 agent）
+/// - `image_gen`：默认生图模型（写入 active_image_gen_model_id，更新 image_gen_config）
+/// - `title`：对话命名模型（写入 title_model_id，不重建 agent）
+/// - `compression`：会话历史压缩模型（写入 compression_model_id，不重建 agent）
+/// - `asr_stream`：语音实时转文字模型（写入 asr_stream_model_id）
+/// - `asr_transcribe`：音频转文字模型（写入 asr_transcribe_model_id）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ServiceModelRole {
+    Chat,
+    ImageGen,
+    Title,
+    Compression,
+    AsrStream,
+    AsrTranscribe,
+}
+
+/// 设置某个服务角色使用的模型 id。
+///
+/// 统一入口：前端"服务模型"面板的每个角色槽位调用此命令配置默认模型。
+/// - `role`：服务角色（chat/image_gen/title/compression/asr_stream/asr_transcribe）
+/// - `model_id`：模型 id（必须存在于 config.models 中）；None 表示清除该角色配置
+///
+/// 行为：
+/// - chat 角色：等同于 set_active_model，重建对话 agent
+/// - image_gen 角色：等同于 set_image_gen_model，更新 image_gen_config
+/// - title/compression 角色：仅写入对应字段，不重建 agent
+/// - asr_stream/asr_transcribe 角色：仅写入对应字段，不重建 agent（ASR 服务层自行适配）
+#[tauri::command]
+pub(crate) async fn set_service_model_role(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    role: ServiceModelRole,
+    model_id: Option<String>,
+) -> Result<(), String> {
+    // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
+    let mut config = state.config.read().await.as_ref().clone();
+
+    // 校验 model_id 有效（None 表示清除角色配置，允许）
+    if let Some(id) = model_id.as_ref() {
+        if !config.models.iter().any(|m| &m.id == id) {
+            return Err(format!("模型 {} 不存在", id));
+        }
+    }
+
+    match role {
+        ServiceModelRole::Chat => {
+            // 聊天模型：重建对话 agent（复用 set_active_model 的逻辑）
+            if let Some(id) = model_id.as_ref() {
+                let model = config
+                    .models
+                    .iter()
+                    .find(|m| &m.id == id)
+                    .cloned()
+                    .ok_or_else(|| format!("模型 {} 不存在", id))?;
+                if model.kind != ModelKind::Chat {
+                    return Err(format!("模型 {} 不是对话模型（kind != chat）", id));
+                }
+                config.api_key = model.api_key.clone();
+                config.base_url = model.base_url.clone();
+                config.model_name = model.model_name.clone();
+                config.preamble = model.preamble.clone();
+                config.provider_id = model.provider_id.clone();
+                config.enable_tools = model.enable_tools;
+                config.backend = BackendKind::Openai;
+                config.active_model_id = Some(id.clone());
+            } else {
+                // 清除聊天模型：回退到 mock
+                config.active_model_id = None;
+                config.backend = BackendKind::Mock;
+            }
+            save_config(&config)?;
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            apply_embedding_provider(&config, &state.memory).await;
+            let new_agent = build_agent_from_state(&state, &config);
+            {
+                let mut agent_lock = state.agent.write().await;
+                *agent_lock = new_agent;
+            }
+            *state.config.write().await = Arc::new(config);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            let _ = app_handle.emit("agent-backend-changed", ());
+        }
+        ServiceModelRole::ImageGen => {
+            if let Some(id) = model_id.as_ref() {
+                let model = config
+                    .models
+                    .iter()
+                    .find(|m| &m.id == id)
+                    .cloned()
+                    .ok_or_else(|| format!("模型 {} 不存在", id))?;
+                if model.kind != ModelKind::ImageGen {
+                    return Err(format!("模型 {} 不是图像生成模型（kind != image_gen）", id));
+                }
+                let cfg = ImageGenConfig {
+                    api_key: model.api_key.clone(),
+                    base_url: model.base_url.clone(),
+                    model: model.model_name.clone(),
+                    default_size: model.image_size.clone(),
+                    default_quality: model.image_quality.clone(),
+                };
+                config.active_image_gen_model_id = Some(id.clone());
+                save_config(&config)?;
+                *state.image_gen_config.write().await = Some(cfg);
+            } else {
+                config.active_image_gen_model_id = None;
+                save_config(&config)?;
+                *state.image_gen_config.write().await = None;
+            }
+            *state.config.write().await = Arc::new(config);
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        ServiceModelRole::Title => {
+            config.title_model_id = model_id;
+            save_config(&config)?;
+            *state.config.write().await = Arc::new(config);
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        ServiceModelRole::Compression => {
+            config.compression_model_id = model_id;
+            save_config(&config)?;
+            *state.config.write().await = Arc::new(config);
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        ServiceModelRole::AsrStream => {
+            config.asr_stream_model_id = model_id;
+            save_config(&config)?;
+            *state.config.write().await = Arc::new(config);
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        ServiceModelRole::AsrTranscribe => {
+            config.asr_transcribe_model_id = model_id;
+            save_config(&config)?;
+            *state.config.write().await = Arc::new(config);
+            state
+                .config_rev
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            state.agent_rev.store(
+                state.config_rev.load(std::sync::atomic::Ordering::SeqCst),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+    }
+    Ok(())
 }
 
 /// 直接调用图像生成 API 生成图片（绕过 LLM，供前端"立即生成"按钮使用）。

@@ -83,6 +83,7 @@ fn kind_label(kind: ModelKind) -> &'static str {
         ModelKind::Chat => "chat",
         ModelKind::ImageGen => "image_gen",
         ModelKind::VideoGen => "video_gen",
+        ModelKind::AudioTranscribe => "audio_transcribe",
     }
 }
 
@@ -267,6 +268,11 @@ impl ManageModelTool {
             }
             ModelKind::VideoGen => {
                 Err(ManageModelError("视频生成模型暂未实现".into()))
+            }
+            ModelKind::AudioTranscribe => {
+                Err(ManageModelError(
+                    "音频转文字模型暂不支持通过 manage_model 激活，请在设置中配置".into(),
+                ))
             }
         }
     }

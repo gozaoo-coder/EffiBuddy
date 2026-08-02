@@ -21,12 +21,13 @@ pub enum BackendKind {
     Openai,
 }
 
-/// 模型能力类型：区分 LLM 对话 / 图像生成 / 视频生成
+/// 模型能力类型：区分 LLM 对话 / 图像生成 / 视频生成 / 音频转文字
 ///
 /// 切换激活模型时根据 kind 决定走哪个后端：
 /// - Chat：走 RigAgent（Chat Completions API）
 /// - ImageGen：走图像生成工具（OpenAI 兼容 /images/generations）
 /// - VideoGen：预留，暂未实现
+/// - AudioTranscribe：音频转文字模型（OpenAI 兼容 /audio/transcriptions）
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelKind {
@@ -37,6 +38,8 @@ pub enum ModelKind {
     ImageGen,
     /// 视频生成模型（预留，暂未实现）
     VideoGen,
+    /// 音频转文字模型（如 whisper-1，OpenAI 兼容 /audio/transcriptions）
+    AudioTranscribe,
 }
 
 /// 主题模式：系统 / 亮色 / 暗色
@@ -99,7 +102,15 @@ impl Default for AsrConfig {
 
 /// Agent 配置（可被前端修改并持久化）
 ///
-/// 同时承载：当前激活的运行时配置 + 可使用模型列表 + 主题 + ASR 配置。
+/// 同时承载：当前激活的运行时配置 + 可使用模型列表 + 主题 + ASR 配置 + 服务角色映射。
+///
+/// 服务角色映射（service roles）：
+/// - `active_model_id`：聊天模型（主对话 agent）。向后兼容字段，等同于"聊天模型"角色。
+/// - `active_image_gen_model_id`：默认生图模型。向后兼容字段。
+/// - `title_model_id`：对话命名模型（auto_classify 用）。None 时回退到 active_model_id。
+/// - `compression_model_id`：会话历史压缩模型。None 时回退到 active_model_id。
+/// - `asr_stream_model_id`：语音实时转文字模型。None 时回退到 asr_config 原生配置。
+/// - `asr_transcribe_model_id`：音频转文字模型（文件转写）。None 时回退到 asr_config 原生配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub api_key: String,
@@ -116,6 +127,22 @@ pub struct AgentConfig {
     /// 与 active_model_id 独立：用户可同时激活一个对话模型和一个图像生成模型。
     #[serde(default)]
     pub active_image_gen_model_id: Option<String>,
+    /// 对话命名模型 id（auto_classify 用）。None 时回退到 active_model_id。
+    /// 独立配置时，归类命名走此模型，避免占用主对话模型的上下文窗口。
+    #[serde(default)]
+    pub title_model_id: Option<String>,
+    /// 会话历史压缩模型 id（compress_messages 用）。None 时回退到 active_model_id。
+    /// 独立配置时，压缩走此模型，可选用擅长长文本处理的高性价比模型。
+    #[serde(default)]
+    pub compression_model_id: Option<String>,
+    /// 语音实时转文字模型 id（指向 models 中 kind=AudioTranscribe 的一项）。
+    /// None 时回退到 asr_config 原生配置（volcengine/qwen 专用协议）。
+    #[serde(default)]
+    pub asr_stream_model_id: Option<String>,
+    /// 音频转文字模型 id（文件转写，指向 models 中 kind=AudioTranscribe 的一项）。
+    /// None 时回退到 asr_config 原生配置（volcengine/qwen 专用协议）。
+    #[serde(default)]
+    pub asr_transcribe_model_id: Option<String>,
     /// ASR（语音转写）配置
     #[serde(default)]
     pub asr_config: AsrConfig,
@@ -136,6 +163,10 @@ impl Default for AgentConfig {
             models: Vec::new(),
             active_model_id: None,
             active_image_gen_model_id: None,
+            title_model_id: None,
+            compression_model_id: None,
+            asr_stream_model_id: None,
+            asr_transcribe_model_id: None,
             asr_config: AsrConfig::default(),
             backend: BackendKind::Mock,
             enable_tools: true,
@@ -149,6 +180,42 @@ impl AgentConfig {
     #[inline]
     pub fn is_rig_ready(&self) -> bool {
         matches!(self.backend, BackendKind::Openai) && !self.api_key.trim().is_empty()
+    }
+
+    /// 解析对话命名模型：优先 title_model_id，回退到 active_model_id，再回退到内联配置。
+    /// 返回 (api_key, base_url, model_name) 三元组，供 call_auto_classify_agent 使用。
+    pub fn resolve_title_model(&self) -> Option<(String, String, String)> {
+        let m = self
+            .title_model_id
+            .as_deref()
+            .and_then(|id| self.models.iter().find(|m| m.id == id))
+            .or_else(|| {
+                self.active_model_id
+                    .as_deref()
+                    .and_then(|id| self.models.iter().find(|m| m.id == id))
+            });
+        if let Some(m) = m {
+            return Some((m.api_key.clone(), m.base_url.clone(), m.model_name.clone()));
+        }
+        // 无激活模型时回退到运行时内联配置
+        Some((self.api_key.clone(), self.base_url.clone(), self.model_name.clone()))
+    }
+
+    /// 解析会话历史压缩模型：优先 compression_model_id，回退到 active_model_id，再回退到内联配置。
+    pub fn resolve_compression_model(&self) -> Option<(String, String, String)> {
+        let m = self
+            .compression_model_id
+            .as_deref()
+            .and_then(|id| self.models.iter().find(|m| m.id == id))
+            .or_else(|| {
+                self.active_model_id
+                    .as_deref()
+                    .and_then(|id| self.models.iter().find(|m| m.id == id))
+            });
+        if let Some(m) = m {
+            return Some((m.api_key.clone(), m.base_url.clone(), m.model_name.clone()));
+        }
+        Some((self.api_key.clone(), self.base_url.clone(), self.model_name.clone()))
     }
 }
 
@@ -370,6 +437,10 @@ mod tests {
             }],
             active_model_id: Some("m1".into()),
             active_image_gen_model_id: None,
+            title_model_id: Some("m1".into()),
+            compression_model_id: None,
+            asr_stream_model_id: None,
+            asr_transcribe_model_id: None,
             asr_config: AsrConfig::default(),
         };
         let s = serde_json::to_string(&c).unwrap();
@@ -380,8 +451,69 @@ mod tests {
         assert_eq!(c.models.len(), back.models.len());
         assert_eq!(c.models[0].label, back.models[0].label);
         assert_eq!(c.active_model_id, back.active_model_id);
+        assert_eq!(back.title_model_id, Some("m1".to_string()));
+        assert_eq!(back.compression_model_id, None);
+        assert_eq!(back.asr_stream_model_id, None);
+        assert_eq!(back.asr_transcribe_model_id, None);
         assert_eq!(back.asr_config.provider, AsrProvider::VolcEngine);
         assert!(back.asr_config.enable_auto_summary);
+    }
+
+    #[test]
+    fn config_resolve_title_model_fallback() {
+        // 无 title_model_id 时回退到 active_model_id
+        let mut c = AgentConfig::default();
+        c.backend = BackendKind::Openai;
+        c.api_key = "inline-key".into();
+        c.base_url = "https://inline/v1".into();
+        c.model_name = "inline-model".into();
+        // 无任何模型时回退到内联配置
+        let (k, b, m) = c.resolve_title_model().unwrap();
+        assert_eq!(k, "inline-key");
+        assert_eq!(b, "https://inline/v1");
+        assert_eq!(m, "inline-model");
+        // 设置 active_model_id 后回退到该模型
+        c.models.push(AvailableModel {
+            id: "chat1".into(),
+            label: "Chat".into(),
+            provider_id: "openai".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            model_name: "gpt-4o-mini".into(),
+            api_key: "sk-active".into(),
+            preamble: String::new(),
+            enable_tools: true,
+            kind: ModelKind::Chat,
+            image_size: None,
+            image_quality: None,
+            context_window_tokens: Some(128000),
+            pricing: None,
+            created_at: 1000,
+        });
+        c.active_model_id = Some("chat1".into());
+        let (k, _, m) = c.resolve_title_model().unwrap();
+        assert_eq!(k, "sk-active");
+        assert_eq!(m, "gpt-4o-mini");
+        // 设置 title_model_id 后优先使用
+        c.models.push(AvailableModel {
+            id: "title1".into(),
+            label: "Title".into(),
+            provider_id: "deepseek".into(),
+            base_url: "https://api.deepseek.com".into(),
+            model_name: "deepseek-chat".into(),
+            api_key: "sk-title".into(),
+            preamble: String::new(),
+            enable_tools: false,
+            kind: ModelKind::Chat,
+            image_size: None,
+            image_quality: None,
+            context_window_tokens: Some(64000),
+            pricing: None,
+            created_at: 1001,
+        });
+        c.title_model_id = Some("title1".into());
+        let (k, _, m) = c.resolve_title_model().unwrap();
+        assert_eq!(k, "sk-title");
+        assert_eq!(m, "deepseek-chat");
     }
 
     #[test]

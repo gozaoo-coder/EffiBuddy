@@ -160,6 +160,7 @@ impl CallModelTool {
                     match m.kind {
                         ModelKind::ImageGen => "image_gen（图像生成）",
                         ModelKind::VideoGen => "video_gen（视频生成）",
+                        ModelKind::AudioTranscribe => "audio_transcribe（音频转文字）",
                         ModelKind::Chat => "chat",
                     }
                 )));

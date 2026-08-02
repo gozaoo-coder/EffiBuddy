@@ -8,7 +8,7 @@ export type Role = 'system' | 'user' | 'assistant'
 export type DeviceStatus = 'discovered' | 'paired' | 'offline' | 'pairing'
 
 // ModelKind: #[serde(rename_all = "snake_case")]
-export type ModelKind = 'chat' | 'image_gen' | 'video_gen'
+export type ModelKind = 'chat' | 'image_gen' | 'video_gen' | 'audio_transcribe'
 
 // AttachmentKind: #[serde(rename_all = "snake_case")]
 export type AttachmentKind = 'image' | 'file' | 'audio'
@@ -162,6 +162,14 @@ export interface AgentConfig {
   active_model_id: string | null
   /** 当前激活的图像生成模型 id（独立于 active_model_id） */
   active_image_gen_model_id?: string | null
+  /** 对话命名模型 id（auto_classify 用）；None 时回退到 active_model_id */
+  title_model_id?: string | null
+  /** 会话历史压缩模型 id（compress_messages 用）；None 时回退到 active_model_id */
+  compression_model_id?: string | null
+  /** 语音实时转文字模型 id；None 时回退到 asr_config 原生配置 */
+  asr_stream_model_id?: string | null
+  /** 音频转文字模型 id（文件转写）；None 时回退到 asr_config 原生配置 */
+  asr_transcribe_model_id?: string | null
 }
 
 export interface AvailableModel {
@@ -173,7 +181,7 @@ export interface AvailableModel {
   api_key: string
   preamble: string
   enable_tools: boolean
-  /** 模型能力类型：chat（对话）/ image_gen（图像生成）/ video_gen（视频生成，预留） */
+  /** 模型能力类型：chat（对话）/ image_gen（图像生成）/ video_gen（视频生成，预留）/ audio_transcribe（音频转文字） */
   kind?: ModelKind
   /** 图像生成专用：默认尺寸（如 1024x1024），仅 kind=image_gen 时有效 */
   image_size?: string | null
@@ -854,4 +862,44 @@ export interface AsrUploadProgressPayload {
 export interface AsrRecordUpdatedPayload {
   kind: 'asr_record_updated'
   record_id: string
+}
+
+// =========================================================
+// 服务模型角色（与后端 ServiceModelRole 枚举对齐，snake_case 变体）
+// =========================================================
+
+/**
+ * 服务模型角色：对应 AgentConfig 中的服务角色字段。
+ *
+ * 前端"服务模型"面板的每个角色槽位用此类型标识，调用 set_service_model_role 命令配置默认模型。
+ */
+export type ServiceModelRole =
+  | 'chat'
+  | 'image_gen'
+  | 'title'
+  | 'compression'
+  | 'asr_stream'
+  | 'asr_transcribe'
+
+/**
+ * 服务角色元数据：用于 UI 渲染（标题、描述、对应的 AgentConfig 字段、允许的 ModelKind）。
+ */
+export interface ServiceRoleMeta {
+  role: ServiceModelRole
+  /** 所属场景分组：聊天 / 语音 / 生图 */
+  group: 'chat' | 'voice' | 'image'
+  /** 中文标题 */
+  label: string
+  /** 简短描述 */
+  desc: string
+  /** 该角色允许的 ModelKind 列表（用于过滤可选模型） */
+  allowedKinds: ModelKind[]
+  /** 对应 AgentConfig 中的字段名 */
+  configField:
+    | 'active_model_id'
+    | 'active_image_gen_model_id'
+    | 'title_model_id'
+    | 'compression_model_id'
+    | 'asr_stream_model_id'
+    | 'asr_transcribe_model_id'
 }

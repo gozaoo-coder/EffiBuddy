@@ -14,24 +14,32 @@ import SkillPanel from './components/SkillPanel.vue'
 import PluginPanel from './components/PluginPanel.vue'
 import ClawHubPanel from './components/ClawHubPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
+import ModelSettingsRail, { type ModelSettingsView } from './components/model-settings/ModelSettingsRail.vue'
+import ModelSettingsContent from './components/model-settings/ModelSettingsContent.vue'
 import { ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
 import { useTabs, NEW_CHAT_TAB_ID } from './composables/useTabs'
 import { useAsr } from './composables/useAsr'
+import { useAnimeTransition } from './composables/useAnimeTransition'
 import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
-// 当前激活模型名称（真实 model_name，来自 get_active_model_info）
-const activeModelName = ref('')
 // 各功能面板状态（均从 IconRail 触发）
 const devicePanelOpen = ref(false)
 const settingsOpen = ref(false)
-const modelConfigOpen = ref(false)
 const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
 const pluginPanelOpen = ref(false)
 const clawhubPanelOpen = ref(false)
 const { toast } = useToast()
+
+// ============= 模型配置模式 =============
+// modelConfigOpen 为 true 时进入模型配置模式：
+// - 左2栏从 HistoryRail 切换为 ModelSettingsRail（二级栏目）
+// - 主内容区从 TabBar+TabContent 切换为 ModelSettingsContent
+// modelSettingsView 记录当前选中的二级子项（'' 表示未选中，显示默认介绍页）
+const modelConfigOpen = ref(false)
+const modelSettingsView = ref<ModelSettingsView | ''>('')
 
 // ============= 多页签状态 =============
 const { tabs, openTab, activate, updateTab, findChatByConversationId, getActive } = useTabs()
@@ -67,6 +75,7 @@ function closeAllPanels() {
   devicePanelOpen.value = false
   settingsOpen.value = false
   modelConfigOpen.value = false
+  modelSettingsView.value = ''
   scheduledTasksOpen.value = false
   skillPanelOpen.value = false
   pluginPanelOpen.value = false
@@ -84,7 +93,15 @@ function onRailSelect(view: RailView) {
       closeAllPanels()
       break
     case 'model-config':
-      modelConfigOpen.value = !modelConfigOpen.value
+      // 切换模型配置模式：再次点击关闭
+      if (modelConfigOpen.value) {
+        modelConfigOpen.value = false
+        modelSettingsView.value = ''
+      } else {
+        modelConfigOpen.value = true
+        // 默认进入 AI服务商 子项
+        modelSettingsView.value = 'providers'
+      }
       break
     case 'automation':
       scheduledTasksOpen.value = !scheduledTasksOpen.value
@@ -98,21 +115,21 @@ function onRailSelect(view: RailView) {
   }
 }
 
+// ModelSettingsRail 子项选择
+function onModelSettingsSelect(view: ModelSettingsView) {
+  modelSettingsView.value = view
+}
+
+// 模型配置面板保存后的回调（兼容旧 ModelConfigPanel 的 saved 事件）
+function onModelSettingsSaved() {
+  void refreshBackend()
+}
+
 async function refreshBackend() {
   try {
     agentBackend.value = await invoke<string>('get_agent_backend')
   } catch {
     agentBackend.value = 'unknown'
-  }
-}
-
-// 刷新顶部显示的当前模型名称（真实 model_name）
-async function refreshModelDisplay() {
-  try {
-    const info = await invoke<{ name: string }>('get_active_model_info')
-    activeModelName.value = info.name || ''
-  } catch {
-    activeModelName.value = ''
   }
 }
 
@@ -125,7 +142,6 @@ onMounted(async () => {
     // 默认 system
   }
   await refreshBackend()
-  await refreshModelDisplay()
 
   // 安装 ASR 事件监听（asr-stream-chunk / asr-session-status / asr-upload-progress / asr-record-updated）
   // 全局单例：install 内部有 installed 标记，重复调用安全
@@ -153,8 +169,6 @@ onUnmounted(() => {
 
 function onSettingsSaved(backend: string) {
   agentBackend.value = backend
-  // 模型切换/保存后刷新顶部模型名（取真实 model_name，而非后端标识）
-  void refreshModelDisplay()
   toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
 
@@ -230,14 +244,43 @@ function openClawHub() {
   clawhubPanelOpen.value = true
 }
 
-// 标题栏中间显示的当前模型名称（真实 model_name）
-const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
+// 左2栏切换动画：HistoryRail ↔ ModelSettingsRail
+const { onEnter: onSecondRailEnter, onLeave: onSecondRailLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    translateX: [-12, 0],
+    duration: 240,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    translateX: [0, -8],
+    duration: 180,
+    ease: 'inOut(2)',
+  },
+})
+
+// 主内容区切换动画：TabContent ↔ ModelSettingsContent
+const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
+  enter: {
+    opacity: [0, 1],
+    translateY: [8, 0],
+    duration: 260,
+    ease: 'out(3)',
+  },
+  leave: {
+    opacity: [1, 0],
+    translateY: [0, -6],
+    duration: 180,
+    ease: 'inOut(2)',
+  },
+})
 </script>
 
 <template>
   <div class="app-shell">
-    <!-- 自定义标题栏：左侧品牌、中间模型、右上角窗口控件 -->
-    <TitleBar :model-name="modelDisplay" />
+    <!-- 自定义标题栏：左侧品牌、右上角窗口控件（不再显示模型胶囊） -->
+    <TitleBar />
 
     <main class="app-main">
       <!-- 第一栏：router（纯图标 + hover 提示） -->
@@ -250,21 +293,39 @@ const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
         @open-asr="openAsrTab"
       />
 
-      <!-- 第二栏：历史记录（新建聊天 / 置顶 / 文件夹分类） -->
-      <HistoryRail
-        ref="historyRailRef"
-        :active-id="activeChatConvId"
-        @select-conversation="handleSelectConv"
-      />
-
-      <!-- 主内容区：多页签栏 + 页签内容容器 -->
-      <section class="chat-area">
-        <TabBar />
-        <TabContent
-          :backend="agentBackend"
-          @conversation-changed="onConversationChanged"
+      <!-- 第二栏：根据模式切换（聊天模式=HistoryRail / 模型配置模式=ModelSettingsRail） -->
+      <Transition :css="false" @enter="onSecondRailEnter" @leave="onSecondRailLeave" mode="out-in">
+        <HistoryRail
+          v-if="!modelConfigOpen"
+          key="history"
+          ref="historyRailRef"
+          :active-id="activeChatConvId"
+          @select-conversation="handleSelectConv"
         />
-      </section>
+        <ModelSettingsRail
+          v-else
+          key="model-settings"
+          :active="modelSettingsView"
+          @select="onModelSettingsSelect"
+        />
+      </Transition>
+
+      <!-- 主内容区：根据模式切换（聊天模式=多页签 / 模型配置模式=模型设置面板） -->
+      <Transition :css="false" @enter="onMainEnter" @leave="onMainLeave" mode="out-in">
+        <section v-if="!modelConfigOpen" key="chat" class="chat-area">
+          <TabBar />
+          <TabContent
+            :backend="agentBackend"
+            @conversation-changed="onConversationChanged"
+          />
+        </section>
+        <ModelSettingsContent
+          v-else
+          key="model-settings"
+          :view="modelSettingsView"
+          @saved="onModelSettingsSaved"
+        />
+      </Transition>
     </main>
 
     <!-- 设备管理面板 -->
@@ -283,10 +344,11 @@ const modelDisplay = computed(() => activeModelName.value || 'EffiBuddy')
       @close="settingsOpen = false"
     />
 
+    <!-- 旧版 ModelConfigPanel 保留作为弹窗回退入口（暂不渲染，避免重复） -->
     <ModelConfigPanel
-      :open="modelConfigOpen"
-      @close="modelConfigOpen = false"
-      @saved="onSettingsSaved"
+      :open="false"
+      @close="() => {}"
+      @saved="onModelSettingsSaved"
     />
 
     <SkillPanel

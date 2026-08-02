@@ -52,15 +52,13 @@ pub(crate) async fn compress_messages(
     // 3. 构造压缩 prompt
     let prompt = build_compression_prompt(&conv.messages);
 
-    // 4. 调用压缩 agent（非流式）
-    let reply = call_compression_agent(
-        &config.api_key,
-        &config.base_url,
-        &config.model_name,
-        &prompt,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    // 4. 调用压缩 agent（优先使用 compression_model_id，回退到 active_model_id）
+    let (api_key, base_url, model_name) = config
+        .resolve_compression_model()
+        .ok_or_else(|| "未配置压缩模型".to_string())?;
+    let reply = call_compression_agent(&api_key, &base_url, &model_name, &prompt)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 5. 解析 <act> 块
     let actions = parse_compression_response(&reply).map_err(|e| e.to_string())?;
@@ -221,14 +219,12 @@ pub(crate) async fn compress_messages_stream(
     emit_status("building_prompt", "正在构造压缩 prompt…");
     let prompt = build_compression_prompt(&conv.messages);
 
-    // 4. 流式调用压缩 agent
+    // 4. 流式调用压缩 agent（优先使用 compression_model_id，回退到 active_model_id）
     emit_status("streaming", "压缩 agent 正在分析…");
-    let mut stream = call_compression_agent_stream(
-        &config.api_key,
-        &config.base_url,
-        &config.model_name,
-        &prompt,
-    );
+    let (api_key, base_url, model_name) = config
+        .resolve_compression_model()
+        .ok_or_else(|| "未配置压缩模型".to_string())?;
+    let mut stream = call_compression_agent_stream(&api_key, &base_url, &model_name, &prompt);
 
     let mut raw_text = String::with_capacity(1024);
     while let Some(item) = stream.next().await {
