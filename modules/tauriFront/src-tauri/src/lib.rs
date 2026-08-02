@@ -330,6 +330,53 @@ pub fn run() {
                 }
             });
 
+            // ===== P2P 服务启动 =====
+            // 程序启动 → P2P 广播启动 → 持续扫描可信设备是否在线。
+            // 1. 确保 p2p 目录存在（信任库 trust.json 的父目录）
+            // 2. 加载或新建 TrustStore（首次启动生成 Ed25519 身份并持久化）
+            // 3. 从信任库读取本机身份密钥
+            // 4. 调 start_with_trust 启动 transport（TCP 加密通道）+ discovery（UDP 广播）
+            //    + pairing（配对协议）+ sync（镜像同步），并自动收集 PairingRequest 事件
+            let p2p_manager = Arc::clone(&state.p2p);
+            let p2p_trust_path = p2p_trust_path();
+            tauri::async_runtime::spawn(async move {
+                // 确保目录存在（load_or_create 仅写文件，不创建父目录）
+                if let Some(parent) = p2p_trust_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        tracing::error!(error = %e, "P2P 信任库目录创建失败，P2P 服务未启动");
+                        return;
+                    }
+                }
+                let trust = match effisuite_p2p::TrustStore::load_or_create(p2p_trust_path).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::error!(error = %e, "P2P 信任库加载失败，P2P 服务未启动");
+                        return;
+                    }
+                };
+                let identity = match trust.self_identity().await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!(error = %e, "P2P 身份密钥读取失败，P2P 服务未启动");
+                        return;
+                    }
+                };
+                // 绑定 0.0.0.0:DEFAULT_P2P_PORT（TCP/UDP 同端口号不冲突）；
+                // 端口被占用时由 OS 分配（bind 0.0.0.0:0），discovery 广播实际端口
+                let bind_addr: std::net::SocketAddr =
+                    format!("0.0.0.0:{}", effisuite_p2p::DEFAULT_P2P_PORT)
+                        .parse()
+                        .expect("valid bind addr");
+                if let Err(e) = p2p_manager
+                    .start_with_trust(trust, identity, bind_addr)
+                    .await
+                {
+                    tracing::error!(error = %e, "P2P 服务启动失败");
+                } else {
+                    tracing::info!("P2P 服务已启动（transport + discovery + pairing + sync）");
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -383,7 +430,19 @@ pub fn run() {
             // p2p
             scan_devices,
             get_devices,
+            get_online_devices,
+            start_discovery,
+            stop_discovery,
+            pair_by_address,
             pair_device,
+            reject_pair,
+            unpair,
+            pending_pairing_requests,
+            sync_pull,
+            sync_push,
+            sync_cursor,
+            get_p2p_status,
+            stop_p2p,
             // 文件 / 图片选择
             pick_file,
             pick_image,

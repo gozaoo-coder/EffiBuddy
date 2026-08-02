@@ -286,6 +286,12 @@ impl Transport {
         self.trust.clone()
     }
 
+    /// 当前 TCP 监听地址（`start` 后为实际绑定地址，`0` 端口由 OS 分配）。
+    /// manager 据此读取端口并调 `Discovery::set_listen_port`，让广播携带可连接端口。
+    pub async fn bind_addr(&self) -> Option<SocketAddr> {
+        *self.bind_addr.read().await
+    }
+
     // ── 内部：服务端握手 ────────────────────────────────────────────────
 
     async fn handle_incoming(

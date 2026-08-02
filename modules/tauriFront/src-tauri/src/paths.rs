@@ -64,3 +64,18 @@ pub(crate) fn attachments_dir() -> std::path::PathBuf {
 pub(crate) fn asr_dir() -> std::path::PathBuf {
     appdata_root().join("asr")
 }
+
+/// P2P 信任库与配对数据存储目录：`<appdata>/p2p`
+///
+/// `TrustStore::load_or_create` 据此目录下的 `trust.json` 加载或生成身份。
+/// 包含本机 Ed25519 私钥种子与已配对设备公钥表，切勿与其他设备共享。
+pub(crate) fn p2p_dir() -> std::path::PathBuf {
+    appdata_root().join("p2p")
+}
+
+/// P2P 信任库文件路径：`<appdata>/p2p/trust.json`
+///
+/// 供 `TrustStore::load_or_create` 直接使用。
+pub(crate) fn p2p_trust_path() -> std::path::PathBuf {
+    p2p_dir().join("trust.json")
+}

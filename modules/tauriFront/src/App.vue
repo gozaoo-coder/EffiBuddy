@@ -7,7 +7,7 @@ import TabBar from './components/TabBar.vue'
 import TabContent from './components/TabContent.vue'
 import IconRail, { type RailView } from './components/IconRail.vue'
 import HistoryRail from './components/HistoryRail.vue'
-import DevicePanel from './components/DevicePanel.vue'
+import P2pPanel from './components/P2pPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import ModelConfigPanel from './components/ModelConfigPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
@@ -20,12 +20,15 @@ import { ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic
 import { applyThemeNow } from './composables/useTheme'
 import { useTabs, NEW_CHAT_TAB_ID } from './composables/useTabs'
 import { useAsr } from './composables/useAsr'
+import { useP2p } from './composables/useP2p'
 import { useAnimeTransition } from './composables/useAnimeTransition'
 import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
 // 各功能面板状态（均从 IconRail 触发）
-const devicePanelOpen = ref(false)
+// P2P 设备 composable：pendingCount 驱动角标、refreshAll 在面板打开时刷新数据
+const { pendingCount, refreshAll } = useP2p()
+const p2pPanelOpen = ref(false)
 const settingsOpen = ref(false)
 const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
@@ -72,7 +75,7 @@ const activeView = computed<RailView | ''>(() => {
 })
 
 function closeAllPanels() {
-  devicePanelOpen.value = false
+  p2pPanelOpen.value = false
   settingsOpen.value = false
   modelConfigOpen.value = false
   modelSettingsView.value = ''
@@ -85,7 +88,7 @@ function closeAllPanels() {
 // IconRail 主栏点击：切换视图 / 开关面板
 function onRailSelect(view: RailView) {
   // 切换时先关闭其它功能面板，避免叠加
-  devicePanelOpen.value = false
+  p2pPanelOpen.value = false
   settingsOpen.value = false
   clawhubPanelOpen.value = false
   switch (view) {
@@ -212,9 +215,10 @@ function onConversationChanged() {
   historyRailRef.value?.refresh()
 }
 
-// 从「更多」打开各面板
-function openDevicePanel() {
-  devicePanelOpen.value = true
+// 从 IconRail 打开 P2P 设备面板（同时刷新数据）
+function openP2pPanel() {
+  p2pPanelOpen.value = true
+  refreshAll()
 }
 
 function openSettingsPanel() {
@@ -286,9 +290,10 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       <!-- 第一栏：router（纯图标 + hover 提示） -->
       <IconRail
         :active="activeView"
+        :pending-pair-count="pendingCount"
         @select="onRailSelect"
         @open-clawhub="openClawHub"
-        @open-device="openDevicePanel"
+        @open-p2p="openP2pPanel"
         @open-settings="openSettingsPanel"
         @open-asr="openAsrTab"
       />
@@ -328,14 +333,14 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       </Transition>
     </main>
 
-    <!-- 设备管理面板 -->
+    <!-- P2P 设备面板 -->
     <BindSheet
-      v-model:visible="devicePanelOpen"
+      v-model:visible="p2pPanelOpen"
       side="right"
-      title="设备管理"
+      title="P2P 设备"
       width="380px"
     >
-      <DevicePanel />
+      <P2pPanel />
     </BindSheet>
 
     <SettingsPanel

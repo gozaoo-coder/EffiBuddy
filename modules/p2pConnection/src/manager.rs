@@ -109,12 +109,18 @@ impl P2pManager {
             self_device_id.clone(),
         ));
         let incoming_rx = transport.start(bind_addr).await?;
+        // 读取实际监听端口（bind 用 0 端口时由 OS 分配），让 discovery 广播携带可连接端口
+        let actual_bind = transport
+            .bind_addr()
+            .await
+            .ok_or_else(|| CoreError::P2p("transport bind_addr missing after start".to_string()))?;
         // 构造 discovery（UDP 广播）
         let discovery = Arc::new(Discovery::new(
             trust.clone(),
             self.event_bus.clone(),
             self_device_id.clone(),
         ));
+        discovery.set_listen_port(actual_bind.port()).await;
         discovery.start().await?;
         // 构造 pairing（处理入站 pairing request）
         let pairing = Arc::new(Pairing::new(
@@ -205,6 +211,34 @@ impl P2pManager {
             }
         });
 
+        // 订阅 EventBus PairingRequest 事件，把未配对设备的广播请求收集到
+        // pending_pairing_requests（前端据此展示可配对气泡 + 接受/拒绝按钮）。
+        // 与 pairing 内部的 pending_peers 互补：后者仅存地址供 accept_pair 用，
+        // 前者存完整 PairingRequest 供前端展示设备名/公钥/时间戳。
+        let self_arc = Arc::clone(self);
+        let mut req_rx = self.event_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match req_rx.recv().await {
+                    Ok(BusEvent::PairingRequest { device }) => {
+                        let req = PairingRequest {
+                            device_id: device.id.clone(),
+                            name: device.name.clone(),
+                            address: device.address.clone(),
+                            pubkey_hex: String::new(), // 广播阶段未携带公钥，配对握手时交换
+                            timestamp: device.last_seen,
+                        };
+                        self_arc.push_pairing_request(req).await;
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(lagged = n, "manager pairing-request subscriber lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
         // 保存各模块句柄
         *self.transport.write().await = Some(transport);
         *self.discovery.write().await = Some(discovery);
@@ -230,6 +264,17 @@ impl P2pManager {
         }
         self.started
             .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// P2P 服务是否已启动（`start_with_trust` 成功后为 true）
+    #[inline]
+    pub fn is_started(&self) -> bool {
+        self.started.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 本机设备 id（启动前为占位 `dev-anon-xxxx`，启动后为信任库中的正式 id）
+    pub async fn self_device_id(&self) -> String {
+        self.self_device_id.read().await.clone()
     }
 
     /// 当前待处理配对请求列表（前端据此展示 pairing-request bubble）

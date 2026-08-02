@@ -61,6 +61,25 @@ export interface Device {
   status: DeviceStatus
 }
 
+// PairRole: #[serde(rename_all = "snake_case")] -> "mirror" | "host" | "replica"
+export type PairRole = 'mirror' | 'host' | 'replica'
+
+// 与后端 effisuite_p2p::pairing::PairingRequest 对齐
+export interface PairingRequest {
+  device_id: string
+  name: string
+  address: string
+  /** 对端 Ed25519 公钥 hex（广播阶段为空，配对握手时交换） */
+  pubkey_hex: string
+  timestamp: number
+}
+
+// 与后端 commands::p2p::P2pStatus 对齐
+export interface P2pStatus {
+  started: boolean
+  self_device_id: string
+}
+
 // 后端把整个 BusEvent 作为事件 payload emit 出来，前端按事件名订阅。
 export interface AgentMessagePayload {
   kind: 'agent_message'

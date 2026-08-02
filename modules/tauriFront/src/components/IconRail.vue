@@ -13,15 +13,20 @@ import { Menu, type MenuItemOption } from './basic'
 
 export type RailView = 'chat' | 'model-config' | 'automation' | 'skills' | 'plugins'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 当前激活的视图（用于高亮对应图标） */
   active?: RailView | ''
-}>()
+  /** P2P 待配对请求计数（>0 时在 P2P 按钮上显示气泡角标） */
+  pendingPairCount?: number
+}>(), {
+  pendingPairCount: 0,
+})
 
 const emit = defineEmits<{
   (e: 'select', view: RailView): void
   (e: 'open-clawhub'): void
   (e: 'open-device'): void
+  (e: 'open-p2p'): void
   (e: 'open-settings'): void
   (e: 'open-asr', kind: 'asr-stream' | 'asr-upload' | 'asr-history'): void
 }>()
@@ -109,8 +114,25 @@ function select(view: RailView) {
       </button>
     </div>
 
-    <!-- 底部：更多 -->
+    <!-- 底部：P2P 设备 + 更多 -->
     <div class="rail-group rail-group--bottom">
+      <!-- P2P 设备入口（含待配对请求气泡角标） -->
+      <button
+        type="button"
+        class="rail-btn"
+        @click="emit('open-p2p')"
+      >
+        <Icon name="device" :size="21" />
+        <span class="rail-tip">P2P 设备</span>
+        <span
+          v-if="props.pendingPairCount > 0"
+          :key="props.pendingPairCount"
+          class="p2p-badge"
+        >
+          {{ props.pendingPairCount > 99 ? '99+' : props.pendingPairCount }}
+        </span>
+      </button>
+
       <button
         ref="moreBtnRef"
         type="button"
@@ -245,5 +267,31 @@ function select(view: RailView) {
   opacity: 1;
   visibility: visible;
   transform: translateY(-50%) translateX(0);
+}
+
+/* P2P 待配对请求气泡角标（pointer-events: none 使点击穿透到父按钮，亦触发 open-p2p） */
+.p2p-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: #f56565;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  border: 2px solid var(--bg-2);
+  animation: badge-pop 300ms var(--ease-decelerated);
+  pointer-events: none;
+}
+
+@keyframes badge-pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); }
 }
 </style>

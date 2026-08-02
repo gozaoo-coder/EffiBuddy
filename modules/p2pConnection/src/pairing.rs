@@ -124,7 +124,7 @@ fn pairing_signed_payload(
 /// 待处理配对请求（discovery 收集 → 前端展示 → 用户准许）。
 ///
 /// 字段按大小降序：String(24) × 3 → u64(8)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairingRequest {
     pub device_id: String,
     pub name: String,
