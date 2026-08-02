@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use effisuite_core::{
     ClawHubClient, CompressionStore, ConversationStore, MemoryIndex, Message, PinnedMemoryStore,
-    PluginStore, ScheduledTaskStore, SkillIndex, SkillStore,
+    PluginStore, RemoteTaskDispatcher, ScheduledTaskStore, SkillIndex, SkillStore,
 };
 use rig_core::providers::openai;
 use tokio::sync::RwLock;
@@ -174,4 +174,8 @@ pub struct RigAgent {
     /// ASR 语音转写服务句柄，ASR 工具集据此转写/检索/列出/获取记录。
     /// None 时不注册 ASR 工具（transcribe_audio / search_asr_records 等）。
     pub(super) asr_service: Option<Arc<crate::asr::AsrService>>,
+    /// 远端任务派发器句柄（P2P 镜像模式跨设备协作）。
+    /// None 时不注册 dispatch_remote_task 工具；Some 时 LLM 可列出在线设备并派发任务。
+    /// 用 trait object 避免 agent crate 依赖 effisuite-p2p（依赖倒置）。
+    pub(super) remote_task_dispatcher: Option<Arc<dyn RemoteTaskDispatcher>>,
 }

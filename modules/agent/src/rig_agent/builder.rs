@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use effisuite_core::{
     ClawHubClient, CompressionStore, ConversationStore, CoreError, EventBus, MemoryIndex,
-    PinnedMemoryStore, PluginStore, Result, ScheduledTaskStore, SkillIndex, SkillStore,
+    PinnedMemoryStore, PluginStore, RemoteTaskDispatcher, Result, ScheduledTaskStore, SkillIndex,
+    SkillStore,
 };
 use rig_core::client::ProviderClient;
 use rig_core::providers::openai;
@@ -90,6 +91,7 @@ impl RigAgent {
             video_gen_config: Arc::new(RwLock::new(None)),
             todo_state: None,
             asr_service: None,
+            remote_task_dispatcher: None,
         })
     }
 
@@ -149,6 +151,17 @@ impl RigAgent {
     /// list_asr_records / get_asr_record 工具
     pub fn with_asr_service(mut self, service: Option<Arc<crate::asr::AsrService>>) -> Self {
         self.asr_service = service;
+        self
+    }
+
+    /// 注入远端任务派发器句柄（P2P 镜像模式跨设备协作），启用 dispatch_remote_task 工具。
+    /// 用 trait object 避免 agent crate 依赖 effisuite-p2p（依赖倒置）。
+    /// None 时不注册 dispatch_remote_task 工具（LLM 无法跨设备派发任务）。
+    pub fn with_remote_task_dispatcher(
+        mut self,
+        dispatcher: Option<Arc<dyn RemoteTaskDispatcher>>,
+    ) -> Self {
+        self.remote_task_dispatcher = dispatcher;
         self
     }
 
@@ -240,6 +253,7 @@ impl RigAgent {
             video_gen_config: Arc::new(RwLock::new(None)),
             todo_state: None,
             asr_service: None,
+            remote_task_dispatcher: None,
         })
     }
 

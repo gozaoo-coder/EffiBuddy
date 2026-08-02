@@ -204,9 +204,13 @@ pub fn run() {
         Some(asr_summary_index),
     ));
 
+    // P2P 管理器（先于 agent 构造：agent 需要其 RemoteTaskDispatcher 能力做跨设备任务派发）
+    let p2p = Arc::new(P2pManager::new(event_bus.clone()));
+
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
     // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
-    // plugin_store / compression_store / model_manager / sub_agents / asr_service
+    // plugin_store / compression_store / model_manager / sub_agents / asr_service /
+    // remote_task_dispatcher（P2pManager 实现 RemoteTaskDispatcher trait）
     // skill_store / clawhub / plugin_store / compression_store 已是 Clone（内部 Arc），
     // 直接传值，无需 Arc::new 包装
     let agent: Arc<dyn ChatAgent> = build_agent(
@@ -227,6 +231,7 @@ pub fn run() {
         Arc::clone(&model_manager),
         Arc::clone(&sub_agents),
         Arc::clone(&asr_service),
+        p2p.clone(),
     );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
@@ -236,8 +241,6 @@ pub fn run() {
                 .expect("临时目录 ScheduledTaskStore 必须成功")
         }
     };
-
-    let p2p = Arc::new(P2pManager::new(event_bus.clone()));
 
     tracing::info!(backend = %agent.backend(), "EffiSuite 启动");
 

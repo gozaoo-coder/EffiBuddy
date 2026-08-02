@@ -23,10 +23,10 @@ use rig_core::providers::openai;
 
 use crate::tools::{
     AsrTool, AskUserTool, CallModelTool, DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool,
-    EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetSkillDetailTool, GetTimeTool, GlobTool,
-    GrepTool, ImageGenTool, InstallClawHubSkillTool, ListAsrTool, ListFilesTool,
-    ListInstalledSkillsTool, ListPinnedMemoriesTool, ManageModelTool, NotifyUserTool,
-    OpenPreviewTool, PinMemoryTool, ReadFileTool, ScheduleTool, SearchAsrTool,
+    DispatchRemoteTaskTool, EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetSkillDetailTool,
+    GetTimeTool, GlobTool, GrepTool, ImageGenTool, InstallClawHubSkillTool, ListAsrTool,
+    ListFilesTool, ListInstalledSkillsTool, ListPinnedMemoriesTool, ManageModelTool,
+    NotifyUserTool, OpenPreviewTool, PinMemoryTool, ReadFileTool, ScheduleTool, SearchAsrTool,
     SearchClawHubSkillsTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool,
     SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, SubAgentTool, TodoWriteTool,
     UninstallPluginTool, UninstallSkillTool, WebFetchTool, WebSearchTool, WriteFileTool,
@@ -322,6 +322,17 @@ impl RigAgent {
                 let list_asr = ListAsrTool::new(Arc::clone(asr));
                 let get_asr = GetAsrRecordTool::new(Arc::clone(asr));
                 b = b.tool(transcribe).tool(search_asr).tool(list_asr).tool(get_asr);
+            }
+
+            // 远端任务派发工具：仅在 remote_task_dispatcher 注入时注册（P2P 镜像模式）。
+            // dispatch_remote_task：list 列出在线已配对设备，dispatch 向指定设备派发自然语言任务。
+            // 用 trait object 避免 agent crate 依赖 effisuite-p2p（依赖倒置）。
+            // P2pManager 实现了 RemoteTaskDispatcher trait，由 Tauri 命令层在 build_agent 时注入。
+            if let Some(dispatcher) = &self.remote_task_dispatcher {
+                if want("dispatch_remote_task") {
+                    let dispatch = DispatchRemoteTaskTool::new(Arc::clone(dispatcher));
+                    b = b.tool(dispatch);
+                }
             }
 
             b.default_max_turns(usize::MAX).build()

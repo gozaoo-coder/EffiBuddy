@@ -20,7 +20,7 @@ use effisuite_agent::{
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
     AgentConfig, BackendKind, CompressionStore, ConversationStore, MemoryIndex, Message,
-    ModelKind, PinnedMemoryStore, PluginStore, SkillStore,
+    ModelKind, PinnedMemoryStore, PluginStore, RemoteTaskDispatcher, SkillStore,
 };
 use tauri::Emitter;
 use tokio::sync::RwLock;
@@ -60,6 +60,7 @@ pub(crate) fn build_agent(
     model_manager: Arc<effisuite_agent::ModelManagerHandle>,
     sub_agents: Arc<effisuite_agent::SubAgentManager>,
     asr_service: Arc<AsrService>,
+    remote_task_dispatcher: Arc<dyn RemoteTaskDispatcher>,
 ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
@@ -85,7 +86,11 @@ pub(crate) fn build_agent(
                 Some(model_manager),
                 Some(sub_agents),
             ) {
-                Ok(agent) => Arc::new(agent.with_asr_service(Some(asr_service))),
+                Ok(agent) => Arc::new(
+                    agent
+                        .with_asr_service(Some(asr_service))
+                        .with_remote_task_dispatcher(Some(remote_task_dispatcher)),
+                ),
                 Err(e) => {
                     tracing::warn!(error = %e, "RigAgent 构造失败，回退到 MockAgent");
                     Arc::new(MockAgent::new())
@@ -97,12 +102,15 @@ pub(crate) fn build_agent(
 }
 
 /// 从 AppState 组装 build_agent 的全部参数并构造新 agent。
-/// 消除 ensure_agent_synced / set_config / set_active_model 中的重复 16 参数调用。
+/// 消除 ensure_agent_synced / set_config / set_active_model 中的重复 17 参数调用。
 #[inline]
 pub(crate) fn build_agent_from_state(
     state: &AppState,
     config: &AgentConfig,
 ) -> Arc<dyn ChatAgent> {
+    // P2pManager 实现了 RemoteTaskDispatcher trait，.clone() 返回 Arc<P2pManager>，
+    // 在 let 绑定的类型标注处协变为 Arc<dyn RemoteTaskDispatcher>
+    let dispatcher: Arc<dyn RemoteTaskDispatcher> = state.p2p.clone();
     build_agent(
         config,
         Arc::clone(&state.memory),
@@ -121,6 +129,7 @@ pub(crate) fn build_agent_from_state(
         Arc::clone(&state.model_manager),
         Arc::clone(&state.sub_agents),
         Arc::clone(&state.asr_service),
+        dispatcher,
     )
 }
 

@@ -39,6 +39,7 @@ pub mod ask_user;
 pub mod asr_tools;
 pub mod call_model;
 pub mod delete_file;
+pub mod dispatch_remote_task;
 pub mod display_image;
 pub mod edit_file;
 pub mod generate_video;
@@ -76,6 +77,9 @@ pub use asr_tools::{
 };
 pub use call_model::CallModelTool;
 pub use delete_file::{DeleteFileArgs, DeleteFileError, DeleteFileTool};
+pub use dispatch_remote_task::{
+    DispatchAction, DispatchRemoteTaskArgs, DispatchRemoteTaskError, DispatchRemoteTaskTool,
+};
 pub use display_image::{DisplayImageOutput, DisplayImageTool};
 pub use edit_file::{EditFileArgs, EditFileTool, EditOp};
 pub use generate_video::{

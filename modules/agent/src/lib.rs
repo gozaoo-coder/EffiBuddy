@@ -32,6 +32,7 @@ pub use rig_agent::{
 };
 pub use tools::{
     AsrRecordDetail, AsrRecordSummary, AsrTool, AskUserTool, CallModelTool, DeleteFileTool,
+    DispatchAction, DispatchRemoteTaskArgs, DispatchRemoteTaskError, DispatchRemoteTaskTool,
     EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetTimeTool, GlobTool, GrepTool,
     ImageGenConfig, ImageGenTool, ListAsrTool, ManageModelTool, ModelManagerHandle,
     NotifyUserTool, OpenPreviewTool, ReadFileTool, ScheduleAction, ScheduleArgs, ScheduleError,
