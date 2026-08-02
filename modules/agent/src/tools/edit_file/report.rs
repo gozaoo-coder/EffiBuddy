@@ -10,12 +10,14 @@ use super::MAX_PREVIEW_LINES;
 
 /// 组装编辑报告。
 ///
+/// - `op_id`：编辑操作 id（仅 non-dry_run + history 启用时为 Some），用于撤回/修订
 /// - `op_results` / `ops`：按执行顺序记录的每个操作结果与对应解析操作（下标一致）
 /// - `lines`：**执行后**的文件行（用于重复插入检测，比较插入点之后的内容）
 /// - `diff_context`：变更明细上下文行数（每侧），0 = 只显示变更行本身
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_report(
     dry_run: bool,
+    op_id: Option<u64>,
     resolved: &Path,
     old_count: usize,
     new_count: usize,
@@ -25,8 +27,13 @@ pub(super) fn build_report(
     diff_context: usize,
 ) -> String {
     let mut report = String::with_capacity(512);
+    let op_id_tag = match op_id {
+        Some(id) => format!("[op_id={id}] "),
+        None => String::new(),
+    };
     report.push_str(&format!(
-        "{}文件 {}（{} 行 → {} 行）\n",
+        "{}{}文件 {}（{} 行 → {} 行）\n",
+        op_id_tag,
         if dry_run { "[预览] " } else { "" },
         resolved.display(),
         old_count,
@@ -136,6 +143,22 @@ pub(super) fn build_report(
             }
         }
 
+        // 行数校准：替换模式下，声明替换的行数（original_lines.len()）与实际写入
+        // 行数（new_lines.len()）若不一致，明确标注。这是 AI 校正下次操作的依据
+        // （例如把 3 行替换为 2 行，后续行号会偏移 -1，需要据此调整后续操作）
+        if let EditKind::Replace { start: s, end: e } = op.kind {
+            let declared = e - s + 1;
+            let actual = text_lines.len();
+            if actual != declared {
+                let delta = actual as isize - declared as isize;
+                let sign = if delta >= 0 { "+" } else { "" };
+                report.push_str(&format!(
+                    "ℹ️ 行数校准：声明替换 {declared} 行，实际写入 {actual} 行（{sign}{delta}），\
+                     后续行号已自动偏移\n"
+                ));
+            }
+        }
+
         // no-op / 仅空白差异检测（仅替换操作）：
         // 常见错误——替换文本与原内容相同（行号选错），或只改了空白但内容没变
         if let EditKind::Replace { .. } = op.kind {
@@ -191,6 +214,12 @@ pub(super) fn build_report(
     report.push_str(
         "\n[提示：以上行号为本次编辑后的新行号，后续 read_file / search_file / edit_file 均以此为准]",
     );
+    if let Some(id) = op_id {
+        report.push_str(&format!(
+            "\n[本次操作 op_id={id}：可调用 edit_revise(action=view, op_id={id}) 查看详情，\
+             或 edit_undo(op_id={id}) 撤回本次操作]"
+        ));
+    }
     if dry_run {
         report.push_str(
             "\n[预览模式：以上为将要发生的变更，文件**未写入磁盘**。确认无误后去掉 dry_run=true 再执行]",

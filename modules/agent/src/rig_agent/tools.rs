@@ -3,6 +3,8 @@
 //! 每次调用 `chat` / `chat_stream` 时重建一个带工具的 `rig_core::agent::Agent`。
 //! 装配工具时按以下分组顺序注册：
 //! 1. 会话内检索 / 本地能力 / 图像 / 标题 / 文件名匹配 / 内容搜索 / 语义搜索 / 网络搜索
+//! 1.5. 正则编辑 / 历史查看修订 / 撤回（edit_file_regex / edit_revise / edit_undo）
+//!      —— 仅在 `edit_history` 注入时
 //! 2. 模型管理（manage_model / call_model）—— 仅在 `model_manager` 注入时
 //! 3. 子 agent（sub_agent）—— 仅在 `sub_agents` 注入时
 //! 4. 跨会话记忆检索（search_memory）—— 仅在 `memory` 注入时
@@ -23,13 +25,15 @@ use rig_core::providers::openai;
 
 use crate::tools::{
     AsrTool, AskUserTool, CallModelTool, DeleteFileTool, DeletePinnedMemoryTool, DisplayImageTool,
-    DispatchRemoteTaskTool, EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetSkillDetailTool,
-    GetTimeTool, GlobTool, GrepTool, ImageGenTool, InstallClawHubSkillTool, ListAsrTool,
-    ListFilesTool, ListInstalledSkillsTool, ListPinnedMemoriesTool, ManageModelTool,
-    NotifyUserTool, OpenPreviewTool, PinMemoryTool, ReadFileTool, ScheduleTool, SearchAsrTool,
-    SearchClawHubSkillsTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool,
-    SearchMemoryTool, EnableSkillTool, SetTitleTool, ShellTool, SubAgentTool, TodoWriteTool,
-    UninstallPluginTool, UninstallSkillTool, WebFetchTool, WebSearchTool, WriteFileTool,
+    DispatchRemoteTaskTool, EditFileRegexTool, EditFileTool, EditReviseTool, EditUndoTool,
+    GenerateVideoTool, GetAsrRecordTool, GetSkillDetailTool, GetTimeTool, GlobTool, GrepTool,
+    ImageGenTool, InstallClawHubSkillTool, ListAsrTool, ListFilesTool, ListInstalledSkillsTool,
+    ListPinnedMemoriesTool, ManageModelTool, NotifyUserTool, OpenPreviewTool, PinMemoryTool,
+    ReadFileTool, ScheduleTool, SearchAsrTool, SearchClawHubSkillsTool, SearchCodebaseTool,
+    SearchFileTool, SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool,
+    ShellSessionKillTool, ShellSessionListTool, ShellSessionReadTool, ShellSessionSendTool,
+    ShellSessionStartTool, ShellTool, SubAgentTool, TodoWriteTool, UninstallPluginTool,
+    UninstallSkillTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 
 use super::RigAgent;
@@ -78,6 +82,29 @@ impl RigAgent {
                 Some(p) => EditFileTool::with_cwd(p.clone()),
                 None => EditFileTool::new(),
             };
+            // 注入编辑历史句柄：启用 op_id 编号与撤回/修订能力
+            let edit_file = match &self.edit_history {
+                Some(h) => edit_file.with_history(h.clone()),
+                None => edit_file,
+            };
+            // 正则编辑工具：与 edit_file 共享同一份 history（仅在 history 注入时注册）
+            let edit_file_regex = self.edit_history.as_ref().map(|h| {
+                let t = match &cwd {
+                    Some(p) => EditFileRegexTool::with_cwd(p.clone()),
+                    None => EditFileRegexTool::new(),
+                };
+                t.with_history(h.clone())
+            });
+            // 历史查看/修订工具：history 必填，仅在注入时注册
+            let edit_revise = self.edit_history.as_ref().map(|h| match &cwd {
+                Some(p) => EditReviseTool::with_cwd(p.clone(), h.clone()),
+                None => EditReviseTool::new(h.clone()),
+            });
+            // 撤回工具：history 必填，仅在注入时注册
+            let edit_undo = self
+                .edit_history
+                .as_ref()
+                .map(|h| EditUndoTool::new(h.clone()));
             let search_file = match &cwd {
                 Some(p) => SearchFileTool::with_cwd(p.clone()),
                 None => SearchFileTool::new(),
@@ -158,6 +185,18 @@ impl RigAgent {
                 .tool(grep)
                 .tool(search_codebase)
                 .tool(web_search);
+
+            // 正则编辑 / 历史查看修订 / 撤回工具：仅在 edit_history 注入时注册
+            // 与 edit_file 共享同一份 history，使 op_id 在 4 个工具间互通
+            if let Some(t) = edit_file_regex {
+                b = b.tool(t);
+            }
+            if let Some(t) = edit_revise {
+                b = b.tool(t);
+            }
+            if let Some(t) = edit_undo {
+                b = b.tool(t);
+            }
 
             // 模型管理与调用工具：仅在 ModelManagerHandle 可用时注册
             // manage_model：agent 自主增删改查模型列表 / 激活模型
@@ -285,13 +324,20 @@ impl RigAgent {
                 }
             }
 
-            // 待办列表工具：todo_state 为 Some 时跨调用共享同一份列表
-            // （主 agent 与子 agent 可视化任务进度）；None 时工具持有独立空列表
+            // 待办列表工具：优先使用每会话 TodoStore（写入后持久化到当前会话 + 通知前端）；
+            // 无 store 时回退到共享内存状态（主 agent 与子 agent 可视化任务进度）
             if want("todo_write") {
-                let todo = match &self.todo_state {
+                let mut todo = match &self.todo_state {
                     Some(state) => TodoWriteTool::with_state(Arc::clone(state)),
                     None => TodoWriteTool::new(),
                 };
+                if let Some(store) = &self.todo_store {
+                    todo = todo.with_persistence(
+                        store.clone(),
+                        Arc::clone(&self.current_conversation_id),
+                        self.event_bus.clone(),
+                    );
+                }
                 b = b.tool(todo);
             }
 
@@ -332,6 +378,53 @@ impl RigAgent {
                 if want("dispatch_remote_task") {
                     let dispatch = DispatchRemoteTaskTool::new(Arc::clone(dispatcher));
                     b = b.tool(dispatch);
+                }
+            }
+            // 后台命令会话工具集：仅在 shell_sessions 管理器注入时注册。
+            // 让 LLM 启用常驻 cmd/sh 会话（后台静默运行）并持续交互，
+            // 会话输出实时推送前端底栏便签展示 AI 工作状态。
+            if let Some(mgr) = &self.shell_sessions {
+                if want("shell_session_start") {
+                    b = b.tool(ShellSessionStartTool::new(Arc::clone(mgr)));
+                }
+                if want("shell_session_send") {
+                    b = b.tool(ShellSessionSendTool::new(Arc::clone(mgr)));
+                }
+                if want("shell_session_read") {
+                    b = b.tool(ShellSessionReadTool::new(Arc::clone(mgr)));
+                }
+                if want("shell_session_list") {
+                    b = b.tool(ShellSessionListTool::new(Arc::clone(mgr)));
+                }
+                if want("shell_session_kill") {
+                    b = b.tool(ShellSessionKillTool::new(Arc::clone(mgr)));
+                }
+            }
+
+            // 运行时 agent 公共会话交流池工具集：仅在 AgentPoolStore 注入时注册。
+            // 多会话并行时用于跨会话协作：pool_report 登记长任务、pool_lookup 查询
+            // 活跃长任务、pool_at @ 目标 agent（async/await）、pool_reply 回复收件箱。
+            // 子 agent（pool_sub_agent_id 非空）同样注册，身份按 sa:<session_id> 推导。
+            if let Some(pool) = &self.agent_pool {
+                let ctx = crate::tools::PoolCtx {
+                    pool: pool.clone(),
+                    conv_id: Arc::clone(&self.current_conversation_id),
+                    sub_agent_id: self.pool_sub_agent_id.clone(),
+                    sub_agent_name: self.pool_sub_agent_name.clone(),
+                    store: Some(Arc::clone(&self.store)),
+                    event_bus: self.event_bus.clone(),
+                };
+                if want("pool_report") {
+                    b = b.tool(crate::tools::PoolReportTool::new(ctx.clone()));
+                }
+                if want("pool_lookup") {
+                    b = b.tool(crate::tools::PoolLookupTool::new(ctx.clone()));
+                }
+                if want("pool_at") {
+                    b = b.tool(crate::tools::PoolAtTool::new(ctx.clone()));
+                }
+                if want("pool_reply") {
+                    b = b.tool(crate::tools::PoolReplyTool::new(ctx));
                 }
             }
 

@@ -222,3 +222,81 @@ async fn diff_context_shows_surrounding_lines() {
     assert!(!r2.contains("· 4"), "out: {r2}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn line_calibration_warns_on_mismatch() {
+    let dir = tmp_dir();
+    setup_file(&dir, "a.txt", "a\nb\nc\nd\ne\n").await;
+    let tool = EditFileTool::with_cwd(dir.clone());
+    // 声明替换 3 行（2-4），实际写入 1 行 → 应触发行数校准警告
+    let r = tool
+        .call(EditFileArgs {
+            path: "a.txt".to_string(),
+            edits: vec![EditOp {
+                start_line: Some(2),
+                end_line: Some(4),
+                insert_before: None,
+                text: "X".to_string(),
+            }],
+            dry_run: Some(true),
+            diff_context: None,
+        })
+        .await
+        .unwrap();
+    assert!(r.contains("行数校准"), "out: {r}");
+    assert!(r.contains("声明替换 3 行"), "out: {r}");
+    assert!(r.contains("实际写入 1 行"), "out: {r}");
+    assert!(r.contains("-2"), "out: {r}"); // delta = 1 - 3 = -2
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn line_calibration_no_warning_when_matching() {
+    let dir = tmp_dir();
+    setup_file(&dir, "a.txt", "a\nb\nc\nd\ne\n").await;
+    let tool = EditFileTool::with_cwd(dir.clone());
+    // 声明替换 2 行（2-3），实际写入 2 行 → 不应触发行数校准警告
+    let r = tool
+        .call(EditFileArgs {
+            path: "a.txt".to_string(),
+            edits: vec![EditOp {
+                start_line: Some(2),
+                end_line: Some(3),
+                insert_before: None,
+                text: "X\nY".to_string(),
+            }],
+            dry_run: Some(true),
+            diff_context: None,
+        })
+        .await
+        .unwrap();
+    assert!(!r.contains("行数校准"), "out: {r}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn line_calibration_warns_on_expansion() {
+    let dir = tmp_dir();
+    setup_file(&dir, "a.txt", "a\nb\nc\nd\n").await;
+    let tool = EditFileTool::with_cwd(dir.clone());
+    // 声明替换 1 行（2），实际写入 3 行 → 应触发行数校准警告（+2）
+    let r = tool
+        .call(EditFileArgs {
+            path: "a.txt".to_string(),
+            edits: vec![EditOp {
+                start_line: Some(2),
+                end_line: None,
+                insert_before: None,
+                text: "X\nY\nZ".to_string(),
+            }],
+            dry_run: Some(true),
+            diff_context: None,
+        })
+        .await
+        .unwrap();
+    assert!(r.contains("行数校准"), "out: {r}");
+    assert!(r.contains("声明替换 1 行"), "out: {r}");
+    assert!(r.contains("实际写入 3 行"), "out: {r}");
+    assert!(r.contains("+2"), "out: {r}"); // delta = 3 - 1 = +2
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -11,13 +11,19 @@
 //! - [`embedding`]：OpenAI 兼容嵌入向量 provider，为 `MemoryIndex` 提供向量路
 
 pub mod agent;
+pub mod agent_pool;
 pub mod asr;
 pub mod embedding;
 pub mod mock;
 pub mod rig_agent;
+pub mod shell_session;
 pub mod tools;
-
+pub mod todo_store;
 pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
+pub use agent_pool::{
+    AgentPoolStore, AtMessage, AtStatus, PoolEntry, PoolKind, PoolStatus, format_lookup_result,
+    format_pool_section,
+};
 pub use asr::{
     AsrError, AsrProvider, AsrService, AudioStreamConfig, FinishResult, QwenProvider,
     SessionInfo, SessionRegistry, SessionState, TranscribeResult, VolcEngineProvider,
@@ -30,15 +36,24 @@ pub use rig_agent::{
     RigAgent, SUB_AGENT_DEFAULT_EXCLUDED, build_auto_classify_prompt, call_auto_classify_agent,
     call_compression_agent, call_compression_agent_stream, parse_auto_classify_response,
 };
+pub use todo_store::{TodoNode, TodoStore, build_todo_tree, format_todo_tree, todo_tree_stats};
 pub use tools::{
     AsrRecordDetail, AsrRecordSummary, AsrTool, AskUserTool, CallModelTool, DeleteFileTool,
     DispatchAction, DispatchRemoteTaskArgs, DispatchRemoteTaskError, DispatchRemoteTaskTool,
-    EditFileTool, GenerateVideoTool, GetAsrRecordTool, GetTimeTool, GlobTool, GrepTool,
-    ImageGenConfig, ImageGenTool, ListAsrTool, ManageModelTool, ModelManagerHandle,
-    NotifyUserTool, OpenPreviewTool, ReadFileTool, ScheduleAction, ScheduleArgs, ScheduleError,
+    EditFileRegexTool, EditFileTool, EditHistoryHandle, EditReviseTool, EditUndoTool,
+    GenerateVideoTool, GetAsrRecordTool, GetTimeTool, GlobTool, GrepTool, ImageGenConfig,
+    ImageGenTool, ListAsrTool, ManageModelTool, ModelManagerHandle, NotifyUserTool,
+    OpenPreviewTool, PoolAtArgs, PoolAtError, PoolAtTool, PoolCtx, PoolLookupArgs,
+    PoolLookupError, PoolLookupTool, PoolReplyArgs, PoolReplyError, PoolReplyTool, PoolReportArgs,
+    PoolReportError, PoolReportTool, ReadFileTool, ScheduleAction, ScheduleArgs, ScheduleError,
     ScheduleTool, SearchAsrTool, SearchCodebaseTool, SearchFileTool, SearchHistoryTool,
     SearchMemoryTool, SearchResult, SetTitleTool, SubAgentEvent, SubAgentEventKind, SubAgentKit,
     SubAgentManager, SubAgentTool, TodoItem, TodoPriority, TodoStatus, TodoWriteTool,
     UninstallPluginTool, UninstallSkillTool, VideoGenConfig, WebSearchConfig, WebSearchTool,
-    WriteFileTool,
+    WriteFileTool, new_shared_history,
+};
+pub use shell_session::{
+    ShellSessionEvent, ShellSessionEventKind, ShellSessionInfo, ShellSessionKillTool,
+    ShellSessionListTool, ShellSessionManager, ShellSessionReadTool, ShellSessionSendTool,
+    ShellSessionStartTool,
 };

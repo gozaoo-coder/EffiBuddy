@@ -8,11 +8,12 @@
 //! - 非流式 `chat`：通过 `agent.prompt(prompt).await`
 //! - 流式 `chat_stream`：通过 `agent.stream_prompt(prompt).await` 并过滤文本增量
 //! - 工具调用：构造 agent 时注册 `SearchHistoryTool`、`SearchMemoryTool`、
-//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`EditFileTool`、`SearchFileTool`、
+//!   `GetTimeTool`、`ReadFileTool`、`WriteFileTool`、`EditFileTool`、`EditFileRegexTool`、
+//!   `EditReviseTool`、`EditUndoTool`、`SearchFileTool`、
 //!   `ListFilesTool`、`ShellTool`、`WebFetchTool`、
 //!   `ImageGenTool`、`DisplayImageTool`，
 //!   LLM 可主动调用以检索历史、跨会话记忆、获取时间、读写本地文件、
-//!   按行号编辑文件、工作区全文搜索、
+//!   按行号编辑文件、正则替换文件内容、查看/修订/撤回编辑操作、工作区全文搜索、
 //!   执行 shell 命令（集成 agent-reach / browser-act）、抓取网页、
 //!   生成图片、把已有图片推送到聊天框展示
 //! - **RAG 记忆增强**：每次对话前自动通过 `MemoryIndex` 检索相关跨会话历史，
@@ -44,7 +45,6 @@ mod chat_agent_impl;
 mod compression;
 mod context;
 mod tools;
-
 pub use auto_classify::{
     AUTO_CLASSIFY_PREAMBLE, AutoClassifyResult, build_auto_classify_prompt,
     call_auto_classify_agent, parse_auto_classify_response,
@@ -78,6 +78,10 @@ pub(super) const RECENT_HISTORY_WITH_MEMORY: usize = 0;
 /// 长会话的 token 预算由消息压缩系统（compress_message 命令）维护，
 /// 而非在 prompt 拼装层硬截断。
 pub(super) const HISTORY_TRUNCATE_CHARS: usize = 0;
+/// 助手消息的思考（reasoning）注入上下文的单条长度上限（字符）。
+/// 推理模型的 thinking 可能非常长，全量注入会快速耗尽上下文窗口；
+/// 这里对单条 reasoning 做截断兜底，长会话的进一步预算仍由压缩系统维护。
+pub(super) const REASONING_IN_CONTEXT_CHARS: usize = 2000;
 /// 自动注入的可用技能条数上限（RAG 检索 Top-K）
 /// 仅注入 name + description 摘要，agent 通过 get_skill_detail / enable_skill 深入使用
 pub(super) const SKILL_AUTO_INJECT_LIMIT: usize = 3;
@@ -133,6 +137,10 @@ pub struct RigAgent {
     /// read_file / list_files / shell 据此解析相对路径与设置子进程 cwd。
     /// 优先级：会话级 working_dir > 技能级 working_dir > 进程默认 cwd。
     pub(super) working_dir: Arc<RwLock<Option<PathBuf>>>,
+    /// 编辑历史共享句柄：edit_file / edit_file_regex 写入，edit_revise / edit_undo 读取。
+    /// 每次 build_agent 注入到 4 个 edit 工具，使它们共享同一份 op_id 历史。
+    /// None 时 edit 工具退化为无历史模式（不返回 op_id，无法撤回/修订）。
+    pub(super) edit_history: Option<crate::tools::EditHistoryHandle>,
     /// 图像生成模型配置句柄：set_active_model 切到 kind=ImageGen 的模型时更新。
     /// build_agent 注入到 ImageGenTool；为 None 时 image_gen 工具返回错误。
     pub(super) image_gen_config: Arc<RwLock<Option<ImageGenConfig>>>,
@@ -171,6 +179,9 @@ pub struct RigAgent {
     /// 待办列表共享状态，TodoWriteTool 据此管理任务列表。
     /// None 时 todo_write 工具不可用。
     pub(super) todo_state: Option<Arc<RwLock<Vec<TodoItem>>>>,
+    /// 每会话 TodoTree 存储：todo_write 工具写入后持久化到当前会话，
+    /// build_context_parts 每轮注入 `[当前任务清单]` 段，任务详情常驻本会话上下文。
+    pub(super) todo_store: Option<crate::todo_store::TodoStore>,
     /// ASR 语音转写服务句柄，ASR 工具集据此转写/检索/列出/获取记录。
     /// None 时不注册 ASR 工具（transcribe_audio / search_asr_records 等）。
     pub(super) asr_service: Option<Arc<crate::asr::AsrService>>,
@@ -178,4 +189,16 @@ pub struct RigAgent {
     /// None 时不注册 dispatch_remote_task 工具；Some 时 LLM 可列出在线设备并派发任务。
     /// 用 trait object 避免 agent crate 依赖 effisuite-p2p（依赖倒置）。
     pub(super) remote_task_dispatcher: Option<Arc<dyn RemoteTaskDispatcher>>,
+    /// 后台命令会话管理器：shell_session_start / send / read / list / kill 工具据此
+    /// 启用并交互常驻 cmd/sh 会话（静默后台运行，前端底栏实时展示）。
+    /// None 时不注册这 5 个工具。
+    pub(super) shell_sessions: Option<Arc<crate::shell_session::ShellSessionManager>>,
+    /// 运行时 agent 公共会话交流池存储：跨会话协作基础设施。
+    /// None 时不注册 pool_* 工具、不注入 `[Agent 交流池]` 上下文段。
+    pub(super) agent_pool: Option<crate::agent_pool::AgentPoolStore>,
+    /// 交流池身份：主 agent 为 None（agent_id 按 `conv:<conversation_id>` 推导）；
+    /// 子 agent 为 Some(session_id)（agent_id 按 `sa:<session_id>` 推导）。
+    pub(super) pool_sub_agent_id: Option<String>,
+    /// 子 agent 的交流池显示名（主 agent 为 None，取会话标题）。
+    pub(super) pool_sub_agent_name: Option<String>,
 }

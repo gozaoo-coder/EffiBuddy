@@ -1,12 +1,16 @@
 //! edit_file 工具的数据结构定义。
 //!
-//! 对外 API 类型（`EditFileArgs` / `EditOp`）保持 `pub`；
+//! 对外 API 类型（`EditFileArgs` / `EditOp` / `EditFileRegexArgs` /
+//! `EditReviseArgs` / `EditUndoArgs`）保持 `pub`；
 //! 内部解析类型（`EditKind` / `ParsedOp` / `OpResult`）仅对 `edit_file`
 //! 模块及其子模块可见（`pub(super)`），字段同步开放给 `tool` / `report` 子模块。
 
 use serde::Deserialize;
 
 /// 工具参数
+///
+/// 字段按大小降序：String（24B）= Vec（24B）> Option<bool>（1B）= Option<usize>（16B）。
+/// 这里为兼容既有 JSON 调用顺序未严格排序，padding 影响可忽略（单实例）。
 #[derive(Deserialize)]
 pub struct EditFileArgs {
     /// 要编辑的文件路径（绝对或相对工作区）
@@ -38,6 +42,69 @@ pub struct EditOp {
     pub insert_before: Option<usize>,
     /// 目标文本（替换/插入/追加的内容）。推荐 `<content>...</content>` 包裹避免转义
     pub text: String,
+}
+
+/// `edit_file_regex` 工具参数：基于正则表达式的全文替换
+///
+/// 字段按大小降序：String（24B）> Option<bool>（1B）。
+#[derive(Deserialize)]
+pub struct EditFileRegexArgs {
+    /// 要编辑的文件路径（绝对或相对工作区）
+    pub path: String,
+    /// 正则表达式（regex crate 语法，如 `fn \w+`、`TODO\(.*\)`）
+    pub pattern: String,
+    /// 替换文本。支持 `$1` / `${name}` 捕获组引用；推荐 `<content>...</content>` 包裹
+    pub replacement: String,
+    /// true = 替换所有匹配；false = 仅替换第一处。默认 false
+    #[serde(default)]
+    pub global: Option<bool>,
+    /// 是否多行模式（`^` / `$` 匹配行边界，`.` 不跨行）。默认 false
+    #[serde(default)]
+    pub multiline: Option<bool>,
+    /// 是否区分大小写。默认 false（不区分）
+    #[serde(default)]
+    pub case_sensitive: Option<bool>,
+    /// true = 仅预览：返回将替换的匹配片段与上下文，不写入磁盘
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    /// 预览时展示的上下文行数（每侧），默认 1；0 = 只显示命中行
+    #[serde(default)]
+    pub diff_context: Option<usize>,
+}
+
+/// `edit_revise` 工具参数：查看 / 修订历史编辑操作
+///
+/// action 取值：
+/// - `view`：查看指定 op_id 的详情（原内容、新内容、行号变化、操作类型）
+/// - `list`：列出最近 N 条历史操作（默认 10 条）
+/// - `patch`：用新 text 重做指定 op_id（先撤回该操作，再用新 text 在原位置执行）
+///
+/// 字段按大小降序：String（24B）> Option<u64>（16B）= Option<usize>（16B）> u8（1B）
+#[derive(Deserialize)]
+pub struct EditReviseArgs {
+    /// 操作类型：view / list / patch
+    pub action: String,
+    /// 目标 op_id（view / patch 必填，list 忽略）
+    #[serde(default)]
+    pub op_id: Option<u64>,
+    /// list 模式下列出的最大条数，默认 10
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// patch 模式的新文本（替换原操作的目标文本）
+    #[serde(default)]
+    pub new_text: Option<String>,
+}
+
+/// `edit_undo` 工具参数：撤回指定 op_id 的编辑操作
+///
+/// 字段按大小降序：u64（8B）> Option<bool>（1B）。
+#[derive(Deserialize)]
+pub struct EditUndoArgs {
+    /// 要撤回的 op_id（必填，由 edit_file / edit_file_regex / edit_revise 返回）
+    pub op_id: u64,
+    /// true = 仅预览：返回撤回后将恢复的内容，不写入磁盘
+    #[serde(default)]
+    pub dry_run: Option<bool>,
 }
 
 /// 内部解析后的操作（行号统一转 0-based）

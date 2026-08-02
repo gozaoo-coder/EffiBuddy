@@ -13,7 +13,13 @@
 //!   支持 start_line/end_line 行范围精读
 //! - [`WriteFileTool`]：写入本地文件（XML/CDATA 包裹避免转义，支持工作区相对路径）
 //! - [`EditFileTool`]：按行号精确编辑本地文件：替换指定行 / 指定行前插入 /
-//!   无行号时追加到文件末尾新行（与 read_file/search_file 的行号配合）
+//!   无行号时追加到文件末尾新行（与 read_file/search_file 的行号配合）。
+//!   启用 history 后返回 op_id，支持行数校准警告
+//! - [`EditFileRegexTool`]：正则表达式匹配替换（首处 / 全部），与 edit_file 互补。
+//!   支持 $1 / ${name} 捕获组引用、多行模式、大小写敏感选项
+//! - [`EditReviseTool`]：查看 / 修订历史编辑操作（view / list / patch）。
+//!   patch 用新 text 重做指定 op_id（先撤回再重新执行）
+//! - [`EditUndoTool`]：撤回指定 op_id 的编辑操作（恢复文件到操作前状态）
 //! - [`SearchFileTool`]：工作区**全文搜索**：关键词数组 + 递归遍历全部文本文件，
 //!   返回命中行（path + 行号 + 行内容），行号可直接用于 edit_file
 //! - [`GrepTool`]：工作区**正则搜索**（grep/ripgrep 风格）：用 `regex` 语法搜索
@@ -35,6 +41,7 @@
 //! RAG 检索：`SearchMemoryTool` 通过 `MemoryIndex` 提供 BM25 / 向量 / 混合
 //! 三种检索模式，自动排除当前会话避免与已注入上下文重复。
 
+pub mod agent_pool;
 pub mod ask_user;
 pub mod asr_tools;
 pub mod call_model;
@@ -68,7 +75,10 @@ pub mod todo_write;
 pub mod web_fetch;
 pub mod web_search;
 pub mod write_file;
-
+pub use agent_pool::{
+    PoolAtArgs, PoolAtError, PoolAtTool, PoolCtx, PoolLookupArgs, PoolLookupError, PoolLookupTool,
+    PoolReplyArgs, PoolReplyError, PoolReplyTool, PoolReportArgs, PoolReportError, PoolReportTool,
+};
 pub use ask_user::{AskUserArgs, AskUserError, AskUserTool, Question, QuestionOption};
 pub use asr_tools::{
     AsrRecordDetail, AsrRecordSummary, AsrTool, GetAsrRecordArgs, GetAsrRecordError,
@@ -81,7 +91,10 @@ pub use dispatch_remote_task::{
     DispatchAction, DispatchRemoteTaskArgs, DispatchRemoteTaskError, DispatchRemoteTaskTool,
 };
 pub use display_image::{DisplayImageOutput, DisplayImageTool};
-pub use edit_file::{EditFileArgs, EditFileTool, EditOp};
+pub use edit_file::{
+    EditFileArgs, EditFileRegexArgs, EditFileRegexTool, EditFileTool, EditHistoryHandle,
+    EditOp, EditReviseArgs, EditReviseTool, EditUndoArgs, EditUndoTool, new_shared_history,
+};
 pub use generate_video::{
     GenerateVideoError, GenerateVideoOutput, GenerateVideoTool, VideoGenConfig,
 };
@@ -107,6 +120,10 @@ pub use search_history::SearchHistoryTool;
 pub use search_memory::SearchMemoryTool;
 pub use set_title::SetTitleTool;
 pub use shell::ShellTool;
+pub use crate::shell_session::{
+    ShellSessionKillTool, ShellSessionListTool, ShellSessionReadTool, ShellSessionSendTool,
+    ShellSessionStartTool,
+};
 pub use skill_tools::{
     GetSkillDetailTool, InstallClawHubSkillTool, ListInstalledSkillsTool,
     SearchClawHubSkillsTool, EnableSkillTool, UninstallSkillTool,

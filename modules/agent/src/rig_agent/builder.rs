@@ -77,6 +77,7 @@ impl RigAgent {
             plugin_store,
             current_conversation_id,
             working_dir,
+            edit_history: Some(crate::tools::new_shared_history()),
             image_gen_config,
             attachments_dir,
             store,
@@ -87,15 +88,20 @@ impl RigAgent {
             exclude_tools: Vec::new(),
             event_bus: None,
             scheduled_task_store: None,
-            web_search_config: Arc::new(RwLock::new(None)),
-            video_gen_config: Arc::new(RwLock::new(None)),
-            todo_state: None,
-            asr_service: None,
-            remote_task_dispatcher: None,
-        })
-    }
+              web_search_config: Arc::new(RwLock::new(None)),
+              video_gen_config: Arc::new(RwLock::new(None)),
+              todo_state: None,
+              todo_store: None,
+              asr_service: None,
+              remote_task_dispatcher: None,
+              shell_sessions: None,
+              agent_pool: None,
+                pool_sub_agent_id: None,
+                pool_sub_agent_name: None,
+          })
+      }
 
-    /// 指定工具白名单：None = 全部工具；Some = 仅注册列表中的工具
+      /// 指定工具白名单：None = 全部工具；Some = 仅注册列表中的工具
     pub fn with_tool_allowlist(mut self, tools: Option<Vec<String>>) -> Self {
         self.tool_allowlist = tools;
         self
@@ -147,6 +153,13 @@ impl RigAgent {
         self
     }
 
+    /// 注入每会话 TodoTree 存储：todo_write 工具写入后持久化到当前会话，
+    /// build_context_parts 每轮把 `[当前任务清单]` 注入上下文。
+    pub fn with_todo_store(mut self, store: Option<crate::todo_store::TodoStore>) -> Self {
+        self.todo_store = store;
+        self
+    }
+
     /// 注入 ASR 语音转写服务句柄，启用 transcribe_audio / search_asr_records /
     /// list_asr_records / get_asr_record 工具
     pub fn with_asr_service(mut self, service: Option<Arc<crate::asr::AsrService>>) -> Self {
@@ -162,6 +175,39 @@ impl RigAgent {
         dispatcher: Option<Arc<dyn RemoteTaskDispatcher>>,
     ) -> Self {
         self.remote_task_dispatcher = dispatcher;
+        self
+    }
+
+    /// 注入后台命令会话管理器，启用 shell_session_start / send / read / list / kill 工具
+    pub fn with_shell_sessions(
+        mut self,
+        manager: Option<Arc<crate::shell_session::ShellSessionManager>>,
+    ) -> Self {
+        self.shell_sessions = manager;
+        self
+    }
+
+    /// 注入运行时 agent 公共会话交流池存储，启用 pool_report / pool_lookup / pool_at /
+    /// pool_reply 工具与 `[Agent 交流池]` 上下文段（多会话跨会话协作）。
+    pub fn with_agent_pool(mut self, pool: Option<crate::agent_pool::AgentPoolStore>) -> Self {
+        self.agent_pool = pool;
+        self
+    }
+
+    /// 标注当前 agent 为子 agent 身份（session_id），交流池 agent_id 按
+    /// `sa:<session_id>` 推导，显示名用 `name`。主 agent 无需调用
+    /// （agent_id 按 `conv:<conversation_id>` 推导，显示名取会话标题）。
+    pub fn with_pool_sub_agent_identity(mut self, session_id: Option<String>, name: Option<String>) -> Self {
+        self.pool_sub_agent_id = session_id;
+        self.pool_sub_agent_name = name;
+        self
+    }
+
+    /// 注入或禁用编辑历史句柄。
+    /// - `Some(handle)`：用外部句柄替换默认历史（如子 agent 共享主 agent 的历史）
+    /// - `None`：禁用编辑历史（edit 工具不返回 op_id，无法撤回/修订）
+    pub fn with_edit_history(mut self, history: Option<crate::tools::EditHistoryHandle>) -> Self {
+        self.edit_history = history;
         self
     }
 
@@ -239,6 +285,7 @@ impl RigAgent {
             plugin_store,
             current_conversation_id,
             working_dir,
+            edit_history: Some(crate::tools::new_shared_history()),
             image_gen_config,
             attachments_dir,
             store,
@@ -252,8 +299,13 @@ impl RigAgent {
             web_search_config: Arc::new(RwLock::new(None)),
             video_gen_config: Arc::new(RwLock::new(None)),
             todo_state: None,
+            todo_store: None,
             asr_service: None,
             remote_task_dispatcher: None,
+            shell_sessions: None,
+            agent_pool: None,
+            pool_sub_agent_id: None,
+            pool_sub_agent_name: None,
         })
     }
 

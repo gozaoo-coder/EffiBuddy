@@ -1,5 +1,9 @@
 //! `EditFileTool` 及其 `Tool` trait 实现：读取文件 → 解析/校验操作 →
 //! 执行 splice → 写回 → 委托 [`super::report`] 生成报告。
+//!
+//! 启用 `history`（`Arc<RwLock<EditHistory>>`）后，每次成功的非 dry_run 编辑
+//! 会记录一条快照（操作前后文件完整内容），返回的报告中含 `op_id`，
+//! 供 `edit_revise` / `edit_undo` 工具使用。
 
 use std::path::PathBuf;
 
@@ -8,6 +12,7 @@ use tokio::fs;
 
 use super::super::resolve_path;
 use super::super::text_utils::extract_content;
+use super::history::{EditHistoryHandle, EditOpParams, EditRecordKind, LineEditParams, record_edit};
 use super::types::{EditFileArgs, EditKind, OpResult, ParsedOp};
 use super::MAX_OPS;
 
@@ -19,18 +24,32 @@ pub struct EditFileError(String);
 /// 文件编辑工具
 ///
 /// `cwd` 为可选工作区：设置后相对路径以此为基准，未设置则依赖进程 cwd。
+/// `history` 为可选编辑历史句柄：注入后每次成功编辑会记录快照，返回 op_id。
 pub struct EditFileTool {
     cwd: Option<PathBuf>,
+    history: Option<EditHistoryHandle>,
 }
 
 impl EditFileTool {
     pub fn new() -> Self {
-        Self { cwd: None }
+        Self {
+            cwd: None,
+            history: None,
+        }
     }
 
     /// 指定工作区目录，相对路径将 join 到此目录
     pub fn with_cwd(cwd: PathBuf) -> Self {
-        Self { cwd: Some(cwd) }
+        Self {
+            cwd: Some(cwd),
+            history: None,
+        }
+    }
+
+    /// 注入编辑历史句柄，启用 op_id 编号与撤回能力（链式调用）
+    pub fn with_history(mut self, history: EditHistoryHandle) -> Self {
+        self.history = Some(history);
+        self
     }
 }
 
@@ -53,6 +72,12 @@ impl Tool for EditFileTool {
             .as_ref()
             .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
             .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
+        let history_hint = if self.history.is_some() {
+            "\n**编辑历史**：每次成功编辑会分配一个 op_id（在返回报告开头），\
+             可用 edit_revise 查看/修订、edit_undo 撤回该操作。"
+        } else {
+            ""
+        };
         format!(
             "按行号精确编辑本地文本文件，**不覆盖整文件**。与 read_file / search_file 配合：\
              先读取或搜索拿到行号，再替换指定行。\n\n\
@@ -65,8 +90,10 @@ impl Tool for EditFileTool {
               **规则**：行号一律 1-based 且指编辑前原文件；多个操作自动排序执行、区间不能重叠；\
               一次最多 {MAX_OPS} 个操作。text 推荐用 <content>...</content> 包裹避免转义（同 write_file）。\n\
               **可选参数**：dry_run=true 仅预览不写盘（大改前先确认安全，返回完整 diff 与行号变化）；\
-              diff_context=N 控制变更明细上下文行数（默认 1，0 = 只显示变更行）。\
-              路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}"
+              diff_context=N 控制变更明细上下文行数（默认 1，0 = 只显示变更行）。\n\
+              **行数校准**：替换模式下若 text 行数与 (end_line - start_line + 1) 不一致，\
+              报告会明确标注声明行数与实际写入行数，便于核对的下次操作。\
+              路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}{history_hint}"
         )
     }
 
@@ -153,6 +180,12 @@ impl Tool for EditFileTool {
                 resolved.display()
             ))
         })?;
+        // 保留原始内容用于历史快照（仅 non-dry_run 时记录）
+        let old_content_snapshot = if !dry_run && self.history.is_some() {
+            Some(content.clone())
+        } else {
+            None
+        };
 
         // 2. 切行：保留 EOL 风格（\r\n vs \n）与"是否以换行结尾"
         let eol = if content.contains("\r\n") { "\r\n" } else { "\n" };
@@ -373,9 +406,49 @@ impl Tool for EditFileTool {
                 .map_err(|e| EditFileError(format!("写入文件失败 [{}]: {e}", resolved.display())))?;
         }
 
-        // 8. 组装报告：每个操作的变化 + 迷你 diff（含上下文）+ no-op/重复警告
+        // 8. 记录历史（non-dry_run 且注入了 history）：锁内仅 push，无 I/O
+        let op_id = if !dry_run {
+            if let Some(history) = &self.history {
+                let summary = build_summary(&resolved, old_count, new_count, &ops);
+                let lines_changed = op_results
+                    .iter()
+                    .map(|r| r.new_lines.len().max(r.original_lines.len()) as u32)
+                    .sum();
+                // 构造原始操作参数（用于 edit_revise patch 重新执行）
+                let params = EditOpParams::Line {
+                    ops: args
+                        .edits
+                        .iter()
+                        .map(|op| LineEditParams {
+                            start_line: op.start_line,
+                            end_line: op.end_line,
+                            insert_before: op.insert_before,
+                            text: op.text.clone(),
+                        })
+                        .collect(),
+                };
+                Some(record_edit(
+                    history,
+                    resolved.clone(),
+                    old_content_snapshot.unwrap_or_default(),
+                    final_content.clone(),
+                    summary,
+                    EditRecordKind::LineEdit,
+                    lines_changed,
+                    params,
+                )
+                .await)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 9. 组装报告：每个操作的变化 + 迷你 diff（含上下文）+ no-op/重复/行数校准警告
         let report = super::report::build_report(
             dry_run,
+            op_id,
             &resolved,
             old_count,
             new_count,
@@ -386,6 +459,50 @@ impl Tool for EditFileTool {
         );
         Ok(report)
     }
+}
+
+/// 生成历史记录摘要（行号信息用 1-based）
+fn build_summary(
+    path: &std::path::Path,
+    old_count: usize,
+    new_count: usize,
+    ops: &[ParsedOp],
+) -> String {
+    let mut s = String::with_capacity(64);
+    s.push_str(&format!(
+        "{}（{}→{} 行）",
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string()),
+        old_count,
+        new_count
+    ));
+    for (i, op) in ops.iter().enumerate() {
+        if i > 0 {
+            s.push_str("；");
+        }
+        match op.kind {
+            EditKind::Replace { start, end } => {
+                let text_lines = if op.text.is_empty() { 0 } else { op.text.matches('\n').count() + 1 };
+                if op.text.is_empty() {
+                    s.push_str(&format!("删除 {}-{}", start + 1, end + 1));
+                } else if start == end {
+                    s.push_str(&format!("替换第 {} 行→{} 行", start + 1, text_lines));
+                } else {
+                    s.push_str(&format!("替换 {}-{}→{} 行", start + 1, end + 1, text_lines));
+                }
+            }
+            EditKind::Insert { .. } => {
+                let text_lines = op.text.matches('\n').count() + 1;
+                if op.is_append {
+                    s.push_str(&format!("追加 {} 行", text_lines));
+                } else {
+                    s.push_str(&format!("插入第 {} 行前 {} 行", op.orig_pos, text_lines));
+                }
+            }
+        }
+    }
+    s
 }
 
 /// 操作在原文件中的排序位置（0-based）：替换=区间起点，插入=插入点
