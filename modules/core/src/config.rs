@@ -238,12 +238,24 @@ pub struct AvailableModel {
     /// 图像生成专用：默认质量（如 "standard"/"hd"），仅 kind=ImageGen 时有效
     #[serde(default)]
     pub image_quality: Option<String>,
+    /// 视频生成专用：默认分辨率（如 "720p"），仅 kind=VideoGen 时有效
+    #[serde(default)]
+    pub video_resolution: Option<String>,
+    /// 视频生成专用：默认宽高比（如 "16:9"），仅 kind=VideoGen 时有效
+    #[serde(default)]
+    pub video_ratio: Option<String>,
+    /// 音频转文字专用：默认源语言（如 "zh"/"en"/"auto"），仅 kind=AudioTranscribe 时有效
+    #[serde(default)]
+    pub audio_language: Option<String>,
     /// 计费单价（元/百万 tokens），None 表示未配置价格（聊天中不显示消费金额）
     #[serde(default)]
     pub pricing: Option<ModelPricing>,
     /// 模型上下文窗口大小（tokens），供前端显示剩余上下文
     #[serde(default)]
     pub context_window_tokens: Option<u32>,
+    /// 视频生成专用：默认时长（秒，2..=15；None 用模型默认），仅 kind=VideoGen 时有效
+    #[serde(default)]
+    pub video_duration: Option<u32>,
     pub created_at: u64,
     pub enable_tools: bool,
     /// 模型能力类型：Chat（对话）/ ImageGen（图像生成）/ VideoGen（视频生成，预留）
@@ -431,7 +443,11 @@ mod tests {
                 kind: ModelKind::Chat,
                 image_size: None,
                 image_quality: None,
+                video_resolution: None,
+                video_ratio: None,
+                audio_language: None,
                 context_window_tokens: Some(128000),
+                video_duration: None,
                 pricing: None,
                 created_at: 1000,
             }],
@@ -485,7 +501,11 @@ mod tests {
             kind: ModelKind::Chat,
             image_size: None,
             image_quality: None,
+            video_resolution: None,
+            video_ratio: None,
+            audio_language: None,
             context_window_tokens: Some(128000),
+            video_duration: None,
             pricing: None,
             created_at: 1000,
         });
@@ -506,7 +526,11 @@ mod tests {
             kind: ModelKind::Chat,
             image_size: None,
             image_quality: None,
+            video_resolution: None,
+            video_ratio: None,
+            audio_language: None,
             context_window_tokens: Some(64000),
+            video_duration: None,
             pricing: None,
             created_at: 1001,
         });

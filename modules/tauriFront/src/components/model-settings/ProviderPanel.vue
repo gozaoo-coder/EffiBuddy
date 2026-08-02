@@ -389,6 +389,20 @@ function onMenuSelect(item: MenuItemOption) {
                         <span class="pp-meta-sep">·</span>
                         <span>{{ m.image_size }}</span>
                       </template>
+                      <template v-if="m.kind === 'video_gen'">
+                        <template v-if="m.video_resolution">
+                          <span class="pp-meta-sep">·</span>
+                          <span>{{ m.video_resolution }}</span>
+                        </template>
+                        <template v-if="m.video_duration">
+                          <span class="pp-meta-sep">·</span>
+                          <span>{{ m.video_duration }}s</span>
+                        </template>
+                      </template>
+                      <template v-if="m.kind === 'audio_transcribe' && m.audio_language">
+                        <span class="pp-meta-sep">·</span>
+                        <span>lang: {{ m.audio_language }}</span>
+                      </template>
                     </div>
                   </div>
                 </div>

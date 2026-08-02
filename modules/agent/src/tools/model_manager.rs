@@ -314,7 +314,11 @@ mod tests {
             kind: ModelKind::Chat,
             image_size: None,
             image_quality: None,
+            video_resolution: None,
+            video_ratio: None,
+            audio_language: None,
             context_window_tokens: Some(128000),
+            video_duration: None,
             pricing: None,
             created_at: 1,
         }

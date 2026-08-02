@@ -206,8 +206,16 @@ export interface AvailableModel {
   image_size?: string | null
   /** 图像生成专用：默认质量（如 standard/hd），仅 kind=image_gen 时有效 */
   image_quality?: string | null
+  /** 视频生成专用：默认分辨率（如 720p），仅 kind=video_gen 时有效 */
+  video_resolution?: string | null
+  /** 视频生成专用：默认宽高比（如 16:9），仅 kind=video_gen 时有效 */
+  video_ratio?: string | null
+  /** 音频转文字专用：默认源语言（如 zh/en/auto），仅 kind=audio_transcribe 时有效 */
+  audio_language?: string | null
   /** 模型上下文窗口大小（tokens），null 表示未设置 */
   context_window_tokens?: number | null
+  /** 视频生成专用：默认时长（秒，2..=15；null 用模型默认），仅 kind=video_gen 时有效 */
+  video_duration?: number | null
   /** 计费单价（元/百万 tokens），null 表示未配置（聊天中不显示消费金额） */
   pricing?: ModelPricing | null
   created_at: number

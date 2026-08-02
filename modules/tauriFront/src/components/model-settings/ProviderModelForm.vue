@@ -59,6 +59,11 @@ interface Draft {
   kind: ModelKind
   image_size: string
   image_quality: string
+  video_resolution: string
+  video_ratio: string
+  /** number 输入框经 v-model 自动转为 number，清空时回退为空字符串 */
+  video_duration: string | number
+  audio_language: string
   context_window_tokens: number
   pricing: { cache_hit_per_m: number | null; cache_miss_per_m: number | null; output_per_m: number | null }
   label: string
@@ -80,6 +85,10 @@ function emptyDraft(kind: ModelKind): Draft {
     kind,
     image_size: '',
     image_quality: '',
+    video_resolution: '',
+    video_ratio: '',
+    video_duration: '',
+    audio_language: '',
     context_window_tokens: 128000,
     pricing: { cache_hit_per_m: null, cache_miss_per_m: null, output_per_m: null },
     label: '',
@@ -98,6 +107,10 @@ function draftFromModel(m: AvailableModel): Draft {
     kind: m.kind ?? 'chat',
     image_size: m.image_size ?? '',
     image_quality: m.image_quality ?? '',
+    video_resolution: m.video_resolution ?? '',
+    video_ratio: m.video_ratio ?? '',
+    video_duration: m.video_duration != null ? String(m.video_duration) : '',
+    audio_language: m.audio_language ?? '',
     context_window_tokens: m.context_window_tokens ?? 128000,
     pricing: m.pricing
       ? { ...m.pricing }
@@ -144,6 +157,8 @@ const kindMeta: Record<ModelKind, { label: string; icon: string; desc: string }>
 
 const currentKindMeta = computed(() => kindMeta[draft.value.kind])
 const isImageGen = computed(() => draft.value.kind === 'image_gen')
+const isVideoGen = computed(() => draft.value.kind === 'video_gen')
+const isAudioTranscribe = computed(() => draft.value.kind === 'audio_transcribe')
 const isChat = computed(() => draft.value.kind === 'chat')
 
 // ---------- Provider 视觉映射 ----------
@@ -246,6 +261,13 @@ function selectCustom() {
 const imageSizePresets = ['1024x1024', '1792x1024', '1024x1792', '512x512', '256x256']
 const imageQualityPresets = ['standard', 'hd']
 
+// ---------- 视频生成预设（与 generate_video 工具参数对齐） ----------
+const videoResolutionPresets = ['480p', '720p']
+const videoRatioPresets = ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9', 'adaptive']
+
+// ---------- 音频转文字预设 ----------
+const audioLanguagePresets = ['auto', 'zh', 'en', 'ja', 'ko', 'ru', 'fr', 'de', 'es']
+
 // ---------- 保存 ----------
 function newId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -294,6 +316,23 @@ function save() {
     image_quality:
       draft.value.kind === 'image_gen' && draft.value.image_quality.trim()
         ? draft.value.image_quality.trim()
+        : null,
+    video_resolution:
+      draft.value.kind === 'video_gen' && draft.value.video_resolution.trim()
+        ? draft.value.video_resolution.trim()
+        : null,
+    video_ratio:
+      draft.value.kind === 'video_gen' && draft.value.video_ratio.trim()
+        ? draft.value.video_ratio.trim()
+        : null,
+    video_duration:
+      draft.value.kind === 'video_gen' &&
+      String(draft.value.video_duration).trim() !== ''
+        ? Math.max(2, Math.min(15, Number(draft.value.video_duration) || 0))
+        : null,
+    audio_language:
+      draft.value.kind === 'audio_transcribe' && draft.value.audio_language.trim()
+        ? draft.value.audio_language.trim()
         : null,
     context_window_tokens: draft.value.context_window_tokens || null,
     pricing,
@@ -534,6 +573,69 @@ function cancel() {
               <option v-for="q in imageQualityPresets" :key="q" :value="q" />
             </datalist>
           </div>
+        </div>
+      </template>
+
+      <!-- 视频生成专用字段 -->
+      <template v-if="isVideoGen">
+        <div class="pmf-row-2col">
+          <div class="pmf-field">
+            <label class="pmf-label">默认分辨率</label>
+            <input
+              v-model="draft.video_resolution"
+              type="text"
+              placeholder="720p（留空用模型默认）"
+              class="pmf-input"
+              list="pmf-video-res-list"
+            />
+            <datalist id="pmf-video-res-list">
+              <option v-for="r in videoResolutionPresets" :key="r" :value="r" />
+            </datalist>
+          </div>
+          <div class="pmf-field">
+            <label class="pmf-label">默认宽高比</label>
+            <input
+              v-model="draft.video_ratio"
+              type="text"
+              placeholder="16:9（留空用模型默认）"
+              class="pmf-input"
+              list="pmf-video-ratio-list"
+            />
+            <datalist id="pmf-video-ratio-list">
+              <option v-for="r in videoRatioPresets" :key="r" :value="r" />
+            </datalist>
+          </div>
+        </div>
+        <div class="pmf-field">
+          <label class="pmf-label">默认时长（秒）</label>
+          <input
+            v-model="draft.video_duration"
+            type="number"
+            min="2"
+            max="15"
+            step="1"
+            placeholder="留空用模型默认（2 ~ 15 秒）"
+            class="pmf-input"
+          />
+          <p class="pmf-field-hint">作为 generate_video 工具调用时的默认值，越界输入会自动收敛到 2 ~ 15</p>
+        </div>
+      </template>
+
+      <!-- 音频转文字专用字段 -->
+      <template v-if="isAudioTranscribe">
+        <div class="pmf-field">
+          <label class="pmf-label">默认源语言</label>
+          <input
+            v-model="draft.audio_language"
+            type="text"
+            placeholder="auto / zh / en（留空用后端默认）"
+            class="pmf-input"
+            list="pmf-audio-lang-list"
+          />
+          <datalist id="pmf-audio-lang-list">
+            <option v-for="l in audioLanguagePresets" :key="l" :value="l" />
+          </datalist>
+          <p class="pmf-field-hint">转写时使用的源语言；auto 表示自动检测</p>
         </div>
       </template>
 
