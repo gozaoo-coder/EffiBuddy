@@ -37,7 +37,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: ${{ env.FRONT_DIR }}/package-lock.json
 
@@ -48,11 +48,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # workspace 根 Cargo.toml 定义了 4 个成员 crate，所有编译/打包产物
+      # 都输出到仓库根目录 target/（而非 src-tauri/target），所以这里用默认
+      # 缓存根 target 即可，避免每次都全量重编译。
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-        with:
-          # target 目录实际输出在 src-tauri/target（tauri 从该目录构建）
-          workspaces: ${{ env.TAURI_DIR }}
 
       - name: Install tauri-cli
         run: npm install -g @tauri-apps/cli
@@ -85,8 +85,8 @@ jobs:
           name: EffiSuite-windows-${{ github.ref_name }}
           if-no-files-found: error
           path: |
-            ${{ env.TAURI_DIR }}/target/release/bundle/nsis/*.exe
-            ${{ env.TAURI_DIR }}/target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
 
       # 打 tag 时创建 Release 草稿（draft=true，确认无误后手动发布）
       - name: Create GitHub Release
@@ -98,5 +98,5 @@ jobs:
           draft: true
           generate_release_notes: true
           files: |
-            ${{ env.TAURI_DIR }}/target/release/bundle/nsis/*.exe
-            ${{ env.TAURI_DIR }}/target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
