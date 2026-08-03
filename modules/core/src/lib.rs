@@ -32,7 +32,6 @@ pub use clawhub::ClawHubClient;
 pub use compression::{
     apply_compression, build_compression_prompt, build_compression_prompt_with_settings,
     parse_compression_response, CompressionAction, CompressionState, CompressionStore,
-    MAX_COMPRESSION_LEVEL,
 };
 pub use config::{
     builtin_presets, AgentConfig, AsrConfig, AsrProvider, AvailableModel, BackendKind,
@@ -67,7 +66,7 @@ pub use versions::{
     Commit, CommitKind, CommitSummary, RefKind, RefSummary, VersionList, VersionOpResult,
     VersionRepo, VersionStore,
 };
-pub use tokens::{count_messages_tokens, count_tokens};
+pub use tokens::last_reported_input_tokens;
 pub use asr::{
     AsrRecord, AsrSearchQuery, AsrSource, AsrStatus, AsrStore, AsrSummaryHit, AsrSummaryIndex,
 };

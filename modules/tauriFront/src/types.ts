@@ -449,11 +449,11 @@ export interface CompressionAction {
 export interface CompressionState {
   actions: CompressionAction[]
   updated_at: number
-  /** 压缩等级：0=未压缩，1/2/3=已压缩 N 次（封顶 3） */
+    /** 压缩等级：0=未压缩，N=已压缩 N 次（无上限） */
   level?: number
-  /** 完全未压缩历史段的真实 token 数（tiktoken cl100k_base；旧数据缺失时为 0） */
+  /** 未压缩基准 token 数（API responses usage.prompt_tokens；旧数据缺失时为 0） */
   base_tokens?: number
-  /** 压缩后的当前有效历史真实 token 数（旧数据缺失时为 0） */
+  /** 当前上下文真实 token 数（API responses usage.prompt_tokens；旧数据缺失时为 0） */
   current_tokens?: number
 }
 
@@ -486,7 +486,7 @@ export interface CompressDonePayload {
   actions: CompressionAction[]
   raw_text: string
   elapsed_ms: number
-  /** 压缩后总等级：1/2/3（封顶），供前端展示「压缩态 N」 */
+    /** 压缩后总等级：N（无上限），供前端展示「压缩态 N」 */
   level?: number
   /** 完全未压缩历史段的真实 token 数（基准） */
   base_tokens?: number

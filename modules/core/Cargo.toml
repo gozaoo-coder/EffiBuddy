@@ -24,5 +24,3 @@ dirs.workspace = true
 # 会话版本控制提交 hash（git 风格内容寻址）
 # 会话版本控制提交 hash（git 风格内容寻址）
 sha2.workspace = true
-# 真实 token 计数（压缩节省量统计）
-tiktoken-rs.workspace = true

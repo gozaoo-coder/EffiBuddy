@@ -51,8 +51,6 @@ const {
 
 const core = store.core
 
-/** 最高压缩等级（与后端 MAX_COMPRESSION_LEVEL 对齐） */
-const MAX_LEVEL = 3
 
 // ---------- 上下文用量仪表盘数据 ----------
 const ctxUsed = computed(() => core.contextUsedTokens.value)
@@ -69,7 +67,6 @@ const ctxAfter = computed(() => {
 const hasCompressionState = computed(
   () => !!compressExistingState.value || compressActions.value.length > 0,
 )
-const isMaxLevel = computed(() => compressLevel.value >= MAX_LEVEL)
 
 // 统计展示：done 用本轮结果，idle+existing 用既有状态
 const statKeep = computed(() =>
@@ -152,7 +149,6 @@ const actionSources = [
         <CompressionLevelSteps
           v-if="compressStage === 'idle' || compressStage === 'done'"
           :level="compressLevel"
-          :max-level="MAX_LEVEL"
           :base-tokens="compressBaseTokens"
           :current-tokens="compressCurrentTokens"
         />
@@ -252,9 +248,9 @@ const actionSources = [
           开始压缩
         </Button>
 
-        <!-- done 且未达上限:再次压缩升级到下一级 -->
+          <!-- done:再次压缩升级到下一级（无上限） -->
         <Button
-          v-else-if="compressStage === 'done' && !isMaxLevel"
+            v-else-if="compressStage === 'done'"
           variant="primary"
           block
           :loading="compressing"
@@ -265,11 +261,6 @@ const actionSources = [
           再次压缩 → 第 {{ compressLevel + 1 }} 级
         </Button>
 
-        <!-- done 且已达上限 -->
-        <Button v-else-if="compressStage === 'done' && isMaxLevel" variant="normal" block disabled>
-          <Icon name="check" :size="16" />
-          已达最高压缩等级（L{{ MAX_LEVEL }}）
-        </Button>
 
         <!-- error:关闭 -->
         <Button v-else-if="compressStage === 'error'" variant="normal" block @click="closeCompressionSheet">

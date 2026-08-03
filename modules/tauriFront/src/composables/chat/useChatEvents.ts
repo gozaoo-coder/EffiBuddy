@@ -192,7 +192,7 @@ export function useChatEvents(
           compression.compressStage.value = 'done'
           // 记录本轮压缩等级（自动/手动统一走此事件；缺省按首次压缩处理）
           compression.compressLevel.value = p.level ?? 1
-          // 写入真实 token 指标(done payload 携带,后端 tiktoken 计数)
+          // 写入真实 token 指标(done payload 携带,后端取自 API responses 的 usage)
           if (p.base_tokens != null) compression.compressBaseTokens.value = p.base_tokens
           if (p.current_tokens != null) compression.compressCurrentTokens.value = p.current_tokens
           // 清空流式解析(displayActions 会自动切换到 compressActions)

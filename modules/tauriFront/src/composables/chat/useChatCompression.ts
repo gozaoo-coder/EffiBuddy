@@ -34,7 +34,7 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
   const compressElapsedMs = ref(0)
   // 已存在的压缩状态(打开浮窗时从后端加载,用于展示历史压缩结果)
   const compressExistingState = ref<CompressionState | null>(null)
-  // 当前压缩等级:0=未压缩,1/2/3=已压缩 N 次(封顶);done 时取本轮,否则取既有状态
+    // 当前压缩等级:0=未压缩,N=已压缩 N 次(无上限);done 时取本轮,否则取既有状态
   const compressLevel = ref(0)
   // 完全未压缩历史段的真实 token 数(来自 CompressionState.base_tokens / done 事件)
   const compressBaseTokens = ref(0)
@@ -109,8 +109,9 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
     return { count: ids.size, actionCount: state.actions.length, level: state.level ?? 0 }
   })
 
-  // Token 节省量指标：基于后端 tiktoken 计数的真实 token（CompressionState.base_tokens /
-  // current_tokens），而非字符估算。base=完全未压缩历史，current=应用全部决策后的有效历史。
+    // Token 节省量指标：真实 token 全部取自 API responses 的 usage（CompressionState.base_tokens /
+    // current_tokens），非本地分词估算。base=首次压缩时未压缩上下文的真实占用，current=最近一次
+    // completion 的真实占用（压缩生效后新消息上报值自然变小）。
   const compressSavedInfo = computed(() => {
     const base = compressBaseTokens.value
     const current = compressCurrentTokens.value

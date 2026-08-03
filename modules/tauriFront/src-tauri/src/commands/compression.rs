@@ -3,9 +3,9 @@
 //! 压缩对用户透明：UI 仍显示原始消息，仅后续 prompt 的历史段应用压缩决策。
 //! 流式命令通过 Tauri 事件实时推送进度（status/token/done/error）。
 //!
-//! 递进压缩模型：未压缩态 → 压缩态1 → 压缩态2 → 压缩态3。
+//! 递进压缩模型：未压缩态 → 压缩态1 → 压缩态2 → …（无上限）。
 //! 每次压缩基于「上一次压缩后的有效消息」（[`apply_compression`] 结果）进一步压缩，
-//! 新决策追加到既有 actions（后者覆盖前者），等级 +1（封顶 [`MAX_COMPRESSION_LEVEL`]）。
+//! 新决策追加到既有 actions（后者覆盖前者），等级 +1（无上限）。
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use effisuite_agent::{
     call_compression_agent, call_compression_agent_stream, CompressionStreamItem,
 };
 use effisuite_core::{
-    apply_compression, build_compression_prompt_with_settings, count_messages_tokens,
+    apply_compression, build_compression_prompt_with_settings, last_reported_input_tokens,
     parse_compression_response, AgentConfig, CompressionAction, CompressionState, CompressionStore,
     ConversationStore, Message,
 };
@@ -91,14 +91,17 @@ async fn do_compress_core(
 
     let actions = parse_compression_response(&reply).map_err(|e| e.to_string())?;
 
-    // 合并到既有状态：追加 actions、等级 +1（封顶）
+      // 合并到既有状态：追加 actions、等级 +1（无上限）
     let mut comp_state =
         CompressionState::from_incremental(input.prev.as_ref(), actions.clone(), now_ms());
-    // 真实 token 指标（tiktoken cl100k_base）：
-    // base = 完全未压缩历史；current = 应用全部决策后的有效历史
-    comp_state.base_tokens = count_messages_tokens(&input.full);
-    let new_effective = apply_compression(&input.full, &comp_state);
-    comp_state.current_tokens = count_messages_tokens(&new_effective);
+    // 真实 token 指标：全部取自 API responses 的 usage（MessageUsage.input_tokens）。
+    // base = 首次压缩时最近一次 completion 的 prompt_tokens（未压缩上下文真实占用），
+    //        递进压缩时由 from_incremental 保留不重算；current = 最近一次 completion
+    //        的 prompt_tokens（压缩生效后新消息上报值自然变小，得到真实节省量）。
+    if comp_state.base_tokens == 0 {
+        comp_state.base_tokens = last_reported_input_tokens(&input.full).unwrap_or(0);
+    }
+    comp_state.current_tokens = last_reported_input_tokens(&input.full).unwrap_or(0);
     compression_store
         .save(conversation_id, &comp_state)
         .await
@@ -174,7 +177,7 @@ struct CompressDonePayload<'a> {
     raw_text: &'a str,
     /// 处理耗时（毫秒）
     elapsed_ms: u64,
-    /// 压缩后总等级：1/2/3（封顶），供前端展示「压缩态 N」
+    /// 压缩后总等级：N（无上限），供前端展示「压缩态 N」
     level: u32,
     /// 完全未压缩历史段的真实 token 数（基准）
     base_tokens: u64,
@@ -312,11 +315,14 @@ pub(crate) async fn compress_messages_stream(
     emit_status("persisting", "正在持久化压缩状态…");
     let mut comp_state =
         CompressionState::from_incremental(input.prev.as_ref(), actions.clone(), now_ms());
-    // 真实 token 指标（tiktoken cl100k_base）：
-    // base = 完全未压缩历史；current = 应用全部决策后的有效历史
-    comp_state.base_tokens = count_messages_tokens(&input.full);
-    let new_effective = apply_compression(&input.full, &comp_state);
-    comp_state.current_tokens = count_messages_tokens(&new_effective);
+    // 真实 token 指标：全部取自 API responses 的 usage（MessageUsage.input_tokens）。
+    // base = 首次压缩时最近一次 completion 的 prompt_tokens（未压缩上下文真实占用），
+    //        递进压缩时由 from_incremental 保留不重算；current = 最近一次 completion
+    //        的 prompt_tokens（压缩生效后新消息上报值自然变小，得到真实节省量）。
+    if comp_state.base_tokens == 0 {
+        comp_state.base_tokens = last_reported_input_tokens(&input.full).unwrap_or(0);
+    }
+    comp_state.current_tokens = last_reported_input_tokens(&input.full).unwrap_or(0);
     if let Err(e) = state
         .compression_store
         .save(&conversation_id, &comp_state)
@@ -408,25 +414,31 @@ pub(crate) async fn get_compression_state(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 懒回填：旧版本持久化的压缩状态没有 token 指标（base_tokens=0）。
-    // 此处用 tiktoken 按当前会话历史补齐并回存，保证前端能展示真实节省量。
+    // 真实 token 指标一律取自 API responses 的 usage：从会话历史取最近一次
+    // completion 的 prompt_tokens（MessageUsage.input_tokens）。
+    // - 旧版本数据 base_tokens=0 时懒回填为最近一次真实上报；
+    // - current_tokens 始终跟随最近一次真实上报（压缩生效后新消息上报值自然变小）。
     if let Some(s) = comp_state.as_mut() {
-        if !s.actions.is_empty() && s.base_tokens == 0 {
+        if !s.actions.is_empty() {
             if let Some(conv) = state
                 .store
                 .load(&conversation_id)
                 .await
                 .map_err(|e| e.to_string())?
             {
-                if !conv.messages.is_empty() {
-                    s.base_tokens = count_messages_tokens(&conv.messages);
-                    let effective = apply_compression(&conv.messages, s);
-                    s.current_tokens = count_messages_tokens(&effective);
-                    state
-                        .compression_store
-                        .save(&conversation_id, s)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                if let Some(t) = last_reported_input_tokens(&conv.messages) {
+                    let base_was_zero = s.base_tokens == 0;
+                    if base_was_zero {
+                        s.base_tokens = t;
+                    }
+                    if base_was_zero || s.current_tokens != t {
+                        s.current_tokens = t;
+                        state
+                            .compression_store
+                            .save(&conversation_id, s)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    }
                 }
             }
         }

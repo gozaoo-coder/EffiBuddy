@@ -2,11 +2,11 @@
 /**
  * CompressionLevelSteps —— 压缩效果指标卡（原子组件，重构版）
  *
- * 用真实 token 指标（后端 tiktoken cl100k_base 计数）替代原来的"压缩态阶梯"：
+ * 用真实 token 指标（后端取自 API responses 的 usage）替代原来的"压缩态阶梯"：
  *  - 已压缩 n tokens：base - current 的累计压缩量
  *  - 比未压缩前节省 n%：saved / base
  *  - 上一轮压缩大小 n%：current / base（当前有效历史占未压缩的比例）
- * 顶部保留压缩等级徽标（L1/L2/L3）与"基于上次压缩态进一步精简"的说明。
+ * 顶部保留压缩等级徽标（L1/L2/…）与"基于上次压缩态进一步精简"的说明。
  *
  * 纯展示组件，所有数据通过 props 传入。
  */
@@ -14,17 +14,14 @@ import { computed } from 'vue'
 
 const props = withDefaults(
   defineProps<{
-    /** 当前压缩等级（0 = 未压缩，1/2/3 = 已压缩 N 次） */
+      /** 当前压缩等级（0 = 未压缩，N = 已压缩 N 次，无上限） */
     level: number
-    /** 最高压缩等级，默认 3 */
-    maxLevel?: number
     /** 完全未压缩历史段的真实 token 数（0 = 旧数据未回填） */
     baseTokens?: number
     /** 压缩后的当前有效历史真实 token 数 */
     currentTokens?: number
   }>(),
   {
-    maxLevel: 3,
     baseTokens: 0,
     currentTokens: 0,
   },
@@ -48,16 +45,15 @@ function fmt(n: number): string {
 <template>
   <div class="cls">
     <!-- 顶部：等级徽标 + 递进说明 -->
-    <div class="cls-head">
-      <span class="cls-badge" :class="level >= maxLevel ? 'is-max' : ''">
-        L{{ level }}/{{ maxLevel }}
-      </span>
-      <span class="cls-head-text">
-        <template v-if="level >= maxLevel">已达最高压缩等级，不再自动压缩</template>
-        <template v-else-if="level > 0">每次压缩基于上次压缩态进一步精简</template>
-        <template v-else>尚未压缩 · 点击开始压缩释放上下文空间</template>
-      </span>
-    </div>
+      <div class="cls-head">
+        <span class="cls-badge">
+          L{{ level }}
+        </span>
+        <span class="cls-head-text">
+          <template v-if="level > 0">每次压缩基于上次压缩态进一步精简（无上限）</template>
+          <template v-else>尚未压缩 · 点击开始压缩释放上下文空间</template>
+        </span>
+      </div>
 
     <!-- 真实 token 指标（旧数据未回填时降级为说明） -->
     <template v-if="hasTokens">
@@ -84,7 +80,7 @@ function fmt(n: number): string {
       </div>
     </template>
     <div v-else class="cls-empty">
-      完成压缩后将以真实 token 展示节省量（基于 OpenAI cl100k_base 分词计数）。
+      完成压缩后将以真实 token 展示节省量（取自 API responses 的 usage 字段）。
     </div>
   </div>
 </template>
@@ -118,10 +114,6 @@ function fmt(n: number): string {
   white-space: nowrap;
 }
 
-.cls-badge.is-max {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 14%, transparent);
-}
 
 .cls-head-text {
   font-size: 11px;

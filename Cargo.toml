@@ -28,8 +28,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 
-# 真实 token 计数：压缩节省量 / 上下文占用统计（cl100k_base BPE，离线可用）
-tiktoken-rs = "0.6"
 # HTTP / 压缩：ClawHub 客户端使用 reqwest + zip
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }

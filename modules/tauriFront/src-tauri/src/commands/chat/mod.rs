@@ -15,7 +15,7 @@ use std::sync::Arc;
 use effisuite_agent::AgentStreamItem;
 
 use effisuite_core::{
-    Attachment, BusEvent, AgentConfig, CompressionStore, ConversationStore, MAX_COMPRESSION_LEVEL,
+    Attachment, BusEvent, AgentConfig, CompressionStore, ConversationStore,
     MemoryIndex, Message, MessageUsage, ModelPricing, Role, SubAgentRecord, ToolCallRecord,
 };
 use futures::StreamExt;
@@ -42,10 +42,10 @@ const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
 /// - 触发后 spawn 独立 task 执行压缩（不阻塞当前流）；`inflight` 集合防止
 ///   同一会话并发重复触发（多 completion / 多轮次之间去重）
 /// - 压缩本身复用 [`crate::commands::run_auto_compress`]，内部走递进压缩核心：
-///   基于当前压缩态进一步压缩（压缩态1 → 2 → 3）
+///   基于当前压缩态进一步压缩（逐级递进，无上限）
 ///
 /// 返回 `true` 表示本次确实触发了自动压缩（调用方据此做流级去重：一条流只压缩一次），
-/// 返回 `false` 表示被任一守卫拦截（未启用 / 未达阈值 / 已达最大等级 / 已在压缩中）。
+/// 返回 `false` 表示被任一守卫拦截（未启用 / 未达阈值 / 已在压缩中）。
 async fn maybe_auto_compress(
     store: Arc<ConversationStore>,
     compression_store: CompressionStore,
@@ -75,19 +75,6 @@ async fn maybe_auto_compress(
         return false;
     }
 
-    // 1.5 已达最大压缩等级：自动压缩停止（等级封顶后继续压缩收益递减，
-    //     且避免反复弹"压缩成功"）。手动压缩（compress_messages）不受此限制。
-    match compression_store.load(&conversation_id).await {
-        Ok(Some(state)) if state.level >= MAX_COMPRESSION_LEVEL => {
-            tracing::debug!(
-                conversation_id = %conversation_id,
-                level = state.level,
-                "已达最大压缩等级，跳过自动压缩"
-            );
-            return false;
-        }
-        _ => {}
-    }
 
     // 2. in-flight 去重：同一会话已有自动压缩在跑则跳过
     {
