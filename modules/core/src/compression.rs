@@ -22,7 +22,15 @@ use tokio::sync::RwLock;
 use crate::{CoreError, Message, Result, Role, CompressionSettings};
 
 /// `/` 在文件名中的转义序列（与 [`crate::PluginStore`] 一致）
+/// `/` 在文件名中的转义序列（与 [`crate::PluginStore`] 一致）
 const SLUG_SEP: &str = "__";
+
+/// 压缩等级上限：递进压缩最多到「压缩态 3」。
+///
+/// 压缩模型（递进）：未压缩态 → 压缩态1 → 压缩态2 → 压缩态3。
+/// 每次压缩基于「上一次压缩后的有效消息」进一步压缩，`level` 记录已压缩次数；
+/// 达到上限后仍可继续压缩（压缩以当前压缩态为输入），仅等级计数不再增长。
+pub const MAX_COMPRESSION_LEVEL: u32 = 3;
 
 /// 单条压缩操作
 ///
@@ -87,6 +95,52 @@ pub struct CompressionState {
     pub actions: Vec<CompressionAction>,
     /// 最后一次压缩时间戳（毫秒）
     pub updated_at: u64,
+    /// 压缩等级：0=未压缩，1/2/3=已压缩 N 次（封顶 [`MAX_COMPRESSION_LEVEL`]）。
+    /// 旧数据无此字段时反序列化为 0（向后兼容）。
+    #[serde(default)]
+    pub level: u32,
+    /// 完全未压缩历史段的真实 token 数（tiktoken cl100k_base 计数）。
+    /// 作为"节省量/百分比"的基准：`saved = base - current`。
+    /// 旧数据无此字段时反序列化为 0（向后兼容）。
+    #[serde(default)]
+    pub base_tokens: u64,
+    /// 当前压缩态历史段的真实 token 数（应用全部 actions 后的有效消息）。
+    /// 旧数据无此字段时反序列化为 0（向后兼容）。
+    #[serde(default)]
+    pub current_tokens: u64,
+}
+
+impl CompressionState {
+    /// 把新一轮压缩决策合并到既有状态，得到「递进压缩」后的新状态。
+    ///
+    /// - `prev`：上一次压缩状态（None = 首次压缩，从未压缩态 → 压缩态1）
+    /// - `new_actions`：本轮压缩 agent 返回的新决策（追加到既有 actions 末尾，
+    ///   由 [`apply_compression`] 的「后出现的 act 覆盖先出现的」语义实现逐级精简）
+    /// - `now`：本轮压缩时间戳（毫秒）
+    ///
+    /// 返回：`actions = prev.actions ++ new_actions`，`level = min(prev.level + 1, MAX)`，
+    /// `updated_at = now`。
+    pub fn from_incremental(
+        prev: Option<&CompressionState>,
+        new_actions: Vec<CompressionAction>,
+        now: u64,
+    ) -> Self {
+        let prev_level = prev.map_or(0, |p| p.level);
+        let mut actions = Vec::with_capacity(
+            prev.map_or(0, |p| p.actions.len()) + new_actions.len(),
+        );
+        if let Some(p) = prev {
+            actions.extend_from_slice(&p.actions);
+        }
+        actions.extend(new_actions);
+        Self {
+            actions,
+            updated_at: now,
+            level: prev_level.saturating_add(1).min(MAX_COMPRESSION_LEVEL),
+            base_tokens: prev.map_or(0, |p| p.base_tokens),
+            current_tokens: prev.map_or(0, |p| p.current_tokens),
+        }
+    }
 }
 
 /// 压缩状态存储，线程安全可廉价 clone（内部 `RwLock<()>` + `Arc`，与
@@ -539,6 +593,7 @@ mod tests {
                 },
             ],
             updated_at: 0,
+            level: 0,
         };
         let result = apply_compression(&messages, &state);
         // m1 kept, m2 untouched (kept), m3 hidden, m4 replaced
@@ -570,6 +625,7 @@ mod tests {
                 },
             ],
             updated_at: 0,
+            level: 0,
         };
         let result = apply_compression(&messages, &state);
         assert_eq!(result.len(), 0);
@@ -588,6 +644,7 @@ mod tests {
                 },
             ],
             updated_at: 0,
+            level: 0,
         };
         let result2 = apply_compression(&messages, &state2);
         assert_eq!(result2.len(), 1);
@@ -621,6 +678,7 @@ mod tests {
                 message_ids: vec!["m2".into()],
             }],
             updated_at: 0,
+            level: 0,
         };
         let result = apply_compression(&messages, &state);
         assert_eq!(result.len(), 2);
@@ -646,6 +704,7 @@ mod tests {
                 new_content: "短".into(),
             }],
             updated_at: 0,
+            level: 0,
         };
         let result = apply_compression(&[m], &state);
         assert_eq!(result.len(), 1);
@@ -708,6 +767,7 @@ mod tests {
                 message_ids: vec!["m1".into(), "m2".into()],
             }],
             updated_at: 12345,
+            level: 0,
         };
         store.save("conv1", &state).await.unwrap();
 
@@ -724,6 +784,7 @@ mod tests {
         let state2 = CompressionState {
             actions: vec![],
             updated_at: 99999,
+            level: 0,
         };
         store.save("conv1", &state2).await.unwrap();
         let loaded2 = store.load("conv1").await.unwrap().unwrap();
@@ -748,6 +809,7 @@ mod tests {
                 &CompressionState {
                     actions: vec![],
                     updated_at: 0,
+                    level: 0,
                 },
             )
             .await
@@ -805,9 +867,86 @@ mod tests {
                 message_ids: vec!["x".into()],
             }],
             updated_at: 42,
+            level: 0,
         };
         let json = serde_json::to_string(&state).unwrap();
         let back: CompressionState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, back);
     }
+
+    #[test]
+    fn from_incremental_merges_and_bumps_level() {
+        // 首次压缩：未压缩态 → 压缩态1
+        let s1 = CompressionState::from_incremental(
+            None,
+            vec![CompressionAction::Hide {
+                reason: "r1".into(),
+                message_ids: vec!["a".into()],
+            }],
+            100,
+        );
+        assert_eq!(s1.level, 1);
+        assert_eq!(s1.updated_at, 100);
+        assert_eq!(s1.actions.len(), 1);
+
+        // 第二次压缩：压缩态1 → 压缩态2（actions 追加，后者覆盖前者）
+        let s2 = CompressionState::from_incremental(
+            Some(&s1),
+            vec![CompressionAction::Replace {
+                reason: "r2".into(),
+                message_ids: vec!["b".into()],
+                new_content: "短".into(),
+            }],
+            200,
+        );
+        assert_eq!(s2.level, 2);
+        assert_eq!(s2.updated_at, 200);
+        assert_eq!(s2.actions.len(), 2);
+        // 旧 actions 保留在前
+        assert!(matches!(&s2.actions[0], CompressionAction::Hide { .. }));
+        assert!(matches!(&s2.actions[1], CompressionAction::Replace { .. }));
+
+        // 第三次：压缩态2 → 压缩态3（封顶）
+        let s3 = CompressionState::from_incremental(
+            Some(&s2),
+            vec![CompressionAction::Keep {
+                reason: "r3".into(),
+                message_ids: vec!["c".into()],
+            }],
+            300,
+        );
+        assert_eq!(s3.level, 3);
+        assert_eq!(s3.actions.len(), 3);
+
+        // 第四次：达到上限后等级不再增长，但仍可继续压缩
+        let s4 = CompressionState::from_incremental(
+            Some(&s3),
+            vec![CompressionAction::Hide {
+                reason: "r4".into(),
+                message_ids: vec!["d".into()],
+            }],
+            400,
+        );
+        assert_eq!(s4.level, 3);
+        assert_eq!(s4.actions.len(), 4);
+    }
+
+    #[test]
+    fn state_serde_default_level_backward_compat() {
+        // 旧数据无 level 字段：反序列化后 level=0
+        let json = r#"{"actions":[],"updated_at":123}"#;
+        let state: CompressionState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.level, 0);
+        assert_eq!(state.updated_at, 123);
+
+        // 新数据含 level：往返一致
+        let state2 = CompressionState {
+            actions: vec![],
+            updated_at: 123,
+            level: 2,
+        };
+        let back: CompressionState = serde_json::from_str(&serde_json::to_string(&state2).unwrap()).unwrap();
+        assert_eq!(state2, back);
+    }
+
 }

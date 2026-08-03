@@ -3,45 +3,47 @@
  * AgentPoolRail 交流池二级栏目（左2栏）
  *
  * 当用户在左1栏（IconRail）点击"交流池"图标时，左2栏从 HistoryRail 切换为本栏。
- * 本栏展示运行时 agent 公共会话交流池的全部条目：
+ * 本栏以「会话」为维度展示运行时 agent 公共会话交流池：
  *
- * - 顶部：标题 + 刷新按钮 + 清空按钮 + 活跃/待@ 计数
- * - 视图切换：「条目」/「@ 消息」
- *   · 条目视图：按状态分组展示条目（进行中 / 等待中 / 已完成）
- *   · @ 消息视图：全部 @ 消息的公开时间线（类似群聊消息流，谁 @ 了谁、问了什么、是否已回复）
- * - 单条目渲染 → AgentPoolItem 组件（展开查看研究报告 / todoTree / @ 消息）
+ * - 顶部：标题 + 刷新按钮 + 清空按钮 + 统计（活跃会话 / 待@ / 总会话）
+ * - 视图切换：「会话」/「@ 消息」
+ *   · 会话视图：按会话展示（正在运行的会话 + 交流池登记的长任务）。每个会话
+ *     头部展示标题 + 状态 + 活跃窗口数；展开后列出窗口（第一个是主 agent，
+ *     其余是子 agent），点击窗口即在 main-content 打开该会话窗口。
+ *   · @ 消息视图：全部 @ 消息的公开时间线（群聊消息流，谁 @ 了谁、是否已回复）
+ * - 单会话渲染 → AgentPoolItem（展开查看窗口列表 / 研究报告 / todoTree / @ 消息）
  *
- * 数据来源：useAgentPool composable（单例状态 + agent-pool-updated 事件实时刷新）
+ * 数据来源：useAgentPool composable（单例状态 + agent-pool-updated 事件实时刷新；
+ * 会话聚合合并了打开的页签窗口 + 交流池条目，将"正在运行的会话"纳入交流池）。
  *
  * 设计原则：
  * - 简约：与 HistoryRail 同宽（248px），复用 design tokens
  * - 一致：hover/active 态与 HistoryItem 视觉对齐
  * - 实时：监听 agent-pool-updated 事件，条目变更自动刷新
- * - 模块化：单条目渲染抽到 AgentPoolItem，本栏只负责容器与列表
+ * - 模块化：单会话渲染抽到 AgentPoolItem，窗口行抽到 AgentPoolWindowItem
  */
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { animate } from 'animejs'
 import { Icon, Dialog, useToast } from './basic'
 import AgentPoolItem from './AgentPoolItem.vue'
 import { useAgentPool } from '../composables/useAgentPool'
-import type { PoolEntry, PoolStatus } from '../types'
+import type { PoolWindow } from '../composables/useAgentPool'
 
 const { toast } = useToast()
 const {
-  entries,
-  loading,
-  byStatus,
-  activeCount,
+  sessions,
+  activeSessionCount,
   pendingAtCount,
   publicAtFeed,
   refresh,
   clearPool,
+  openWindow,
   formatRelativeTime,
 } = useAgentPool()
 
 // ---------- 视图切换 ----------
-type ViewMode = 'entries' | 'atFeed'
-const viewMode = ref<ViewMode>('entries')
+type ViewMode = 'sessions' | 'atFeed'
+const viewMode = ref<ViewMode>('sessions')
 const viewContentRef = ref<HTMLElement | null>(null)
 let viewSwitching = false
 
@@ -75,52 +77,26 @@ async function switchView(mode: ViewMode) {
   }
 }
 
-// ---------- 状态筛选（条目视图） ----------
+// ---------- 状态筛选（会话视图） ----------
 
-type FilterKey = 'all' | PoolStatus
+type FilterKey = 'all' | 'active' | 'completed'
 const filter = ref<FilterKey>('all')
 
 const filterOptions: { key: FilterKey; label: string; count: () => number }[] = [
-  { key: 'all', label: '全部', count: () => entries.value.length },
-  { key: 'in_progress', label: '进行中', count: () => byStatus.value.inProgress.length },
-  { key: 'waiting', label: '等待中', count: () => byStatus.value.waiting.length },
-  { key: 'completed', label: '已完成', count: () => byStatus.value.completed.length },
+  { key: 'all', label: '全部', count: () => sessions.value.length },
+  { key: 'active', label: '活跃', count: () => activeSessionCount.value },
+  { key: 'completed', label: '已完成', count: () => sessions.value.length - activeSessionCount.value },
 ]
 
-/** 按当前筛选过滤后的条目（按状态优先级排序：进行中 > 等待中 > 已完成） */
-const filteredEntries = computed<PoolEntry[]>(() => {
-  if (filter.value === 'all') {
-    return [...entries.value].sort((a, b) => {
-      const pa = statusPriority(a.status)
-      const pb = statusPriority(b.status)
-      if (pa !== pb) return pa - pb
-      return b.updated_at - a.updated_at
-    })
-  }
-  return entries.value.filter((e) => e.status === filter.value)
+/** 按当前筛选过滤后的会话 */
+const filteredSessions = computed(() => {
+  if (filter.value === 'all') return sessions.value
+  if (filter.value === 'active') return sessions.value.filter((s) => s.status !== 'completed')
+  return sessions.value.filter((s) => s.status === 'completed')
 })
 
-function statusPriority(s: PoolStatus): number {
-  if (s === 'in_progress') return 0
-  if (s === 'waiting') return 1
-  return 2
-}
-
-/** 分组展示（仅 'all' 模式启用分组；其它筛选模式直接平铺） */
-const groups = computed<{ label: string; status: PoolStatus | null; items: PoolEntry[] }[]>(() => {
-  if (filter.value !== 'all') {
-    return [{ label: '', status: null, items: filteredEntries.value }]
-  }
-  const list: { label: string; status: PoolStatus | null; items: PoolEntry[] }[] = [
-    { label: '进行中', status: 'in_progress', items: byStatus.value.inProgress },
-    { label: '等待中', status: 'waiting', items: byStatus.value.waiting },
-    { label: '已完成', status: 'completed', items: byStatus.value.completed },
-  ]
-  return list.filter((g) => g.items.length > 0)
-})
-
-// ---------- 已完成分组折叠 ----------
-const completedCollapsed = ref(false)
+/** 是否有正在运行的会话（空状态提示用） */
+const hasRunning = computed(() => sessions.value.some((s) => s.status !== 'completed'))
 
 // ---------- 清空确认对话框 ----------
 const clearDialogVisible = ref(false)
@@ -139,6 +115,11 @@ async function confirmClear() {
 async function onRefresh() {
   await refresh()
   toast({ content: '交流池已刷新', type: 'success' })
+}
+
+// ---------- 打开窗口（替代 main-content 内容） ----------
+function onOpenWindow(w: PoolWindow) {
+  openWindow(w)
 }
 
 // ---------- 初始加载 ----------
@@ -161,20 +142,18 @@ onMounted(() => {
           <button
             type="button"
             class="ap-rail-action"
-            :class="{ 'is-loading': loading }"
-            :disabled="loading"
             title="刷新"
             aria-label="刷新交流池"
             @click="onRefresh"
           >
-            <Icon :name="loading ? 'loader' : 'refresh'" :size="14" />
+            <Icon name="refresh" :size="14" />
           </button>
           <button
             type="button"
             class="ap-rail-action ap-rail-action--danger"
             title="清空交流池"
             aria-label="清空交流池"
-            :disabled="entries.length === 0"
+            :disabled="sessions.length === 0"
             @click="clearDialogVisible = true"
           >
             <Icon name="delete" :size="14" />
@@ -185,29 +164,29 @@ onMounted(() => {
       <div class="ap-rail-stats">
         <span class="ap-rail-stat">
           <span class="ap-rail-stat-dot status-in_progress" />
-          活跃 {{ activeCount }}
+          活跃 {{ activeSessionCount }}
         </span>
         <span class="ap-rail-stat">
           <Icon name="message" :size="11" />
           待 @ {{ pendingAtCount }}
         </span>
         <span class="ap-rail-stat ap-rail-stat--total">
-          共 {{ entries.length }} 条
+          共 {{ sessions.length }} 会话
         </span>
       </div>
     </header>
 
-    <!-- 视图切换：条目 / @ 消息 -->
+    <!-- 视图切换：会话 / @ 消息 -->
     <div class="ap-rail-view-toggle">
       <button
         type="button"
         class="ap-rail-view-btn"
-        :class="{ active: viewMode === 'entries' }"
-        @click="switchView('entries')"
+        :class="{ active: viewMode === 'sessions' }"
+        @click="switchView('sessions')"
       >
-        <Icon name="list" :size="13" />
-        条目
-        <span class="ap-rail-view-count">{{ entries.length }}</span>
+        <Icon name="chat" :size="13" />
+        会话
+        <span class="ap-rail-view-count">{{ sessions.length }}</span>
       </button>
       <button
         type="button"
@@ -215,7 +194,7 @@ onMounted(() => {
         :class="{ active: viewMode === 'atFeed' }"
         @click="switchView('atFeed')"
       >
-        <Icon name="at" :size="13" />
+        <Icon name="message" :size="13" />
         @ 消息
         <span class="ap-rail-view-count" :class="{ 'has-pending': pendingAtCount > 0 }">
           {{ publicAtFeed.length }}
@@ -225,8 +204,8 @@ onMounted(() => {
 
     <!-- 视图内容区（淡入淡出过渡） -->
     <div ref="viewContentRef" class="ap-rail-view-content">
-      <!-- ═════════ 条目视图 ═════════ -->
-      <template v-if="viewMode === 'entries'">
+      <!-- ═════════ 会话视图 ═════════ -->
+      <template v-if="viewMode === 'sessions'">
         <!-- 状态筛选 chips -->
         <div class="ap-rail-filters">
           <button
@@ -245,58 +224,67 @@ onMounted(() => {
         <!-- 列表主体 -->
         <div class="ap-rail-body">
           <!-- 空状态 -->
-          <div v-if="filteredEntries.length === 0 && !loading" class="ap-rail-empty">
+          <div v-if="filteredSessions.length === 0" class="ap-rail-empty">
             <Icon name="merge" :size="28" />
             <p class="ap-rail-empty-title">
-              {{ entries.length === 0 ? '交流池为空' : '该状态下无条目' }}
+              {{ sessions.length === 0 ? '暂无活跃会话' : '该状态下无会话' }}
             </p>
             <p class="ap-rail-empty-hint">
-              {{ entries.length === 0
-                ? 'Agent 执行长任务时会在此登记状态，其他 agent 可通过 @ 机制协作'
+              {{ sessions.length === 0
+                ? '打开的会话窗口与 Agent 登记的长任务会在此按会话聚合展示'
                 : '切换其他筛选条件查看' }}
             </p>
           </div>
 
-          <!-- 加载中骨架 -->
-          <div v-else-if="loading && entries.length === 0" class="ap-rail-loading">
-            <Icon name="loader" :size="20" />
-            <span>加载中...</span>
-          </div>
-
-          <!-- 分组列表 -->
+          <!-- 会话列表 -->
           <template v-else>
-            <template v-for="g in groups" :key="g.label || 'flat'">
-              <!-- 分组标题（仅 all 模式 + 有 label 时显示） -->
-              <div
-                v-if="g.label && filter === 'all'"
-                class="ap-rail-group-head"
-                :class="{ collapsible: g.status === 'completed' }"
-                @click="g.status === 'completed' && (completedCollapsed = !completedCollapsed)"
-              >
-                <span
-                  v-if="g.status === 'completed'"
-                  class="ap-rail-group-arrow"
-                  :class="{ collapsed: completedCollapsed }"
-                >
-                  <Icon name="chevron-down" :size="12" />
-                </span>
-                <span class="ap-rail-group-label">{{ g.label }}</span>
-                <span class="ap-rail-group-count">{{ g.items.length }}</span>
-              </div>
+            <!-- 活跃会话分组（进行中 / 等待中 / 活跃） -->
+            <div
+              v-if="filter !== 'completed' && sessions.some((s) => s.status !== 'completed')"
+              class="ap-rail-group-head"
+            >
+              <span class="ap-rail-group-label">活跃会话</span>
+              <span class="ap-rail-group-count">{{ activeSessionCount }}</span>
+            </div>
+            <div
+              v-if="filter !== 'completed'"
+              class="ap-rail-group-items"
+            >
+              <AgentPoolItem
+                v-for="s in filteredSessions.filter((x) => x.status !== 'completed')"
+                :key="s.conversationId"
+                :session="s"
+                @open-window="onOpenWindow"
+              />
+            </div>
 
-              <!-- 分组条目（已完成分组在折叠态下隐藏） -->
-              <div
-                v-if="!(g.status === 'completed' && completedCollapsed)"
-                class="ap-rail-group-items"
-              >
+            <!-- 已完成分组 -->
+            <template v-if="filteredSessions.some((s) => s.status === 'completed')">
+              <div class="ap-rail-group-head">
+                <span class="ap-rail-group-label">已完成</span>
+                <span class="ap-rail-group-count">
+                  {{ filteredSessions.filter((x) => x.status === 'completed').length }}
+                </span>
+              </div>
+              <div class="ap-rail-group-items">
                 <AgentPoolItem
-                  v-for="e in g.items"
-                  :key="e.agent_id"
-                  :entry="e"
+                  v-for="s in filteredSessions.filter((x) => x.status === 'completed')"
+                  :key="s.conversationId"
+                  :session="s"
+                  @open-window="onOpenWindow"
                 />
               </div>
             </template>
           </template>
+
+          <!-- 运行提示（非空但无正在运行的会话） -->
+          <div
+            v-if="filter === 'all' && sessions.length > 0 && !hasRunning"
+            class="ap-rail-running-hint"
+          >
+            <Icon name="info" :size="12" />
+            当前无正在运行的会话窗口
+          </div>
         </div>
       </template>
 
@@ -304,18 +292,12 @@ onMounted(() => {
       <template v-else>
         <div class="ap-rail-body ap-at-feed-body">
           <!-- 空状态 -->
-          <div v-if="publicAtFeed.length === 0 && !loading" class="ap-rail-empty">
-            <Icon name="at" :size="28" />
+          <div v-if="publicAtFeed.length === 0" class="ap-rail-empty">
+            <Icon name="message" :size="28" />
             <p class="ap-rail-empty-title">暂无 @ 消息</p>
             <p class="ap-rail-empty-hint">
               Agent 之间通过 @ 机制协作时，消息会在此公开同步
             </p>
-          </div>
-
-          <!-- 加载中 -->
-          <div v-else-if="loading && publicAtFeed.length === 0" class="ap-rail-loading">
-            <Icon name="loader" :size="20" />
-            <span>加载中...</span>
           </div>
 
           <!-- @ 消息列表 -->
@@ -357,7 +339,7 @@ onMounted(() => {
     <footer class="ap-rail-foot">
       <p class="ap-rail-hint">
         <Icon name="info" :size="12" />
-        左侧图标栏切换回聊天
+        展开会话查看窗口，点击窗口在主区打开
       </p>
     </footer>
 
@@ -372,7 +354,7 @@ onMounted(() => {
       @confirm="confirmClear"
     >
       <div class="ap-clear-body">
-        确定清空全部 {{ entries.length }} 条交流池条目？此操作不可撤销，但不会影响会话本身。
+        确定清空全部 {{ sessions.length }} 条交流池会话记录？此操作不可撤销，但不会影响会话本身。
       </div>
     </Dialog>
   </aside>
@@ -449,20 +431,8 @@ onMounted(() => {
   opacity: 0.5;
 }
 
-.ap-rail-action.is-loading {
-  color: var(--primary);
-}
-
-.ap-rail-action.is-loading :deep(svg) {
-  animation: ap-rail-spin 0.8s linear infinite;
-}
-
 .ap-rail-action--danger:hover {
   color: var(--danger);
-}
-
-@keyframes ap-rail-spin {
-  to { transform: rotate(360deg); }
 }
 
 /* 计数摘要 */
@@ -651,24 +621,6 @@ onMounted(() => {
   color: var(--muted);
 }
 
-.ap-rail-group-head.collapsible {
-  cursor: pointer;
-}
-
-.ap-rail-group-head.collapsible:hover {
-  color: var(--text);
-}
-
-.ap-rail-group-arrow {
-  display: inline-flex;
-  color: var(--muted);
-  transition: transform var(--duration-fast) var(--ease-standard);
-}
-
-.ap-rail-group-arrow.collapsed {
-  transform: rotate(-90deg);
-}
-
 .ap-rail-group-label {
   font-size: 12px;
   font-weight: 600;
@@ -690,6 +642,16 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* 运行提示 */
+.ap-rail-running-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* 空状态 */
@@ -719,22 +681,6 @@ onMounted(() => {
   font-size: 11px;
   color: var(--muted);
   line-height: 1.5;
-}
-
-/* 加载中 */
-.ap-rail-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 32px 16px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.ap-rail-loading :deep(svg) {
-  animation: ap-rail-spin 0.8s linear infinite;
-  color: var(--primary);
 }
 
 /* ═══ @ 消息公开流 ═══ */

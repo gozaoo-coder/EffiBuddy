@@ -2,25 +2,34 @@
 /**
  * TitleBar 自定义标题栏（配合 tauri.conf decorations:false）
  *
- * - 左侧品牌区 + 中间区域为拖拽区域（data-tauri-drag-region）
+ * 布局（2026-08 重构）：
+ * - 左侧：左栏一（IconRail）模态切换 + 左栏二（HistoryRail）模态切换按钮
+ * - 中间：拖拽区域（data-tauri-drag-region）
  * - 右上角窗口控件：最小化 / 最大化(还原) / 关闭
- * - 非 Tauri 环境（纯浏览器预览）自动降级：控件空操作、不报错
  *
- * 注：模型显示已迁移至"模型配置"二级栏目（ModelSettingsRail），标题栏不再展示模型胶囊。
+ * 已移除：品牌 logo 与 "EffiBuddy" 字样（用户要求去掉顶栏品牌信息）。
+ * 模态状态由 useLayoutModes 全局单例管理，跨组件实时响应并持久化 localStorage。
+ *
+ * 非 Tauri 环境（纯浏览器预览）自动降级：控件空操作、不报错。
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
+import { SegmentedButton } from './basic'
+import { useLayoutModes } from '../composables/useLayoutModes'
 
-withDefaults(
-  defineProps<{
-    /** 窗口标题（左侧品牌名） */
-    title?: string
-  }>(),
-  {
-    title: 'EffiBuddy',
-  },
-)
+const { modes, toggleRail1Mode, toggleRail2Mode } = useLayoutModes()
+
+// 左栏一模态选项：icon = 纯图标窄栏；icon-text = 图标+文字宽栏
+const rail1Options = [
+  { value: 'icon', label: '图标' },
+  { value: 'icon-text', label: '图标+文字' },
+]
+// 左栏二模态选项：expanded = 展开完整列表；collapsed = 收起窄条
+const rail2Options = [
+  { value: 'expanded', label: '展开' },
+  { value: 'collapsed', label: '收起' },
+]
 
 // 是否运行在 Tauri 环境（浏览器 dev 预览时 __TAURI_INTERNALS__ 不存在）
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -77,15 +86,36 @@ async function close() {
 
 <template>
   <header class="titlebar">
-    <!-- 左侧品牌：可拖拽 -->
+    <!-- 左侧：左栏一 / 左栏二 模态切换（可拖拽区域，按钮本身不响应拖拽） -->
     <div class="titlebar-left" data-tauri-drag-region>
-      <span class="titlebar-logo" data-tauri-drag-region>
-        <Icon name="robot" :size="17" />
-      </span>
-      <span class="titlebar-title" data-tauri-drag-region>{{ title }}</span>
+      <div class="mode-group" title="左栏一模态：纯图标 / 图标+文字">
+        <span class="mode-label">
+          <Icon name="menu" :size="13" />
+        </span>
+        <SegmentedButton
+          :model-value="modes.rail1"
+          :options="rail1Options"
+          size="sm"
+          @update:model-value="toggleRail1Mode"
+        />
+      </div>
+
+      <div class="mode-sep" />
+
+      <div class="mode-group" title="左栏二模态：展开 / 收起">
+        <span class="mode-label">
+          <Icon name="folder" :size="13" />
+        </span>
+        <SegmentedButton
+          :model-value="modes.rail2"
+          :options="rail2Options"
+          size="sm"
+          @update:model-value="toggleRail2Mode"
+        />
+      </div>
     </div>
 
-    <!-- 中间拖拽区（不再显示模型胶囊） -->
+    <!-- 中间拖拽区 -->
     <div class="titlebar-center" data-tauri-drag-region></div>
 
     <!-- 右上角窗口控件：非拖拽区域 -->
@@ -144,38 +174,53 @@ async function close() {
   user-select: none;
 }
 
-/* 左侧品牌 */
+/* 左侧：模态切换按钮组 */
 .titlebar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
+  gap: 6px;
+  padding: 0 10px;
   min-width: 0;
   height: 100%;
 }
 
-.titlebar-logo {
+.mode-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mode-label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--primary), var(--primary-dim));
-  color: #fff;
+  color: var(--muted);
   flex-shrink: 0;
-  box-shadow: var(--shadow-sm);
 }
 
-.titlebar-title {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  color: var(--text);
-  white-space: nowrap;
+.mode-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  flex-shrink: 0;
 }
 
-/* 中间拖拽区（不再显示模型胶囊） */
+/* 让分段按钮在深色顶栏上保持紧凑观感 */
+.titlebar-left :deep(.segmented) {
+  background: var(--card);
+  border-color: var(--border);
+}
+
+.titlebar-left :deep(.segmented-item) {
+  color: var(--muted);
+}
+
+.titlebar-left :deep(.segmented-item.is-selected) {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* 中间拖拽区 */
 .titlebar-center {
   flex: 1;
   display: flex;

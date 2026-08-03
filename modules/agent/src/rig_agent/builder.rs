@@ -98,6 +98,8 @@ impl RigAgent {
               agent_pool: None,
                 pool_sub_agent_id: None,
                 pool_sub_agent_name: None,
+                pending_user_messages: None,
+
           })
       }
 
@@ -178,7 +180,7 @@ impl RigAgent {
         self
     }
 
-    /// 注入后台命令会话管理器，启用 shell_session_start / send / read / list / kill 工具
+    /// 注入后台命令会话管理器，启用 shell_session_start / send / read / wait / list / kill 工具
     pub fn with_shell_sessions(
         mut self,
         manager: Option<Arc<crate::shell_session::ShellSessionManager>>,
@@ -306,6 +308,8 @@ impl RigAgent {
             agent_pool: None,
             pool_sub_agent_id: None,
             pool_sub_agent_name: None,
+            pending_user_messages: None,
+
         })
     }
 
@@ -327,4 +331,14 @@ impl RigAgent {
     pub fn history_handle(&self) -> Arc<RwLock<Vec<effisuite_core::Message>>> {
         Arc::clone(&self.history)
     }
+    /// 注入用户中断队列句柄：AI 生成期间用户排队消息，在下一个 completion 前插入。
+    /// None（默认）时关闭该能力（hook 不注册）。
+    pub fn with_pending_user_messages(
+        mut self,
+        pending: Option<Arc<super::PendingUserMessages>>,
+    ) -> Self {
+        self.pending_user_messages = pending;
+        self
+    }
+
 }

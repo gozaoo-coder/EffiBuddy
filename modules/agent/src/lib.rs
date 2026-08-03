@@ -13,13 +13,16 @@
 pub mod agent;
 pub mod agent_pool;
 pub mod asr;
+pub mod cancel;
 pub mod embedding;
 pub mod mock;
 pub mod rig_agent;
+pub mod shell_env;
 pub mod shell_session;
 pub mod tools;
 pub mod todo_store;
 pub use agent::{AgentStreamItem, ChatAgent, ContextPreview};
+pub use cancel::AgentCancelRegistry;
 pub use agent_pool::{
     AgentPoolStore, AtMessage, AtStatus, PoolEntry, PoolKind, PoolStatus, format_lookup_result,
     format_pool_section,
@@ -33,8 +36,9 @@ pub use embedding::{DEFAULT_EMBEDDING_MODEL, OpenAIEmbeddingProvider};
 pub use mock::MockAgent;
 pub use rig_agent::{
     AUTO_CLASSIFY_PREAMBLE, AutoClassifyResult, COMPRESSION_PREAMBLE, CompressionStreamItem,
-    RigAgent, SUB_AGENT_DEFAULT_EXCLUDED, build_auto_classify_prompt, call_auto_classify_agent,
-    call_compression_agent, call_compression_agent_stream, parse_auto_classify_response,
+    PendingUserMessages, RigAgent, SUB_AGENT_DEFAULT_EXCLUDED, build_auto_classify_prompt,
+    call_auto_classify_agent, call_compression_agent, call_compression_agent_stream,
+    parse_auto_classify_response,
 };
 pub use todo_store::{TodoNode, TodoStore, build_todo_tree, format_todo_tree, todo_tree_stats};
 pub use tools::{
@@ -55,5 +59,5 @@ pub use tools::{
 pub use shell_session::{
     ShellSessionEvent, ShellSessionEventKind, ShellSessionInfo, ShellSessionKillTool,
     ShellSessionListTool, ShellSessionManager, ShellSessionReadTool, ShellSessionSendTool,
-    ShellSessionStartTool,
+    ShellSessionStartTool, ShellSessionWaitTool,
 };

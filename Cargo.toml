@@ -28,6 +28,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 
+# 真实 token 计数：压缩节省量 / 上下文占用统计（cl100k_base BPE，离线可用）
+tiktoken-rs = "0.6"
 # HTTP / 压缩：ClawHub 客户端使用 reqwest + zip
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -57,10 +59,14 @@ effisuite-agent = { path = "modules/agent", version = "0.1.0" }
 effisuite-p2p = { path = "modules/p2pConnection", version = "0.1.0" }
 
 [profile.release]
-opt-level = 3
-lto = "thin"
+# 体积优先：opt-level="z" 针对二进制体积优化（本应用为 LLM/IO 密集型，本地代码对 CPU 不敏感）
+opt-level = "z"
+# fat LTO：全程序跨 crate 优化，裁掉 windows/tauri/rig 等依赖中未用代码，显著减小最终 exe
+lto = "fat"
 codegen-units = 1
 strip = true
+# 无 std::panic::catch_unwind / panic hook 依赖；abort 移除 unwinding 表，减小二进制
+panic = "abort"
 
 # 用本地副本替换 crates.io 的 rig-core（详见 vendor/rig-core/PATCH.md）
 [patch.crates-io]

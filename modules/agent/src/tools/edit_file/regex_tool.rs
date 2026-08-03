@@ -97,8 +97,10 @@ impl Tool for EditFileRegexTool {
             ""
         };
         format!(
-            "用正则表达式匹配并替换文件内容。与 edit_file（按行号精确编辑）互补：\
-             不确定行号但能描述匹配模式时使用（如所有 println! 调用、TODO 注释）。\n\n\
+            "**代码修改的首选工具**：当改动具有规律性（批量替换某函数调用、统一命名/格式、\
+             所有 `println!` 调用、`TODO` 注释等）时**优先用本工具**，比手数行号的 edit_file 更稳更快。\
+             用正则表达式匹配并替换文件内容。与 edit_file（按行号精确编辑）互补：\
+              不确定行号但能描述匹配模式时使用（如所有 println! 调用、TODO 注释）。\n\n\
              **参数**：\n\
              - pattern：正则表达式（regex crate 语法）\n\
              - replacement：替换文本，支持 $1 / ${{name}} 捕获组引用；\

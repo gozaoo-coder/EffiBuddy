@@ -28,10 +28,11 @@ use effisuite_agent::{
 };
 use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
-use effisuite_core::{
-    AgentConfig, AsrStore, AsrSummaryIndex, CompressionStore, ConversationStore, EventBus,
-    MemoryIndex, PinnedMemoryStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
-};
+  use effisuite_core::{
+      AgentConfig, AsrStore, AsrSummaryIndex, CompressionStore, ConversationStore, EventBus,
+      MemoryIndex, PinnedMemoryStore, PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore,
+      SubAgentRecord,
+  };
 use effisuite_p2p::P2pManager;
 use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
@@ -40,8 +41,10 @@ mod agent;
 mod commands;
 mod config_io;
 mod events;
+mod git_service;
 mod paths;
 mod scheduler;
+mod snapshot_service;
 mod state;
 mod sync_store;
 
@@ -92,7 +95,7 @@ pub fn run() {
     };
 
     // 初始化会话存储：SetTitleTool 需要此句柄持久化标题，必须在 build_agent 之前完成
-    let store = match ConversationStore::new(conversations_dir()) {
+    let store = match ConversationStore::with_versions(conversations_dir()) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             tracing::error!(error = %e, "ConversationStore 初始化失败，回退到临时目录");
@@ -111,14 +114,23 @@ pub fn run() {
                 .expect("临时目录 SkillStore 必须成功")
         }
     };
-    let plugin_store = match PluginStore::new(plugins_dir()) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, "PluginStore 初始化失败，回退到临时目录");
-            PluginStore::new(std::env::temp_dir().join("effisuite-plugins"))
-                .expect("临时目录 PluginStore 必须成功")
-        }
-    };
+      let plugin_store = match PluginStore::new(plugins_dir()) {
+          Ok(s) => s,
+          Err(e) => {
+              tracing::error!(error = %e, "PluginStore 初始化失败，回退到临时目录");
+              PluginStore::new(std::env::temp_dir().join("effisuite-plugins"))
+                  .expect("临时目录 PluginStore 必须成功")
+          }
+      };
+      // 插件配置存储：命名空间隔离，插件请求配置时落盘到 appdata/plugin_configs
+      let plugin_config = match PluginConfigStore::new(plugin_configs_dir()) {
+          Ok(s) => s,
+          Err(e) => {
+              tracing::error!(error = %e, "PluginConfigStore 初始化失败，回退到临时目录");
+              PluginConfigStore::new(std::env::temp_dir().join("effisuite-plugin-configs"))
+                  .expect("临时目录 PluginConfigStore 必须成功")
+          }
+      };
     // ClawHub 客户端：共享单个 reqwest::Client 连接池
     let clawhub_client = ClawHubClient::new();
 
@@ -247,7 +259,9 @@ pub fn run() {
 
     // P2P 管理器（先于 agent 构造：agent 需要其 RemoteTaskDispatcher 能力做跨设备任务派发）
     let p2p = Arc::new(P2pManager::new(event_bus.clone()));
-
+    // 用户中断注入队列：AI 生成期间用户排队消息（先写 store 再入队），
+    // agent hook / send_message_stream 续接循环据此消费。
+    let pending_user_messages = Arc::new(effisuite_agent::PendingUserMessages::new());
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
     // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
     // plugin_store / compression_store / model_manager / sub_agents / asr_service /
@@ -273,10 +287,11 @@ pub fn run() {
         Arc::clone(&model_manager),
         Arc::clone(&sub_agents),
         Arc::clone(&asr_service),
-          p2p.clone(),
-          Arc::clone(&shell_sessions),
-          agent_pool.clone(),
-      );
+            p2p.clone(),
+            Arc::clone(&shell_sessions),
+            agent_pool.clone(),
+            Arc::clone(&pending_user_messages),
+        );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
         Err(e) => {
@@ -295,8 +310,9 @@ pub fn run() {
         skill_store,
         skill_index,
         schedule_store,
-        plugin_store,
-        compression_store,
+          plugin_store,
+          plugin_config,
+          compression_store,
         todo_store,
         clawhub: clawhub_client,
         agent: Arc::clone(&agent_lock),
@@ -315,11 +331,14 @@ pub fn run() {
         agent_rev,
         model_manager,
         sub_agents,
-          sub_agent_records,
-          asr_service,
-          shell_sessions,
-          agent_pool,
-      };
+                sub_agent_records,
+                asr_service,
+                shell_sessions,
+                agent_pool,
+                pending_user_messages,
+                agent_cancel: Arc::new(effisuite_agent::AgentCancelRegistry::new()),
+                auto_compress_inflight: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            };
 
     tauri::Builder::default()
         .manage(state)
@@ -364,20 +383,30 @@ pub fn run() {
             let store_clone = Arc::clone(&state.store);
             let memory_clone = Arc::clone(&state.memory);
             let skill_index_clone = Arc::clone(&state.skill_index);
-            let skill_store_clone = state.skill_store.clone();
-            tauri::async_runtime::spawn(async move {
-                rebuild_memory_from_store(&store_clone, &memory_clone).await;
-                apply_embedding_provider(&config_for_setup, &memory_clone).await;
-                spawn_embedding_computation(memory_clone).await;
-                if let Err(e) = skill_index_clone
-                    .rebuild_from_store(&skill_store_clone)
-                    .await
-                {
-                    tracing::warn!(error = %e, "启动时技能索引 rebuild 失败，将在下次技能增删或重启时重试");
-                } else {
-                    tracing::info!("启动时技能索引 rebuild 完成");
-                }
-            });
+                let skill_store_clone = state.skill_store.clone();
+                let plugin_store_clone = state.plugin_store.clone();
+                tauri::async_runtime::spawn(async move {
+                    rebuild_memory_from_store(&store_clone, &memory_clone).await;
+                    apply_embedding_provider(&config_for_setup, &memory_clone).await;
+                    spawn_embedding_computation(memory_clone).await;
+                    if let Err(e) = skill_index_clone
+                        .rebuild_from_store(&skill_store_clone)
+                        .await
+                    {
+                        tracing::warn!(error = %e, "启动时技能索引 rebuild 失败，将在下次技能增删或重启时重试");
+                    } else {
+                        tracing::info!("启动时技能索引 rebuild 完成");
+                    }
+                    // 启动时把已安装插件的 manifest 命令同步为 agent 技能（source="plugin"），
+                    // 使 agent 在 list_installed_skills 与 RAG 技能注入中看到插件命令。
+                    // 放在技能索引 rebuild 之后；sync 内部会幂等 upsert 并再次 rebuild（一次性成本）。
+                    commands::plugins::sync_plugin_skills(
+                        plugin_store_clone,
+                        skill_store_clone,
+                        skill_index_clone,
+                    )
+                    .await;
+                });
 
             // ===== P2P 服务启动 =====
             // 程序启动 → P2P 广播启动 → 持续扫描可信设备是否在线。
@@ -479,13 +508,12 @@ pub fn run() {
             clear_pinned_memories,
             // 上下文注入预览
             get_context_preview,
-            // 上下文注入预览
-            get_context_preview,
             // 消息压缩
             compress_messages,
             compress_messages_stream,
             get_compression_state,
             clear_compression_state,
+            update_compression_settings,
             // 每会话 todoTree
             get_todo_tree,
             save_todo_tree,
@@ -493,6 +521,8 @@ pub fn run() {
             // chat
             send_message,
             send_message_stream,
+            queue_user_message,
+            stop_agent,
             // p2p
             scan_devices,
             get_devices,
@@ -522,6 +552,27 @@ pub fn run() {
             delete_skill,
             set_conversation_working_dir,
             get_conversation_working_dir,
+            // git 上下文版本管理（开分支/保存/撤回/回溯）
+            git_context_status,
+            git_context_init,
+            git_context_branch,
+            git_context_save,
+            git_context_revert,
+            git_context_history,
+            // 会话版本管理（自研快照：每次 edit 等操作自动保存工作区状态，可撤回/回溯）
+            snapshot_save,
+            snapshot_list,
+            snapshot_status,
+            snapshot_restore,
+            snapshot_delete,
+            // 会话版本控制（git 风格：分支/临时版本/回溯/撤回/检出）
+            version_list,
+            version_create_branch,
+            version_save_temp,
+            version_rollback,
+            version_undo_before,
+            version_checkout,
+            version_delete_ref,
             // ClawHub 浏览 / 安装
             clawhub_list_skills,
             clawhub_search_skills,
@@ -534,6 +585,13 @@ pub fn run() {
             clawhub_install_plugin,
             clawhub_uninstall_plugin,
             list_installed_plugins,
+            // 插件贡献注册与插件配置（manifest / 生命周期 / appdata 配置）
+            list_plugin_contributions,
+            get_plugin_manifest,
+            get_plugin_config,
+            set_plugin_config,
+            delete_plugin_config,
+            get_plugin_config_all,
             // 定时任务
             list_scheduled_tasks,
             create_scheduled_task,
@@ -555,14 +613,14 @@ pub fn run() {
             asr_get_config,
             asr_update_config,
             asr_generate_summary,
-              // 后台命令会话（前端底栏便签）
-              list_shell_sessions,
-              kill_shell_session,
-              // 运行时 agent 公共会话交流池（会话列表运行状态）
-              list_pool,
-              get_pool_entry,
-              clear_pool,
-            ])
+            // 后台命令会话（前端底栏便签）
+            list_shell_sessions,
+            kill_shell_session,
+            // 运行时 agent 公共会话交流池（会话列表运行状态）
+            list_pool,
+            get_pool_entry,
+            clear_pool,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

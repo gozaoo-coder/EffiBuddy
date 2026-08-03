@@ -17,7 +17,8 @@ const {
   workingDir,
   workingDirSheetOpen,
 } = store.core
-const { compressing, triggerCompress } = store.compression
+const { compressing, triggerCompress, compressionSheetOpen, compressBadgeInfo, compressSavedInfo } =
+  store.compression
 </script>
 
 <template>
@@ -51,8 +52,27 @@ const { compressing, triggerCompress } = store.compression
         @click="triggerCompress"
       >
         <template #icon><Icon name="merge" :size="18" /></template>
-        {{ compressing ? '压缩中…' : '压缩消息' }}
-      </Button>
+          {{ compressing ? '压缩中…' : '压缩消息' }}
+        </Button>
+
+        <!-- 压缩状态摘要(已压缩时显示):等级徽章 + 节省量 + 点击查看详情 -->
+        <div
+          v-if="compressBadgeInfo"
+          class="ctx-compress-summary"
+          @click="contextSheetOpen = false; compressionSheetOpen = true"
+        >
+          <span class="ctx-compress-level">L{{ compressBadgeInfo.level }}</span>
+          <div class="ctx-compress-body">
+            <div class="ctx-compress-title">
+              已压缩至第 {{ compressBadgeInfo.level }} 级 · 精简 {{ compressBadgeInfo.count }} 条消息
+            </div>
+            <div v-if="compressSavedInfo && compressSavedInfo.savedTokens > 0" class="ctx-compress-desc">
+              节省约 {{ compressSavedInfo.savedTokens }} tokens（{{ compressSavedInfo.percent }}%）· 点击查看详情
+            </div>
+            <div v-else class="ctx-compress-desc">点击查看压缩详情与设置</div>
+          </div>
+          <Icon name="chevron-right" :size="16" class="ctx-compress-arrow" />
+        </div>
 
       <!-- 工作区显示(点击调出 workingDirSheet)-->
       <div
@@ -105,6 +125,64 @@ const { compressing, triggerCompress } = store.compression
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+/* 压缩状态摘要(等级徽章 + 节省量) */
+
+/* 压缩状态摘要(等级徽章 + 节省量) */
+.ctx-compress-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.ctx-compress-summary:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.ctx-compress-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--success);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.ctx-compress-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ctx-compress-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ctx-compress-desc {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ctx-compress-arrow {
+  color: var(--muted);
+  flex-shrink: 0;
 }
 
 .ctx-stat-title {

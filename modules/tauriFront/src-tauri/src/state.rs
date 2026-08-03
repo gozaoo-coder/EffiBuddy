@@ -11,7 +11,7 @@ use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
     AgentConfig, CompressionStore, ConversationStore, EventBus, MemoryIndex, PinnedMemoryStore,
-    PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
+    PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
 };
 use effisuite_p2p::P2pManager;
 use tokio::sync::RwLock;
@@ -31,6 +31,9 @@ pub struct AppState {
     pub schedule_store: ScheduledTaskStore,
     /// 已安装插件存储（PathBuf+Arc，4 usize）
     pub plugin_store: PluginStore,
+    /// 插件配置存储（PathBuf+Arc，4 usize），按插件命名空间隔离，
+    /// 供「插件请求配置系统存储到应用 appdata」的能力使用。
+    pub plugin_config: PluginConfigStore,
     /// 消息压缩状态存储（PathBuf+Arc，4 usize），与 agent 共享同一份 Arc
     /// 存放每会话的 Keep/Hide/Replace 决策，build_context_parts 据此压缩历史段
     pub compression_store: CompressionStore,
@@ -84,12 +87,19 @@ pub struct AppState {
         Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<SubAgentRecord>>>>,
     /// ASR 语音转写服务句柄（火山引擎/千问），注入 agent 启用 ASR 工具，
     /// 亦供 Tauri 命令层直接调用流式录音 API。
-    /// ASR 语音转写服务句柄（火山引擎/千问），注入 agent 启用 ASR 工具，
-    /// 亦供 Tauri 命令层直接调用流式录音 API。
     pub asr_service: Arc<AsrService>,
     /// 后台命令会话管理器：agent 的 shell_session_* 工具据此启用/交互常驻 cmd/sh 会话，
     /// 亦供 Tauri 命令层（list_shell_sessions / kill_shell_session）给前端底栏便签用。
     pub shell_sessions: Arc<effisuite_agent::ShellSessionManager>,
+    /// 用户中断注入队列句柄：AI 生成期间用户排队消息，send_message_stream 的续接循环
+    /// 与 rig hook（下一个 completion 前注入）据此消费；queue_user_message 命令写入。
+    pub pending_user_messages: Arc<effisuite_agent::PendingUserMessages>,
+    /// Agent 运行取消注册表：send_message_stream 开始前 register，stop_agent 命令
+    /// cancel 触发对应会话驱动 task 终止。按会话 conversation_id 维护取消令牌。
+    pub agent_cancel: Arc<effisuite_agent::AgentCancelRegistry>,
+    /// 自动压缩进行中会话集合：上下文达到阈值触发自动压缩时登记，压缩完成移除。
+    /// 防止同一会话并发触发多次自动压缩（跨流、跨轮次去重）。
+    pub auto_compress_inflight: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。

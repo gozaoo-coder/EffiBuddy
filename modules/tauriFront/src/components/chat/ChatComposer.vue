@@ -4,11 +4,10 @@
  *
  * 内聚:引用块 chips、textarea(Enter 发送 / Shift+Enter 换行 / 高度动画)、
  * 发送/语音按钮、meta pills(工作区 / 压缩徽章 / 右栏面板开关)。
- * send() 编排(引用拼接 → 建会话 → 流式调用)在此实现。
+ * 发送编排在 useChatSend(引用拼接 → 建会话 → 流式调用)实现,本组件只渲染 UI。
  */
-import { ref, inject, nextTick } from 'vue'
+import { ref, inject, watch } from 'vue'
 import { animate } from 'animejs'
-import { invoke } from '@tauri-apps/api/core'
 import { Button, IconButton, Icon, useToast } from '../basic'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
 
@@ -19,6 +18,7 @@ const { toast } = useToast()
 const {
   input,
   sending,
+  queuedCount,
   workingDir,
   workingDirSheetOpen,
   toolSheetOpen,
@@ -27,17 +27,34 @@ const {
   shellBarExpanded,
   shellActiveCount,
   toggleShellBar,
-  ensureConversation,
-  newId,
 } = store.core
-const { quoteChips, scrollToMessage, removeQuote, buildQuoteContext, clearQuotes } = store.menu
-const { addMessage } = store.streaming
-const { stickToBottom } = store.autoscroll
-const { beginNewTurn } = store.taskMode
-const { compressBadgeInfo, compressionSheetOpen } = store.compression
+const { quoteChips, scrollToMessage, removeQuote } = store.menu
+  const { compressBadgeInfo, compressSavedInfo, compressionSheetOpen } = store.compression
+  const { versioning } = store
+  const { sheetOpen: versionSheetOpen } = versioning
+  // 发送编排已抽到 useChatSend(core/streaming/taskMode/menu/autoscroll 组合),
+  // 输入栏只保留 UI:渲染按钮状态 + 触发发送/停止。
+  const { send, stopGenerating } = store.send
 
 const composerFocused = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+// 发送后 input 被清空:回弹 textarea 高度到单行(useChatSend 不再关心 UI)
+watch(input, (val, old) => {
+  if (val === '' && old !== '') {
+    const ta = textareaRef.value
+    if (!ta) return
+    ta.style.height = 'auto'
+    const target = Math.min(ta.scrollHeight, 120)
+    ta.style.height = target + 'px'
+    void ta.offsetHeight
+    animate(ta, {
+      height: '40px',
+      duration: 200,
+      ease: 'out(3)',
+    })
+  }
+})
 
 // composer-inner 高度动画(关键:禁止 height: fit-content,用 animejs 动画)
 function autoResize() {
@@ -68,60 +85,7 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-// ---------- 发送(流式) ----------
-async function send() {
-  const content = input.value.trim()
-  if (!content || sending.value) return
 
-  // 拼接引用上下文到 content 前面(引用前缀仅发给后端,用户气泡展示纯 content)
-  const finalContent = buildQuoteContext(content)
-
-  // 用户主动发送:强制跟随到底部
-  stickToBottom.value = true
-
-  // 没有当前会话时新建一个(新建对话页签:id 为 null 或 __new_chat__ 哨兵)
-  const id = await ensureConversation()
-  if (!id) return
-
-  sending.value = true
-  // 新一轮用户输入:重置「是否任务回合」标记(新内容不再合并进旧长程任务气泡)
-  beginNewTurn()
-  input.value = ''
-  clearQuotes()
-  // 重置 textarea 高度(JS 赋值不触发 input 事件,需手动动画回 40px)
-  await nextTick()
-  if (textareaRef.value) {
-    animate(textareaRef.value, {
-      height: [textareaRef.value.offsetHeight + 'px', '40px'],
-      duration: 200,
-      ease: 'out(3)',
-    })
-  }
-
-  // 用户气泡展示纯 content(不含引用前缀)
-  await addMessage({
-    id: newId(),
-    role: 'user',
-    content,
-    timestamp: Date.now(),
-  })
-
-  try {
-    await invoke('send_message_stream', {
-      conversationId: id,
-      content: finalContent,
-    })
-  } catch (e) {
-    sending.value = false
-    await addMessage({
-      id: newId(),
-      role: 'system',
-      content: `请求失败：${e}`,
-      timestamp: Date.now(),
-    })
-    toast({ content: `请求失败：${e}`, type: 'error' })
-  }
-}
 </script>
 
 <template>
@@ -154,41 +118,58 @@ async function send() {
         <IconButton size="md" container title="附件" @click="toolSheetOpen = true">
           <Icon name="plus" :size="22" />
         </IconButton>
-        <textarea
-          ref="textareaRef"
-          v-model="input"
-          class="composer-input"
-          :placeholder="sending ? '生成中…' : '尽管问，带图也行'"
-          :disabled="sending"
-          rows="1"
-          @keydown="onKeydown"
-          @focus="composerFocused = true"
-          @blur="composerFocused = false"
-          @input="autoResize"
-        ></textarea>
-        <Button
-          v-if="!input.trim()"
-          icon-only
-          shape="circle"
-          size="md"
-          variant="normal"
-          title="语音输入"
-          @click="toast({ content: '语音输入即将上线', type: 'info' })"
-        >
-          <template #icon><Icon name="mic" :size="22" /></template>
-        </Button>
-        <Button
-          v-else
-          icon-only
-          shape="circle"
-          size="md"
-          variant="primary"
-          :disabled="!input.trim()"
-          title="发送"
-          @click="send"
-        >
-          <template #icon><Icon name="arrow-up" :size="22" /></template>
-        </Button>
+          <textarea
+            ref="textareaRef"
+            v-model="input"
+            class="composer-input"
+            :placeholder="
+              sending
+                ? queuedCount > 0
+                  ? `生成中…可继续输入（已排队 ${queuedCount} 条，将插入下一轮）`
+                  : '生成中…可继续输入（将插入下一轮）'
+                : '尽管问，带图也行'
+            "
+            rows="1"
+            @keydown="onKeydown"
+            @focus="composerFocused = true"
+            @blur="composerFocused = false"
+            @input="autoResize"
+          ></textarea>
+          <!-- AI 生成中:右侧按钮变为红色「停止生成」(点击取消当前流) -->
+          <Button
+            v-if="sending"
+            icon-only
+            shape="circle"
+            size="md"
+            variant="danger"
+            title="停止生成"
+            @click="stopGenerating"
+          >
+            <template #icon><Icon name="stop" :size="20" /></template>
+          </Button>
+          <Button
+            v-else-if="!input.trim()"
+            icon-only
+            shape="circle"
+            size="md"
+            variant="normal"
+            title="语音输入"
+            @click="toast({ content: '语音输入即将上线', type: 'info' })"
+          >
+            <template #icon><Icon name="mic" :size="22" /></template>
+          </Button>
+          <Button
+            v-else
+            icon-only
+            shape="circle"
+            size="md"
+            variant="primary"
+            :disabled="!input.trim()"
+            title="发送"
+            @click="send"
+          >
+            <template #icon><Icon name="arrow-up" :size="22" /></template>
+          </Button>
       </div>
       <!-- 工作区 + 压缩 + 面板开关(输出栏圆环+token 显示已移除)-->
       <div class="composer-meta">
@@ -202,18 +183,28 @@ async function send() {
           <span class="meta-pill-text meta-pill-text--ellipsis">
             {{ workingDir ? workingDir : '默认工作区' }}
           </span>
-        </button>
-        <!-- 压缩状态徽章:仅当当前会话已有压缩状态时显示,点击跳到压缩浮窗 -->
+          </button>
+          <!-- 生成中排队指示:AI 生成期间用户发送的消息将在下一轮插入 -->
+          <button
+            v-if="queuedCount > 0"
+            type="button"
+            class="meta-pill meta-pill--queued"
+            :title="`${queuedCount} 条消息将在 AI 的下一个回复轮次前插入`"
+          >
+            <Icon name="clock" :size="14" />
+            <span class="meta-pill-text">已排队 {{ queuedCount }} 条</span>
+          </button>
+          <!-- 压缩状态徽章:仅当当前会话已有压缩状态时显示,点击跳到压缩浮窗 -->
         <button
           v-if="compressBadgeInfo"
           type="button"
           class="meta-pill meta-pill--compress"
-          :title="`当前会话已压缩 ${compressBadgeInfo.count} 条消息（${compressBadgeInfo.actionCount} 条决策）· 点击查看`"
-          @click="compressionSheetOpen = true"
-        >
-          <Icon name="merge" :size="14" />
-          <span class="meta-pill-text">已压缩 {{ compressBadgeInfo.count }}</span>
-        </button>
+              :title="`当前会话已压缩 ${compressBadgeInfo.count} 条消息（第 ${compressBadgeInfo.level} 级 · ${compressBadgeInfo.actionCount} 条决策）${compressSavedInfo && compressSavedInfo.savedTokens > 0 ? ` · 节省约 ${compressSavedInfo.savedTokens} tokens` : ''} · 点击查看`"
+              @click="compressionSheetOpen = true"
+            >
+              <Icon name="merge" :size="14" />
+                <span class="meta-pill-text">已压缩 {{ compressBadgeInfo.count }}<template v-if="compressBadgeInfo.level > 0">·L{{ compressBadgeInfo.level }}</template><template v-if="compressSavedInfo && compressSavedInfo.savedTokens > 0">·↓{{ compressSavedInfo.savedTokens }}</template></span>
+              </button>
         <!-- 命令会话折叠开关:展开/收起底部 ShellSessionBar(实时展示 AI 的 shell 工作状态) -->
         <button
           type="button"
@@ -227,9 +218,19 @@ async function send() {
             命令会话
             <span v-if="shellActiveCount > 0" class="meta-pill-badge">{{ shellActiveCount }}</span>
           </span>
-          <Icon :name="shellBarExpanded ? 'chevron-down' : 'chevron-up'" :size="13" />
-        </button>
-        <!-- 右栏上下文面板开关 -->
+            <Icon :name="shellBarExpanded ? 'chevron-down' : 'chevron-up'" :size="13" />
+          </button>
+          <!-- 会话版本管理入口:分支 / 临时版本 / 回溯 / 撤回 -->
+          <button
+            type="button"
+            class="meta-pill meta-pill--ver"
+            title="会话版本管理（分支 / 临时版本 / 回溯 / 撤回）"
+              @click="versionSheetOpen = true"
+          >
+            <Icon name="history" :size="14" />
+              <span class="meta-pill-text">版本</span>
+          </button>
+          <!-- 右栏上下文面板开关 -->
         <button
           type="button"
           class="meta-pill meta-pill--ctx"
@@ -409,6 +410,18 @@ async function send() {
   background: rgba(16, 163, 127, 0.08);
 }
 
+  /* 生成中排队指示:AI 生成期间用户发送的消息将在下一轮插入 */
+  .meta-pill--queued {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+  }
+
+  .meta-pill--queued:hover {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+    background: color-mix(in srgb, var(--warn) 14%, transparent);
+  }
 /* 命令会话折叠开关:激活(展开)态用 primary 收敛色,徽标显示运行中数量 */
 .meta-pill--ss:hover,
 .meta-pill--ss-on {
@@ -442,11 +455,18 @@ async function send() {
   margin-left: auto;
 }
 
-.meta-pill--ctx:hover {
-  color: var(--primary);
-  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
+  .meta-pill--ctx:hover {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+  }
+
+  /* 会话版本管理入口:primary 收敛色,与面板开关同风格 */
+  .meta-pill--ver:hover {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+  }
 
 .meta-pill--ctx-on {
   color: var(--primary);

@@ -7,6 +7,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
+    /// 业务逻辑错误（版本控制等通用错误信息）
+    #[error("{0}")]
+    Msg(String),
+
     #[error("agent error: {0}")]
     Agent(String),
 

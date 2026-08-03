@@ -144,9 +144,61 @@ export interface ConversationMeta {
   pinned_at?: number | null
   created_at: number
   updated_at: number
-  message_count: number
+    message_count: number
 }
 
+// =========================================================
+// 会话版本控制（git 风格：分支/临时版本/回溯/撤回）
+// 与 effisuite_core::versions::* 对齐
+// =========================================================
+
+// CommitKind: #[serde(rename_all = "snake_case")]
+export type VersionKind = 'append' | 'branch' | 'temp_save' | 'rollback' | 'undo'
+
+/** 引用类别：main / branch / temp / checkpoint */
+export type VersionRefKind = 'main' | 'branch' | 'temp' | 'checkpoint'
+
+/** 版本提交摘要（当前分支历史链） */
+export interface VersionCommitSummary {
+  hash: string
+  kind: VersionKind
+  note: string
+  created_at: number
+  head_message_id: string
+  message_count: number
+  /** 是否为当前 HEAD */
+  is_head: boolean
+}
+
+/** 引用摘要（分支 / 临时版本 / 检查点） */
+export interface VersionRefSummary {
+  name: string
+  kind: VersionRefKind
+  hash: string
+  created_at: number
+  message_count: number
+  head_message_id: string
+  note: string
+}
+
+/** 会话版本列表 */
+export interface VersionList {
+  head: string
+  refs: VersionRefSummary[]
+  commits: VersionCommitSummary[]
+}
+
+/** 版本操作结果（开启分支/回溯/撤回/检出） */
+export interface VersionOpResult {
+  head_hash: string
+  kind: VersionKind
+  branch: string
+  note: string
+  messages: Message[]
+}
+
+// =========================================================
+// 运行时 agent 公共会话交流池（与 agent::agent_pool::* 对齐）
 // =========================================================
 // 运行时 agent 公共会话交流池（与 agent::agent_pool::* 对齐）
 // =========================================================
@@ -359,6 +411,8 @@ export interface AgentBillingPayload {
   cache_miss_tokens: number
   /** 输出 token 总数 */
   output_tokens: number
+  /** 思维链（reasoning）token 总数 */
+  reasoning_tokens: number
   /** 总 token 数（缓存命中 + 未命中 + 输出） */
   total_tokens: number
   /** 是否已配置计费单价；false 时各 cost 字段为 0，只显示 token */
@@ -395,6 +449,12 @@ export interface CompressionAction {
 export interface CompressionState {
   actions: CompressionAction[]
   updated_at: number
+  /** 压缩等级：0=未压缩，1/2/3=已压缩 N 次（封顶 3） */
+  level?: number
+  /** 完全未压缩历史段的真实 token 数（tiktoken cl100k_base；旧数据缺失时为 0） */
+  base_tokens?: number
+  /** 压缩后的当前有效历史真实 token 数（旧数据缺失时为 0） */
+  current_tokens?: number
 }
 
 /** 压缩阶段标识（agent-compress-status 事件的 stage 字段） */
@@ -426,6 +486,12 @@ export interface CompressDonePayload {
   actions: CompressionAction[]
   raw_text: string
   elapsed_ms: number
+  /** 压缩后总等级：1/2/3（封顶），供前端展示「压缩态 N」 */
+  level?: number
+  /** 完全未压缩历史段的真实 token 数（基准） */
+  base_tokens?: number
+  /** 压缩后的当前有效历史真实 token 数 */
+  current_tokens?: number
 }
 
 /** agent-compress-error 事件 payload（失败时携带错误与已接收部分文本） */
@@ -446,10 +512,16 @@ export interface StreamTokenPayload {
   done: boolean
 }
 
-export interface StreamErrorPayload {
-  conversation_id: string
-  error: string
-}
+  export interface StreamErrorPayload {
+    conversation_id: string
+    error: string
+  }
+
+  // 停止生成 payload（agent-stopped 事件：用户点击「停止」后后端 emit，携带已产生的部分内容）
+  export interface AgentStoppedPayload {
+    conversation_id: string
+    content: string
+  }
 
 // 推理增量 payload（agent-reasoning 事件）
 export interface AgentReasoningPayload {
@@ -851,30 +923,39 @@ export interface InstalledPlugin {
 // asr-* 页签 id = 业务 uuid
 // =========================================================
 
-export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history'
+  export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history' | 'sub-agent' | 'plugin'
 
-export interface TabItem {
-  /** 唯一 id（chat 用 conversation_id，asr-* 用 uuid） */
-  id: string
-  kind: TabKind
-  title: string
-  icon?: string
-  /** chat 类型默认 true；asr-stream 录音中不可关 */
-  closable: boolean
-  status?: 'idle' | 'loading' | 'recording' | 'active' | 'error'
-  /** 仅 chat 类型：关联的会话 id */
-  conversationId?: string
-  /**
-   * 页签实例稳定 key（openTab 时自动生成，永不变更）。
-   * 用途：作为 Vue <component :key> 的取值。
-   * 为什么不直接用 id：chat 页签在新建会话建立后会由 updateTab 把 id 从
-   * `__new_chat__` 迁移为真实 conversation_id；若用 id 作 :key 会触发组件
-   * 重新挂载，导致流式传输中的 ChatWindow 实例被销毁、Tauri 事件监听丢失。
-   * instanceKey 与 id 解耦，迁移 id 时组件实例保持不变，流式持续可用。
-   */
-  instanceKey: string
-}
-
+  export interface TabItem {
+    /** 唯一 id（chat 用 conversation_id，asr-* 用 uuid） */
+    id: string
+    kind: TabKind
+    title: string
+    icon?: string
+    /** chat 类型默认 true；asr-stream 录音中不可关 */
+    closable: boolean
+    status?: 'idle' | 'loading' | 'recording' | 'active' | 'error'
+    /** 仅 chat 类型：关联的会话 id；sub-agent 类型：父会话 id（用于交流池按会话聚合） */
+    conversationId?: string
+    /**
+     * 页签实例稳定 key（openTab 时自动生成，永不变更）。
+     * 用途：作为 Vue <component :key> 的取值。
+     * 为什么不直接用 id：chat 页签在新建会话建立后会由 updateTab 把 id 从
+     * `__new_chat__` 迁移为真实 conversation_id；若用 id 作 :key 会触发组件
+     * 重新挂载，导致流式传输中的 ChatWindow 实例被销毁、Tauri 事件监听丢失。
+     * instanceKey 与 id 解耦，迁移 id 时组件实例保持不变，流式持续可用。
+     */
+    instanceKey: string
+    /**
+     * 仅 sub-agent 类型：子 agent 会话 id（来自 sub-agent-event 的 session_id）。
+     * 用于 SubAgentWindow 从全局子代理 store 拉取该会话的实时记录。
+     */
+    subAgentSessionId?: string
+    /**
+     * 仅 plugin 类型：插件页面 id（对应 usePluginContributions.pages 里的 id）。
+     * PluginPageTab 据此渲染对应插件页面组件。
+     */
+    pluginPageId?: string
+  }
 // =========================================================
 // ASR 语音转写（与 core::asr::types + commands::asr 对齐）
 // 后端 serde 均为 snake_case（未启用 rename_all = "camelCase"）：
@@ -1087,9 +1168,108 @@ export interface AskUserQuestion {
   multi_select?: boolean
 }
 
-/** agent 向用户提问事件（ask-user 事件 payload，BusEvent::AskUser） */
-export interface AskUserPayload {
-  kind: 'ask_user'
-  conversation_id: string
-  questions: AskUserQuestion[]
-}
+  /** agent 向用户提问事件（ask-user 事件 payload，BusEvent::AskUser） */
+  export interface AskUserPayload {
+    kind: 'ask_user'
+    conversation_id: string
+    questions: AskUserQuestion[]
+  }
+
+  // =========================================================
+  // 插件贡献注册（Plugin Manifest / Contributions）
+  // 与后端 core::plugin_manifest 对齐：声明式清单驱动，插件不执行代码
+  // =========================================================
+
+  /** 插件左栏按钮的点击动作类型 */
+  export type PluginRailActionType = 'open-page' | 'command'
+
+  /** 插件贡献到左栏一的按钮 */
+  export interface PluginRailContribution {
+    /** 按钮唯一 id（插件内唯一，形如 `my-page`） */
+    id: string
+    /** 显示标签 */
+    label: string
+    /** 语义图标名（iconMap 命中的名字，未命中显示首字符） */
+    icon: string
+    /** 所在分组：main（主区）/ bottom（底部），默认 main */
+    section?: 'main' | 'bottom'
+    /** 点击动作：open-page 打开插件页签 / command 触发插件命令 */
+    action: {
+      type: PluginRailActionType
+      /** open-page 时：目标页签 id（对应 pages 里的 id） */
+      pageId?: string
+      /** command 时：要触发的插件命令 id */
+      command?: string
+    }
+  }
+
+  /** 插件注册的页面（页签 / 路由 / 组件） */
+  export interface PluginPageContribution {
+    /** 页面唯一 id（`<pluginId>/<pageId>` 由后端组装） */
+    id: string
+    /** 归属插件 id */
+    pluginId: string
+    /** 页签标题 */
+    title: string
+    /** 页签图标（语义名） */
+    icon?: string
+    /** 路由路径（可选，保留供未来 router 使用） */
+    route?: string
+    /** 入口：'builtin'（内置组件，走前端注册表）| 'file'（插件包内文件，未来支持） */
+    entry?: string
+  }
+
+  /** 插件注册给 agent 的命令（命令 / skill） */
+  export interface PluginCommandContribution {
+    /** 命令唯一 id（`<pluginId>/<cmdId>`） */
+    id: string
+    /** 归属插件 id */
+    pluginId: string
+    /** 命令名（agent 语境中的技能名） */
+    name: string
+    /** 命令描述（注入 agent 上下文） */
+    description: string
+  }
+
+  /** 单个插件的贡献集合 */
+  export interface PluginContributionSet {
+    pluginId: string
+    pluginName: string
+    displayName?: string
+    version?: string
+    rail: PluginRailContribution[]
+    pages: PluginPageContribution[]
+    commands: PluginCommandContribution[]
+  }
+
+  /** 插件 manifest（与后端 core::plugin_manifest::PluginManifest 对齐） */
+  export interface PluginManifest {
+    api_version: string
+    id: string
+    name: string
+    display_name?: string
+    version: string
+    description?: string
+    author?: string
+    /** 声明式权限白名单：config.read / config.write / agent.command / ... */
+    permissions?: string[]
+    contributions?: {
+      rail?: PluginRailContribution[]
+      pages?: PluginPageContribution[]
+      commands?: PluginCommandContribution[]
+    }
+  }
+
+  /** 插件贡献汇总（list_plugin_contributions 返回） */
+  export interface PluginContributionsAggregate {
+    plugins: PluginContributionSet[]
+  }
+
+  /** agent 向用户提问事件（ask-user 事件 payload，BusEvent::AskUser） */
+  export interface AskUserPayload {
+    kind: 'ask_user'
+    conversation_id: string
+    questions: AskUserQuestion[]
+  }
+
+

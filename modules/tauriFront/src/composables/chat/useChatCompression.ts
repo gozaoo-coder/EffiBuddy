@@ -10,7 +10,9 @@
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type {
+  AgentConfig,
   CompressionAction,
+  CompressionSettings,
   CompressionStage,
   CompressionState,
 } from '../../types'
@@ -32,7 +34,18 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
   const compressElapsedMs = ref(0)
   // 已存在的压缩状态(打开浮窗时从后端加载,用于展示历史压缩结果)
   const compressExistingState = ref<CompressionState | null>(null)
+  // 当前压缩等级:0=未压缩,1/2/3=已压缩 N 次(封顶);done 时取本轮,否则取既有状态
+  const compressLevel = ref(0)
+  // 完全未压缩历史段的真实 token 数(来自 CompressionState.base_tokens / done 事件)
+  const compressBaseTokens = ref(0)
+  // 压缩后的当前有效历史真实 token 数(来自 CompressionState.current_tokens / done 事件)
+  const compressCurrentTokens = ref(0)
+  // 是否正在压缩
   const compressing = ref(false)
+  // 压缩设置（全局配置：自动压缩阈值 / 开关等）；null = 尚未加载
+  const compressionSettings = ref<CompressionSettings | null>(null)
+  // 压缩设置保存中
+  const compressingSettings = ref(false)
   // 流式实时解析的 actions(streaming 阶段使用,done 后用 compressActions 覆盖)
   const streamParsedActions = ref<CompressionAction[]>([])
   // 决策卡片展开状态:Set<key>,key = `${stage}-${index}`(区分 done/streaming/existing)
@@ -93,50 +106,18 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
     for (const a of state.actions) {
       for (const id of a.message_ids) ids.add(id)
     }
-    return { count: ids.size, actionCount: state.actions.length }
+    return { count: ids.size, actionCount: state.actions.length, level: state.level ?? 0 }
   })
 
-  // Token 节省量估算:基于 actions + 当前会话 messages 计算字符节省量
-  // 估算规则:4 字符 ≈ 1 token(OpenAI 通用经验值)
-  // - hide:节省 = content.length
-  // - replace:节省 = max(0, content.length - new_content.length)
-  // - keep:节省 = 0
+  // Token 节省量指标：基于后端 tiktoken 计数的真实 token（CompressionState.base_tokens /
+  // current_tokens），而非字符估算。base=完全未压缩历史，current=应用全部决策后的有效历史。
   const compressSavedInfo = computed(() => {
-    const actions =
-      compressStage.value === 'done'
-        ? compressActions.value
-        : (compressExistingState.value?.actions ?? [])
-    if (actions.length === 0) return null
-
-    // 构建 id → message 索引(O(n)),用 Map 加速查表
-    const msgMap = new Map<string, (typeof core.messages.value)[number]>()
-    for (const m of core.messages.value) msgMap.set(m.id, m)
-
-    let savedChars = 0
-    let totalChars = 0
-    // 反向遍历,先记录每个 id 的最终决策,再正向计算
-    const finalAction = new Map<string, (typeof actions)[number]>()
-    for (let i = actions.length - 1; i >= 0; i--) {
-      const a = actions[i]
-      for (const id of a.message_ids) {
-        if (!finalAction.has(id)) finalAction.set(id, a)
-      }
-    }
-    for (const [id, a] of finalAction) {
-      const msg = msgMap.get(id)
-      if (!msg) continue
-      const origLen = msg.content?.length ?? 0
-      totalChars += origLen
-      if (a.method === 'hide') savedChars += origLen
-      else if (a.method === 'replace' && a.new_content != null) {
-        savedChars += Math.max(0, origLen - a.new_content.length)
-      }
-    }
-
-    if (savedChars === 0) return { savedChars: 0, savedTokens: 0, percent: 0, totalChars }
-    const savedTokens = Math.round(savedChars / 4)
-    const percent = totalChars > 0 ? Math.round((savedChars / totalChars) * 100) : 0
-    return { savedChars, savedTokens, percent, totalChars }
+    const base = compressBaseTokens.value
+    const current = compressCurrentTokens.value
+    if (base <= 0 || current <= 0) return null
+    const savedTokens = Math.max(0, base - current)
+    const percent = base > 0 ? Math.round((savedTokens / base) * 100) : 0
+    return { savedTokens, percent, baseTokens: base, currentTokens: current }
   })
 
   // ---------- 前端轻量 XML 解析器 ----------
@@ -228,6 +209,7 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
     compressActions.value = []
     compressError.value = ''
     compressElapsedMs.value = 0
+    compressLevel.value = 0
     streamParsedActions.value = []
     expandedActions.value = new Set()
   }
@@ -276,6 +258,9 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
       await invoke('clear_compression_state', { conversationId: id })
       compressExistingState.value = null
       compressActions.value = []
+      compressLevel.value = 0
+      compressBaseTokens.value = 0
+      compressCurrentTokens.value = 0
       core.toast({ content: '已清除压缩状态', type: 'success' })
       await core.loadConversation()
     } catch (e) {
@@ -287,6 +272,9 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
   async function loadExistingCompression(convId: string) {
     if (!convId) {
       compressExistingState.value = null
+      compressLevel.value = 0
+      compressBaseTokens.value = 0
+      compressCurrentTokens.value = 0
       return
     }
     try {
@@ -294,15 +282,50 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
         conversationId: convId,
       })
       compressExistingState.value = s
+      compressLevel.value = s?.level ?? 0
+      compressBaseTokens.value = s?.base_tokens ?? 0
+      compressCurrentTokens.value = s?.current_tokens ?? 0
     } catch {
       compressExistingState.value = null
+      compressLevel.value = 0
+      compressBaseTokens.value = 0
+      compressCurrentTokens.value = 0
     }
   }
 
+
+    // 加载压缩设置（从全局配置读取，供设置面板展示与编辑）
+    async function loadCompressionSettings() {
+      try {
+        const cfg = await invoke<AgentConfig>('get_config')
+        compressionSettings.value = cfg.compression_settings ?? null
+      } catch {
+        compressionSettings.value = null
+      }
+    }
+
+    // 保存压缩设置（后端 COW 持久化，不重建 agent）
+    async function saveCompressionSettings(settings: CompressionSettings) {
+      compressingSettings.value = true
+      try {
+        await invoke('update_compression_settings', { settings })
+        compressionSettings.value = { ...settings }
+        core.toast({ content: '压缩设置已保存', type: 'success' })
+      } catch (e) {
+        core.toast({ content: `保存失败：${e}`, type: 'error' })
+      } finally {
+        compressingSettings.value = false
+      }
+    }
+
+    /** 会话切换/清空:清空压缩状态 */
   /** 会话切换/清空:清空压缩状态 */
   function resetAll() {
     compressExistingState.value = null
     compressActions.value = []
+    compressLevel.value = 0
+    compressBaseTokens.value = 0
+    compressCurrentTokens.value = 0
     compressionSheetOpen.value = false
     resetCompressState()
   }
@@ -316,7 +339,12 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
     compressError,
     compressElapsedMs,
     compressExistingState,
+    compressLevel,
+    compressBaseTokens,
+    compressCurrentTokens,
     compressing,
+    compressionSettings,
+    compressingSettings,
     streamParsedActions,
     expandedActions,
     compressProgress,
@@ -332,6 +360,8 @@ export function useChatCompression(core: ReturnType<typeof useChatCore>) {
     closeCompressionSheet,
     clearCompression,
     loadExistingCompression,
+    loadCompressionSettings,
+    saveCompressionSettings,
     resetAll,
   }
 }

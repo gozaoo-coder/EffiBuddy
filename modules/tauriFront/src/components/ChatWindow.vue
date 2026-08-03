@@ -4,7 +4,8 @@
  *
  * 职责边界:只做「组装」——
  *  1. 创建各领域 store(useChatCore / useChatStreaming / useTaskMode /
- *     useMessageMenu / useChatCompression / useImagePreview / useAutoScroll)
+ *     useMessageMenu / useChatCompression / useImagePreview / useAutoScroll /
+ *     useAskUser / useVersioning)
  *  2. 注入会话级生命周期钩子(resetAll / afterLoad)
  *  3. 注册后端事件订阅与 conversationId 联动(useChatEvents)
  *  4. provide 共享 store,组装原子子组件
@@ -18,7 +19,7 @@
 import { provide, onUnmounted } from 'vue'
 import ShellSessionBar from './ShellSessionBar.vue'
 import ChatContextPanel from './ChatContextPanel.vue'
-import { Menu } from './basic'
+import { Menu, Dialog } from './basic'
 import ChatHome from './chat/ChatHome.vue'
 import ChatMessageList from './chat/ChatMessageList.vue'
 import ChatComposer from './chat/ChatComposer.vue'
@@ -26,6 +27,7 @@ import ChatContextSheet from './chat/ChatContextSheet.vue'
 import CompressionSheet from './chat/CompressionSheet.vue'
 import ToolSheet from './chat/ToolSheet.vue'
 import WorkingDirSheet from './chat/WorkingDirSheet.vue'
+import VersionSheet from './chat/VersionSheet.vue'
 import ImagePreview from './chat/ImagePreview.vue'
 import AskUserDialog from './chat/AskUserDialog.vue'
 import { CHAT_STORE_KEY } from '../composables/chat/store'
@@ -36,8 +38,10 @@ import { useTaskMode } from '../composables/chat/useTaskMode'
 import { useMessageMenu } from '../composables/chat/useMessageMenu'
 import { useChatCompression } from '../composables/chat/useChatCompression'
 import { useImagePreview } from '../composables/chat/useImagePreview'
-import { useAskUser } from '../composables/chat/useAskUser'
-import { useChatEvents } from '../composables/chat/useChatEvents'
+  import { useAskUser } from '../composables/chat/useAskUser'
+  import { useChatEvents } from '../composables/chat/useChatEvents'
+  import { useChatSend } from '../composables/chat/useChatSend'
+  import { useVersioning } from '../composables/chat/useVersioning'
 
 // 后端名称(来自 App.vue 顶部模型药丸)+ 当前会话 id(由 App 传入)
 const props = defineProps<{
@@ -59,8 +63,10 @@ const streaming = useChatStreaming(core, autoscroll)
 const taskMode = useTaskMode(core)
 const menu = useMessageMenu(core, streaming)
 const compression = useChatCompression(core)
-const preview = useImagePreview()
-const askUser = useAskUser(core, streaming)
+  const preview = useImagePreview()
+  const askUser = useAskUser(core, streaming)
+  const versioning = useVersioning(core)
+  const send = useChatSend(core, streaming, taskMode, menu, autoscroll)
 
 // ---------- 会话级生命周期钩子 ----------
 // loadConversation 在会话切换/清空时调用 resetAll,加载成功后调用 afterLoad。
@@ -70,6 +76,7 @@ core.setSessionHooks({
     taskMode.resetAll()
     menu.resetAll()
     askUser.resetAll()
+    core.queuedCount.value = 0
     // 注:压缩浮窗状态按原行为不随会话切换重置,
     // compressExistingState 由事件层 watch conversationId → loadExistingCompression 更新。
   },
@@ -81,14 +88,29 @@ core.setSessionHooks({
     // 任务清单:非空即进入长程任务模式
     await taskMode.loadTodoTree()
     taskMode.syncFromTodo()
+    // 刷新会话版本列表(切换会话/回溯后保持一致)
+    await versioning.loadVersions()
   },
 })
 
 // ---------- 事件订阅(后端流式事件 + conversationId watch + 生命周期) ----------
 useChatEvents(core, streaming, compression, taskMode)
 
-// ---------- 共享 store 下发 ----------
-provide(CHAT_STORE_KEY, { core, streaming, compression, taskMode, menu, preview, autoscroll, askUser })
+// 加载全局压缩设置(自动压缩阈值/开关),供压缩浮窗设置面板展示与编辑
+void compression.loadCompressionSettings()
+
+  provide(CHAT_STORE_KEY, {
+    core,
+    streaming,
+    compression,
+    taskMode,
+    menu,
+    preview,
+    autoscroll,
+    askUser,
+    versioning,
+    send,
+  })
 
 // ---------- 卸载清理 ----------
 onUnmounted(() => {
@@ -100,7 +122,6 @@ onUnmounted(() => {
 const {
   activeId,
   messages,
-  sending,
   ctxPanelOpen,
   isEmptyHome,
   contextUsedTokens,
@@ -110,6 +131,7 @@ const {
   shellActiveCount,
 } = core
 const { msgMenuVisible, msgMenuPosition, msgMenuItems, onMsgMenuSelect } = menu
+const { confirmState: versionConfirmState, closeConfirm } = versioning
 </script>
 
 <template>
@@ -134,16 +156,14 @@ const { msgMenuVisible, msgMenuPosition, msgMenuItems, onMsgMenuSelect } = menu
       />
     </section>
 
-    <!-- 右栏:上下文面板(todoTree / 上下文窗口 / 用量 / 压缩) -->
-    <ChatContextPanel
-      v-if="ctxPanelOpen"
-      :conversation-id="activeId"
-      :messages="messages"
-      :context-used-tokens="contextUsedTokens"
-      :context-max-tokens="contextMaxTokens"
-      :pricing="activeModelInfo?.pricing ?? null"
-      :streaming="sending"
-    />
+      <ChatContextPanel
+        v-if="ctxPanelOpen"
+        :conversation-id="activeId"
+        :messages="messages"
+        :context-used-tokens="contextUsedTokens"
+        :context-max-tokens="contextMaxTokens"
+        :pricing="activeModelInfo?.pricing ?? null"
+      />
 
     <!-- 消息长按 / 右键菜单 -->
     <Menu
@@ -151,6 +171,22 @@ const { msgMenuVisible, msgMenuPosition, msgMenuItems, onMsgMenuSelect } = menu
       :items="msgMenuItems"
       :position="msgMenuPosition"
       @select="onMsgMenuSelect"
+    />
+
+    <!-- 会话版本管理(分支/临时版本/检查点):顶部列表 + 检出/删除 -->
+    <VersionSheet />
+
+    <!-- 版本破坏性操作确认框(回溯/撤回/检出/删除引用) -->
+    <Dialog
+      v-if="versionConfirmState"
+      :visible="versionConfirmState.visible"
+      :title="versionConfirmState.title"
+      :content="versionConfirmState.content"
+      :confirm-text="versionConfirmState.confirmText"
+      :cancel-text="'取消'"
+      :danger="versionConfirmState.danger"
+      @update:visible="closeConfirm"
+      @confirm="versionConfirmState.onConfirm()"
     />
 
     <!-- 底部浮窗:上下文管理 / 消息压缩 / 工具 / 工作区 -->

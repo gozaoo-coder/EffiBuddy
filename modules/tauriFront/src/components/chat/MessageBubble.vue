@@ -21,23 +21,72 @@ const props = defineProps<{
 }>()
 
 const store = inject(CHAT_STORE_KEY)!
-const { menu } = store
+const { menu, versioning } = store
 const { attachmentUrls, billingTotal, billingUnitOf, fmtYuan, billingRowValue, toggleBillingUnit } =
   store.streaming
 const { openImagePreview } = store.preview
-</script>
+const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
 
+</script>
 <template>
-  <div
-    :id="'msg-' + message.id"
-    class="msg-bubble"
-    :class="[`role-${message.role}`, { streaming: isStreaming }]"
-    @pointerdown="menu.onMsgPointerDown($event, message)"
-    @pointerup="menu.onMsgPointerUp"
-    @pointerleave="menu.onMsgPointerUp"
-    @pointercancel="menu.onMsgPointerUp"
-    @contextmenu="menu.onMsgContextMenu($event, message)"
-  >
+<div
+  :id="'msg-' + message.id"
+  class="msg-bubble"
+  :class="[`role-${message.role}`, { streaming: isStreaming }]"
+  @pointerdown="menu.onMsgPointerDown($event, message)"
+  @pointerup="menu.onMsgPointerUp"
+  @pointerleave="menu.onMsgPointerUp"
+  @pointercancel="menu.onMsgPointerUp"
+  @contextmenu="menu.onMsgContextMenu($event, message)"
+>
+  <!-- 会话版本操作 hover 操作栏:复制 / 开启分支 / 保存临时版本 / 回溯版本 / 撤回至此消息前 -->
+  <div v-if="!isStreaming" class="msg-hover-bar" @pointerdown.stop>
+    <button
+      type="button"
+      class="msg-hover-btn"
+      title="复制信息"
+      @click.stop="onCopy(message)"
+    >
+      <Icon name="copy" :size="14" />
+      <span class="msg-hover-tip">复制信息</span>
+    </button>
+    <button
+      type="button"
+      class="msg-hover-btn"
+      title="开启分支"
+      @click.stop="onBranch(message)"
+    >
+      <Icon name="branch" :size="14" />
+      <span class="msg-hover-tip">开启分支：从此消息另起一条对话线</span>
+    </button>
+    <button
+      type="button"
+      class="msg-hover-btn"
+      title="保存临时版本"
+      @click.stop="onSaveTemp(message)"
+    >
+      <Icon name="bookmark" :size="14" />
+      <span class="msg-hover-tip">保存临时版本：在此消息打版本书签</span>
+    </button>
+    <button
+      type="button"
+      class="msg-hover-btn"
+      title="回溯版本"
+      @click.stop="onRollback(message)"
+    >
+      <Icon name="refresh" :size="14" />
+      <span class="msg-hover-tip">回溯版本：对话重置到此消息（其后移除）</span>
+    </button>
+    <button
+      type="button"
+      class="msg-hover-btn"
+      title="撤回至此消息前"
+      @click.stop="onUndoBefore(message)"
+    >
+      <Icon name="undo" :size="14" />
+      <span class="msg-hover-tip">撤回至此消息前：删除此消息及其后全部</span>
+    </button>
+  </div>
     <template v-if="message.role === 'assistant'">
       <AssistantContent
         :message="message"
@@ -254,6 +303,86 @@ const { openImagePreview } = store.preview
   color: var(--muted);
 }
 
+/* 消息气泡定位:作为 hover 操作栏的定位基准 */
+.msg-bubble {
+  position: relative;
+}
+
+/* ---------- 会话版本操作 hover 操作栏 ---------- */
+.msg-hover-bar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.msg-bubble:hover .msg-hover-bar {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.msg-hover-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.msg-hover-btn:hover {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* 自定义 tooltip:悬浮按钮时在下方弹出文字提示 */
+.msg-hover-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  max-width: 220px;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  text-align: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  white-space: normal;
+}
+
+.msg-hover-btn:hover .msg-hover-tip {
+  opacity: 1;
+}
+
+/* 计费明细值 */
 .msg-usage-tip .tip-val {
   color: var(--text);
   font-variant-numeric: tabular-nums;

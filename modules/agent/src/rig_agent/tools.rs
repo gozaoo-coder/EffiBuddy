@@ -32,7 +32,8 @@ use crate::tools::{
     ReadFileTool, ScheduleTool, SearchAsrTool, SearchClawHubSkillsTool, SearchCodebaseTool,
     SearchFileTool, SearchHistoryTool, SearchMemoryTool, EnableSkillTool, SetTitleTool,
     ShellSessionKillTool, ShellSessionListTool, ShellSessionReadTool, ShellSessionSendTool,
-    ShellSessionStartTool, ShellTool, SubAgentTool, TodoWriteTool, UninstallPluginTool,
+    ShellSessionStartTool, ShellSessionWaitTool, ShellTool, SubAgentTool, TodoWriteTool,
+    UninstallPluginTool,
     UninstallSkillTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 
@@ -393,6 +394,9 @@ impl RigAgent {
                 if want("shell_session_read") {
                     b = b.tool(ShellSessionReadTool::new(Arc::clone(mgr)));
                 }
+                if want("shell_session_wait") {
+                    b = b.tool(ShellSessionWaitTool::new(Arc::clone(mgr)));
+                }
                 if want("shell_session_list") {
                     b = b.tool(ShellSessionListTool::new(Arc::clone(mgr)));
                 }
@@ -428,9 +432,20 @@ impl RigAgent {
                 }
             }
 
-            b.default_max_turns(usize::MAX).build()
+            let b = b.default_max_turns(usize::MAX);
+            super::user_interrupt::attach_user_inject_hook(
+                b,
+                self.pending_user_messages.clone(),
+                Arc::clone(&self.current_conversation_id),
+            )
+            .build()
         } else {
-            builder.build()
+            super::user_interrupt::attach_user_inject_hook(
+                builder,
+                self.pending_user_messages.clone(),
+                Arc::clone(&self.current_conversation_id),
+            )
+            .build()
         }
-    }
+}
 }

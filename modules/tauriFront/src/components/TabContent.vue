@@ -52,8 +52,10 @@ import Icon from './Icon.vue'
 import ChatTab from './tabs/ChatTab.vue'
 import AsrStreamTab from './tabs/AsrStreamTab.vue'
 import AsrUploadTab from './tabs/AsrUploadTab.vue'
-import AsrHistoryTab from './tabs/AsrHistoryTab.vue'
-import { useTabs } from '../composables/useTabs'
+  import AsrHistoryTab from './tabs/AsrHistoryTab.vue'
+  import SubAgentTab from './tabs/SubAgentTab.vue'
+  import PluginPageTab from './tabs/PluginPageTab.vue'
+  import { useTabs } from '../composables/useTabs'
 import type { TabItem } from '../types'
 
 defineOptions({ name: 'TabContent' })
@@ -90,31 +92,33 @@ const TabEmpty: Component = defineComponent({
   },
 })
 
-const activeComponent = computed<Component>(() => {
-  const t = activeTab.value
-  if (!t) return TabEmpty
-  switch (t.kind) {
-    case 'chat':
-      return ChatTab
-    case 'asr-stream':
-      return AsrStreamTab
-    case 'asr-upload':
-      return AsrUploadTab
-    case 'asr-history':
-      return AsrHistoryTab
-  }
-})
+  const activeComponent = computed<Component>(() => {
+    const t = activeTab.value
+    if (!t) return TabEmpty
+    switch (t.kind) {
+      case 'chat':
+        return ChatTab
+      case 'sub-agent':
+        return SubAgentTab
+      case 'plugin':
+        return PluginPageTab
+      case 'asr-stream':
+        return AsrStreamTab
+      case 'asr-upload':
+        return AsrUploadTab
+      case 'asr-history':
+        return AsrHistoryTab
+    }
+  })
 
 // 稳定 key：instanceKey 优先；空状态用固定哨兵，保证切换可被 Transition 捕获
 const activeKey = computed(() => activeTab.value?.instanceKey ?? '__empty__')
 
-// 按页签类型组装 props：chat 额外传 backend，asr-* 仅传 tab；空状态无 props
-const activeProps = computed<Record<string, unknown>>(() => {
-  const t = activeTab.value
-  if (!t) return {}
-  return t.kind === 'chat' ? { tab: t, backend: props.backend } : { tab: t }
-})
-
+  const activeProps = computed<Record<string, unknown>>(() => {
+    const t = activeTab.value
+    if (!t) return {}
+    return t.kind === 'chat' ? { tab: t, backend: props.backend } : { tab: t }
+  })
 // ============= 动画实例追踪（中断 / 打断用） =============
 type Anim = ReturnType<typeof animate> | null
 const enterAnims = new WeakMap<HTMLElement, NonNullable<Anim>>()

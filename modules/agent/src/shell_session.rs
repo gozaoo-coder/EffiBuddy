@@ -1,12 +1,13 @@
 //! 后台命令会话（shell session）：让 AI 启用一个持久化 shell 会话并持续交互。
 //!
 //! 设计目标（对齐用户需求）：
-//! 1. **AI 启用命令会话后可进一步输入**：`start` 开启一个常驻的 `cmd`/`sh`
-//!    子进程，`send` 向其中追加命令（写 stdin），`read` 读取增量输出，
+//! 1. **AI 启用命令会话后可进一步输入**：`start` 开启一个常驻的
+//!    bash/cmd/powershell/sh 子进程（可用 `shell` 参数自选，默认自动选择），`send` 向其中追加
+//!    命令（写 stdin），`read` 读取增量输出，
 //!    支持交互式命令（如 `y/n` 确认、长任务进度）。
 //! 2. **不闪出到用户界面，后台静默运行**：Windows 用 `CREATE_NO_WINDOW`
-//!    （0x08000000）创建进程，不分配控制台窗口；stdin/stdout/stderr 全部
-//!    走管道，不继承父进程控制台。
+//!    （见 [`crate::shell_env::apply_no_window`]）创建进程，不分配控制台窗口；
+//!    stdin/stdout/stderr 全部走管道，不继承父进程控制台。
 //! 3. **前端实时查看工作状态**：每次输出/命令/退出都通过事件回调
 //!    （`ShellSessionEvent`，Tauri 层转发为 `shell-session-event`）推送，
 //!    前端在 main-content 底栏以「便签」形式展示每个会话。
@@ -16,8 +17,10 @@
 //! 结构：
 //! - [`ShellSessionManager`]：会话注册表 + 事件推送（agent 工具与 Tauri 命令共用）
 //! - [`ShellSession`]：单个会话（子进程 + 输出缓冲 + 增量游标）
-//! - 5 个 rig 工具：`shell_session_start` / `shell_session_send` /
-//!   `shell_session_read` / `shell_session_list` / `shell_session_kill`
+//! - 6 个 rig 工具：`shell_session_start` / `shell_session_send` /
+//!   `shell_session_read` / `shell_session_wait` / `shell_session_list` / `shell_session_kill`
+//! - `shell_session_wait`：等待 AI 定义的时间长度，输出命中关键字（finish/fail/warn/error）
+//!   即提前返回唤醒 agent，避免长任务盲等
 //!
 //! 输出缓冲：stdout/stderr 行读取器持续把输出追加到 `SessionBuf`，
 //! 同时 emit `Output` 事件供前端实时显示；`send`/`read` 用「安静期」启发式
@@ -29,10 +32,11 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::shell_env::{self, ShellKind};
 use rig_core::tool::Tool;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::{Child, ChildStdin};
 use tokio::sync::RwLock;
 
 /// 命令发送默认超时（30s）
@@ -45,10 +49,11 @@ pub const SETTLE_MS: u64 = 300;
 const MAX_BUFFER_BYTES: usize = 256 * 1024;
 /// 会话数上限，超出淘汰最久未活跃的会话
 const MAX_SESSIONS: usize = 32;
+/// `wait` 默认最多等待时间（30s，AI 可自定义）
+pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 30_000;
+/// `wait` 默认检查的关键字（输出命中任意一个即唤醒 agent）
+pub const DEFAULT_WAIT_KEYWORDS: [&str; 4] = ["finish", "fail", "warn", "error"];
 
-/// Windows 隐藏窗口标志（CREATE_NO_WINDOW）：子进程不分配控制台窗口
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 会话事件：经 Tauri 层转发为前端 `shell-session-event`
 #[derive(Debug, Clone, Serialize)]
@@ -136,8 +141,10 @@ pub struct ShellSession {
     pub id: String,
     pub name: String,
     pub cwd: PathBuf,
-    /// "cmd"（Windows）或 "sh"（Unix）
+    /// "bash" / "cmd" / "sh"（显示用）
     pub shell: &'static str,
+    /// shell 种类（决定 stdin 换行符等平台差异）
+    shell_kind: ShellKind,
     /// 进程句柄（waiter 取出 wait；kill 调用 kill()）
     child: tokio::sync::Mutex<Option<Child>>,
     /// stdin 管道（send 写入命令）
@@ -248,6 +255,7 @@ impl ShellSessionManager {
         self: &Arc<Self>,
         name: Option<&str>,
         cwd: Option<&PathBuf>,
+        shell: Option<&str>,
     ) -> Result<String, String> {
         // 会话数上限：淘汰最久未活跃
         {
@@ -273,16 +281,10 @@ impl ShellSessionManager {
         }
 
         let id = self.gen_id().await;
-        let (shell, cmd_builder) = if cfg!(target_os = "windows") {
-            let mut c = Command::new("cmd");
-            // /Q 关闭命令回显；/K 执行后保持交互；prompt $G 把提示符设为 `>`
-            c.arg("/Q").arg("/K").arg("prompt $G");
-            ("cmd", c)
-        } else {
-            let c = Command::new("sh");
-            ("sh", c)
-        };
-        let mut cmd = cmd_builder;
+        // 解析 AI 指定的 shell（未指定用默认策略），构造常驻子进程
+        let kind = shell_env::resolve(shell)?;
+        let (shell_kind, mut cmd) = shell_env::session_command_for(kind);
+        let shell = shell_kind.label();
 
         // 工作区目录（若指定）
         let effective_cwd = match cwd {
@@ -295,8 +297,8 @@ impl ShellSessionManager {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        // Windows 上隐藏控制台窗口（CREATE_NO_WINDOW）
+        shell_env::apply_no_window(&mut cmd);
 
         let mut child = cmd
             .spawn()
@@ -314,6 +316,7 @@ impl ShellSessionManager {
             name: session_name.clone(),
             cwd: effective_cwd.clone(),
             shell,
+            shell_kind,
             child: tokio::sync::Mutex::new(Some(child)),
             stdin: tokio::sync::Mutex::new(stdin),
             buf: Arc::new(Mutex::new(SessionBuf::new())),
@@ -415,7 +418,7 @@ impl ShellSessionManager {
             let s = stdin
                 .as_mut()
                 .ok_or_else(|| format!("会话 #{session_id} 的 stdin 已关闭"))?;
-            let line_ending = if cfg!(target_os = "windows") { "\r\n" } else { "\n" };
+            let line_ending = session.shell_kind.line_ending();
                 s.write_all(command.as_bytes())
                     .await
                     .map_err(|e| format!("写入命令到 #{session_id} 失败: {e}"))?;
@@ -483,6 +486,51 @@ impl ShellSessionManager {
         }
     }
 
+    /// 等待 AI 定义的时间长度，期间检查新输出是否命中关键字（默认 finish/fail/warn/error）。
+    /// 命中关键字 → 立即返回唤醒 agent（不等满超时）；进程退出也提前返回；
+    /// 否则等满 timeout_ms 后返回。用于长任务等待，避免盲等固定时长。
+    pub async fn wait(
+        &self,
+        session_id: &str,
+        timeout_ms: Option<u64>,
+        keywords: Option<Vec<String>>,
+    ) -> Result<String, String> {
+        let session = self
+            .sessions
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| format!("会话 #{session_id} 不存在（shell_session_list 可查看）"))?;
+
+        let kw: Vec<String> = keywords
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| DEFAULT_WAIT_KEYWORDS.iter().map(|s| s.to_string()).collect());
+        let timeout = timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS).max(1);
+
+        // 只关心 wait 开始后新增的输出；命中关键字 / 进程退出 / 超时三选一返回
+        let running = || session.is_running();
+        let hit = wait_for_keyword(&session.buf, &kw, timeout, &running).await;
+        session.touch();
+        let delta = session.buf.lock().unwrap().take_delta();
+
+        let status_note = if session.is_running() {
+            "（会话仍在后台运行，可继续 shell_session_send / shell_session_read）"
+        } else {
+            "（会话已退出）"
+        };
+        let head = match &hit {
+            Some(k) => format!("⏰ 命中关键字 [{k}]，提前唤醒 agent（未等满 {timeout}ms）"),
+            None if !session.is_running() => format!("⏰ 会话 #{session_id} 已退出，结束等待"),
+            None => format!("⏰ 等待 {timeout}ms 超时，未命中关键字（{:?}）", kw),
+        };
+        let body = if delta.trim().is_empty() {
+            "（无新输出）".to_string()
+        } else {
+            format!("\n=== 会话 #{session_id} 输出 ===\n{delta}")
+        };
+        Ok(format!("{head}\n{body}\n{status_note}"))
+    }
     /// 列出全部会话（按最近活跃倒序）
     pub async fn list(&self) -> Vec<ShellSessionInfo> {
         let sessions = self.sessions.read().await;
@@ -589,6 +637,35 @@ async fn wait_for_settle(buf: &Arc<Mutex<SessionBuf>>, timeout_ms: u64) {
     }
 }
 
+/// 关键字轮询：只检查 `wait` 开始后新增的输出（快照长度之后），
+/// 任一关键字（不区分大小写）出现即返回；进程退出或超时返回 None。
+async fn wait_for_keyword(
+    buf: &Arc<Mutex<SessionBuf>>,
+    keywords: &[String],
+    timeout_ms: u64,
+    running: &(dyn Fn() -> bool + Send + Sync),
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+    // 只关心 wait 开始后新增的输出，避免命中历史旧输出造成误唤醒
+    let start_len = buf.lock().unwrap().len();
+    let lower: Vec<String> = keywords.iter().map(|k| k.to_lowercase()).collect();
+    loop {
+        let tail = {
+            let b = buf.lock().unwrap();
+            let s = start_len.min(b.data.len());
+            b.data[s..].to_lowercase()
+        };
+        for (orig, lk) in keywords.iter().zip(lower.iter()) {
+            if tail.contains(lk) {
+                return Some(orig.clone());
+            }
+        }
+        if tokio::time::Instant::now() >= deadline || !running() {
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
 // =========================================================
 // rig 工具
 // =========================================================
@@ -602,6 +679,9 @@ pub struct ShellSessionStartArgs {
     /// 工作区目录（绝对路径），缺省用进程当前目录
     #[serde(default)]
     pub cwd: Option<String>,
+    /// 使用的命令行工具：auto / bash / cmd / powershell / sh；默认 auto（自动选择）
+    #[serde(default)]
+    pub shell: Option<String>,
 }
 
 /// shell_session_send 参数
@@ -626,6 +706,19 @@ pub struct ShellSessionReadArgs {
     pub timeout_ms: Option<u64>,
 }
 
+/// shell_session_wait 参数
+#[derive(Deserialize)]
+pub struct ShellSessionWaitArgs {
+    /// 会话短 ID（如 `a1b2`）
+    pub session_id: String,
+    /// 最多等待的毫秒数（AI 定义），默认 30000
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// 要检查的关键字列表（输出命中任意一个即提前唤醒 agent），
+    /// 默认 ["finish", "fail", "warn", "error"]；不区分大小写
+    #[serde(default)]
+    pub keywords: Option<Vec<String>>,
+}
 /// shell_session_kill 参数
 #[derive(Deserialize)]
 pub struct ShellSessionKillArgs {
@@ -657,9 +750,10 @@ impl Tool for ShellSessionStartTool {
     type Output = String;
 
     fn description(&self) -> String {
-        "启用一个后台命令会话（常驻 cmd/sh 子进程，静默运行不会弹出窗口）。\
+        "启用一个后台命令会话（常驻 bash/cmd/powershell/sh 子进程，静默运行不会弹出窗口）。\
          返回带短 ID（如 #a1b2）的会话。之后用 shell_session_send 向该会话追加命令、\
          用 shell_session_read 读取输出，支持多步 / 交互式命令。\
+         可用 shell 参数指定命令行工具（bash / cmd / powershell / sh / auto），默认自动选择；\
          适合需要多次操作、保持工作目录或长任务场景；一次性简单命令仍可用 shell 工具。"
             .to_string()
     }
@@ -675,15 +769,20 @@ impl Tool for ShellSessionStartTool {
                 "cwd": {
                     "type": "string",
                     "description": "工作区目录（绝对路径），缺省用进程当前目录"
+                },
+                "shell": {
+                    "type": "string",
+                    "enum": ["auto", "bash", "cmd", "powershell", "sh"],
+                    "description": "使用的命令行工具，默认 auto（自动选择）"
                 }
-            }
-        })
+                }
+            })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let cwd = args.cwd.as_deref().map(PathBuf::from);
         self.manager
-            .start(args.name.as_deref(), cwd.as_ref())
+            .start(args.name.as_deref(), cwd.as_ref(), args.shell.as_deref())
             .await
             .map_err(ShellSessionError)
     }
@@ -797,6 +896,62 @@ impl Tool for ShellSessionReadTool {
     }
 }
 
+/// 等待命令会话输出命中关键字（默认 finish/fail/warn/error），命中即唤醒 agent
+pub struct ShellSessionWaitTool {
+    manager: Arc<ShellSessionManager>,
+}
+
+impl ShellSessionWaitTool {
+    pub fn new(manager: Arc<ShellSessionManager>) -> Self {
+        Self { manager }
+    }
+}
+
+impl Tool for ShellSessionWaitTool {
+    const NAME: &'static str = "shell_session_wait";
+
+    type Error = ShellSessionError;
+    type Args = ShellSessionWaitArgs;
+    type Output = String;
+
+    fn description(&self) -> String {
+        "等待命令会话的新输出命中关键字（默认 finish/fail/warn/error），命中即提前返回唤醒 agent，\
+         不再盲等固定时长。适合长任务：发送长命令后用本工具等待，任务结束或出错时立即醒来。\
+         可用 keywords 自定义关键字列表（不区分大小写），用 timeout_ms 设最多等待毫秒数（AI 定义）；\
+         进程退出也会提前返回。"
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "会话短 ID（如 a1b2）"
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "最多等待的毫秒数（AI 定义），默认 30000",
+                    "default": DEFAULT_WAIT_TIMEOUT_MS
+                },
+                "keywords": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "要检查的关键字列表（输出命中任意一个即提前唤醒），默认 [finish, fail, warn, error]"
+                }
+            },
+            "required": ["session_id"]
+        })
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.manager
+            .wait(&args.session_id, args.timeout_ms, args.keywords)
+            .await
+            .map_err(ShellSessionError)
+    }
+}
 /// 列出全部命令会话
 pub struct ShellSessionListTool {
     manager: Arc<ShellSessionManager>,
@@ -909,7 +1064,7 @@ mod tests {
     #[tokio::test]
     async fn session_full_flow() {
         let mgr = test_manager();
-        let summary = mgr.start(Some("flow-test"), None).await.expect("start");
+        let summary = mgr.start(Some("flow-test"), None, None).await.expect("start");
         // 从摘要解析短 ID（#a1b2 的 4 位十六进制）
         let sid = summary
             .split('#')
@@ -939,11 +1094,75 @@ mod tests {
         mgr.kill(&sid).await.expect("kill");
     }
 
+    /// 显式指定 PowerShell 会话的全链路（PowerShell 不可用时跳过）
+    #[tokio::test]
+    async fn session_powershell_flow() {
+        if !shell_env::is_available(ShellKind::PowerShell) {
+            eprintln!("skip: PowerShell 不可用");
+            return;
+        }
+        let mgr = test_manager();
+        let summary = mgr.start(Some("ps-test"), None, Some("powershell")).await.expect("start");
+        let sid = summary
+            .split('#')
+            .nth(1)
+            .and_then(|s| s.get(..4).map(|x| x.to_string()))
+            .expect("session id");
+        let _ = mgr.read(&sid, Some(1500)).await;
+        let out = mgr
+            .send(&sid, "Write-Output effisuite-ps-probe", Some(10_000))
+            .await
+            .expect("send");
+        assert!(
+            out.contains("effisuite-ps-probe"),
+            "PowerShell 会话应输出探测文本，实际: {out:?}"
+        );
+        mgr.kill(&sid).await.expect("kill");
+    }
     /// 不存在的会话应返回友好错误
     #[tokio::test]
     async fn unknown_session_errors() {
         let mgr = test_manager();
         let e = mgr.send("zzzz", "echo hi", None).await.unwrap_err();
         assert!(e.contains("不存在"), "err: {e}");
+    }
+    /// wait：发一条会命中关键字的命令，应提前返回并携带输出
+    #[tokio::test]
+    async fn wait_keyword_wakeup() {
+        let mgr = test_manager();
+        let summary = mgr.start(Some("wait-test"), None, None).await.expect("start");
+        let sid = summary
+            .split('#')
+            .nth(1)
+            .and_then(|s| s.get(..4).map(|x| x.to_string()))
+            .expect("session id");
+        let _ = mgr.read(&sid, Some(1500)).await;
+
+        // 发一条延迟输出关键字的命令（sleep 后再 echo，确保输出在 wait 期间到达）
+        let delayed = if cfg!(target_os = "windows") {
+            "ping 127.0.0.1 -n 4 >nul & echo effisuite-finish-now"
+        } else {
+            "sleep 2 && echo effisuite-finish-now"
+        };
+        let _ = mgr.send(&sid, delayed, Some(10_000)).await;
+        // 用自定义关键字 wait，应命中 finish 提前唤醒（不等满 8s 超时）
+        let out = mgr
+            .wait(&sid, Some(8_000), Some(vec!["finish".into()]))
+            .await
+            .expect("wait");
+        assert!(
+            out.contains("命中关键字") && out.contains("finish"),
+            "wait 应命中关键字并提前返回，实际: {out:?}"
+        );
+
+        // 未命中的 wait 应等到超时
+        let _ = mgr.send(&sid, "echo effisuite-plain", Some(10_000)).await;
+        let out2 = mgr
+            .wait(&sid, Some(1_200), Some(vec!["zzz-nomatch".into()]))
+            .await
+            .expect("wait2");
+        assert!(out2.contains("超时"), "未命中应等满超时，实际: {out2:?}");
+
+        mgr.kill(&sid).await.expect("kill");
     }
 }

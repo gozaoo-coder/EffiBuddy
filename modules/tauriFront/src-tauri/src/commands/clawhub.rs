@@ -16,8 +16,10 @@ use effisuite_core::clawhub::{
     SearchResponse, SkillListResponse, SkillResponse,
 };
 use effisuite_core::{InstalledPlugin, Skill};
+use std::sync::Arc;
 use tauri::Emitter;
 
+use crate::commands::plugins::sync_plugin_skills;
 use crate::commands::skills::rebuild_skill_index;
 use crate::paths::skills_dir;
 use crate::state::{now_ms, AppState};
@@ -332,11 +334,19 @@ pub(crate) async fn clawhub_install_plugin(
         .save(&plugin)
         .await
         .map_err(|e| e.to_string())?;
+    // 安装后同步插件命令为 agent 技能（幂等 upsert + 重建技能索引），
+    // 使 agent 在 list_installed_skills 与 RAG 技能注入中看到新插件命令。
+    sync_plugin_skills(
+        state.plugin_store.clone(),
+        state.skill_store.clone(),
+        Arc::clone(&state.skill_index),
+    )
+    .await;
     let _ = app_handle.emit("plugins-changed", ());
     Ok(plugin.id)
 }
 
-/// 卸载 ClawHub 插件：删除 plugin_store 记录 + 解压目录
+/// 卸载 ClawHub 插件：删除 plugin_store 记录 + 解压目录 + 插件配置
 #[tauri::command]
 pub(crate) async fn clawhub_uninstall_plugin(
     state: tauri::State<'_, AppState>,
@@ -348,9 +358,20 @@ pub(crate) async fn clawhub_uninstall_plugin(
         .delete(&id)
         .await
         .map_err(|e| e.to_string())?;
+    // 清理插件配置（appdata/plugin_configs/<safe_id>.json）
+    crate::commands::plugins::cleanup_plugin_config(&*state, &id).await;
+    // 卸载后同步插件技能（清除该插件注册的技能并重建索引）
+    sync_plugin_skills(
+        state.plugin_store.clone(),
+        state.skill_store.clone(),
+        Arc::clone(&state.skill_index),
+    )
+    .await;
     let _ = app_handle.emit("plugins-changed", ());
     Ok(())
 }
+
+/// 列出本地已安装插件（按 installed_at 降序）
 
 /// 列出本地已安装插件（按 installed_at 降序）
 #[tauri::command]

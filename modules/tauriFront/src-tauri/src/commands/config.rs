@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use effisuite_core::{AgentConfig, ThemeMode};
+use effisuite_core::{AgentConfig, CompressionSettings, ThemeMode};
 use tauri::Emitter;
 
 use crate::agent::{apply_embedding_provider, build_agent_from_state, sync_image_gen_config};
@@ -75,6 +75,20 @@ pub(crate) async fn set_theme(
     // COW：读快照 → clone 内部 → 修改 → 写回新 Arc
     let mut config = state.config.read().await.as_ref().clone();
     config.theme = theme;
+    save_config(&config)?;
+    *state.config.write().await = Arc::new(config);
+      Ok(())
+  }
+
+  /// 更新压缩设置（阈值 / 自动压缩开关等）。
+  /// COW：读快照 → clone 内部 → 修改 → 写回新 Arc，仅持久化配置，不重建 agent。
+  #[tauri::command]
+pub(crate) async fn update_compression_settings(
+    state: tauri::State<'_, AppState>,
+    settings: CompressionSettings,
+) -> Result<(), String> {
+    let mut config = state.config.read().await.as_ref().clone();
+    config.compression_settings = settings;
     save_config(&config)?;
     *state.config.write().await = Arc::new(config);
     Ok(())

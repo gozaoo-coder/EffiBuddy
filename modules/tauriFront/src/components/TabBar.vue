@@ -208,19 +208,23 @@ function onTabLeave(el: Element, done: () => void) {
 }
 
 // ============= 交互 =============
-function tabIcon(tab: TabItem): string {
-  if (tab.icon) return tab.icon
-  switch (tab.kind) {
-    case 'chat':
-      return 'chat'
-    case 'asr-stream':
-      return 'mic'
-    case 'asr-upload':
-      return 'attachment'
-    case 'asr-history':
-      return 'clock'
+  function tabIcon(tab: TabItem): string {
+    if (tab.icon) return tab.icon
+    switch (tab.kind) {
+      case 'chat':
+        return 'chat'
+      case 'sub-agent':
+        return 'sparkles'
+      case 'plugin':
+        return 'puzzle'
+      case 'asr-stream':
+        return 'mic'
+      case 'asr-upload':
+        return 'attachment'
+      case 'asr-history':
+        return 'clock'
+    }
   }
-}
 
 function onTabClick(tab: TabItem) {
   if (tab.id !== activeTabId.value) activate(tab.id)

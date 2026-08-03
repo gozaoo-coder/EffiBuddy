@@ -13,7 +13,7 @@
  *   · 中断处理：anime.js 自动覆盖正在进行的动画，无缝接续
  * - 输出展开/收起：max-height 在 440px ↔ none 间切换
  */
-import { inject, nextTick, watch, onUnmounted } from 'vue'
+import { computed, inject, nextTick, watch, onUnmounted } from 'vue'
 import { animate } from 'animejs'
 import { Icon } from '../basic'
 import TodoTreeNode from '../todo/TodoTreeNode.vue'
@@ -40,6 +40,17 @@ const {
 } = store.taskMode
 const { getMeta, streamingBubbleId } = store.streaming
 const { isDark } = store.core
+
+// ── 会话版本操作（与普通消息气泡 msg-hover-bar 同款）：作用于本组起始消息 ──
+const { versioning } = store
+const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
+const startMsg = computed(
+  () => store.core.messages.value.find((m) => m.id === props.group.startMessageId) ?? null,
+)
+/** 活跃组正在流式输出时不展示版本操作栏（避免对运行中的任务组做破坏性操作） */
+const isGroupStreaming = computed(() =>
+  props.group.active && groupMessages(props.group).some((m) => m.id === streamingBubbleId.value),
+)
 
 // ── 实时工作输出自动滚动 ────────────────────────────────────────────────
 // 复用 chat 列表的 useAutoScroll：流式 token 增长时跟随底部，
@@ -117,6 +128,60 @@ function toggle() {
     class="task-bubble"
     :class="{ 'task-bubble--active': group.active, 'task-bubble--history': !group.active }"
   >
+      <!-- 会话版本操作 hover 操作栏（与消息气泡同款，作用于本组起始消息） -->
+      <div
+        v-if="startMsg && !isGroupStreaming"
+        class="task-version-bar"
+        @pointerdown.stop
+        @click.stop
+      >
+        <button
+          type="button"
+          class="task-version-btn"
+          title="复制信息"
+          @click.stop="onCopy(startMsg)"
+        >
+          <Icon name="copy" :size="14" />
+          <span class="task-version-tip">复制信息</span>
+        </button>
+        <button
+          type="button"
+          class="task-version-btn"
+          title="开启分支"
+          @click.stop="onBranch(startMsg)"
+        >
+          <Icon name="branch" :size="14" />
+          <span class="task-version-tip">开启分支：从此消息另起一条对话线</span>
+        </button>
+        <button
+          type="button"
+          class="task-version-btn"
+          title="保存临时版本"
+          @click.stop="onSaveTemp(startMsg)"
+        >
+          <Icon name="bookmark" :size="14" />
+          <span class="task-version-tip">保存临时版本：在此消息打版本书签</span>
+        </button>
+        <button
+          type="button"
+          class="task-version-btn"
+          title="回溯版本"
+          @click.stop="onRollback(startMsg)"
+        >
+          <Icon name="refresh" :size="14" />
+          <span class="task-version-tip">回溯版本：对话重置到此消息（其后移除）</span>
+        </button>
+        <button
+          type="button"
+          class="task-version-btn"
+          title="撤回至此消息前"
+          @click.stop="onUndoBefore(startMsg)"
+        >
+          <Icon name="undo" :size="14" />
+          <span class="task-version-tip">撤回至此消息前：删除此消息及其后全部</span>
+        </button>
+      </div>
+
     <div class="task-bubble-head" @click="toggle">
       <Icon :name="group.active ? 'wrench' : 'check-circle'" :size="16" />
       <span class="task-bubble-title">
@@ -192,7 +257,9 @@ function toggle() {
  * ============================================================ */
 
 .task-bubble {
+  position: relative; /* hover 版本操作栏的定位基准 */
   max-width: 100%;
+  min-width: 0; /* flex 子项允许收缩，防内容撑破父容器 */
   align-self: stretch;
   background: var(--card);
   border: 1px solid var(--border);
@@ -218,6 +285,81 @@ function toggle() {
   border-color: color-mix(in srgb, var(--success) 25%, var(--border));
   box-shadow: var(--shadow);
 }
+
+/* 会话版本操作 hover 操作栏（与消息气泡 msg-hover-bar 同款） */
+.task-version-bar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.task-bubble:hover .task-version-bar {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.task-version-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.task-version-btn:hover {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* 按钮 tooltip：悬浮时在下方弹出文字提示 */
+.task-version-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  max-width: 220px;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  text-align: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  white-space: normal;
+}
+
+.task-version-btn:hover .task-version-tip {
+  opacity: 1;
+}
+
 
 /* 头部：标题 + 进度摘要 + 折叠箭头 */
 .task-bubble-head {
@@ -338,6 +480,7 @@ function toggle() {
   padding: 0 var(--space-4) var(--space-4);
   max-height: 440px;
   overflow-y: auto;
+  overflow-x: hidden; /* 任务卡片内容不允许横向溢出，纵向滚动即可 */
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

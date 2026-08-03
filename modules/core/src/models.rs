@@ -4,7 +4,43 @@
 //! 符合内存优化规则。所有结构体均 `Serialize`/`Deserialize`，
 //! 以便在 Tauri 命令边界与 P2P 同步链路上无额外转换地传递。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::{Deserialize, Serialize};
+
+/// 进程内消息 id 递增计数器（与随机基座异或后取低 22 位，保证同进程不重复）
+static MSG_ID_SEQ: AtomicU64 = AtomicU64::new(0);
+/// 进程启动时随机化的基座（降低多进程/多设备在同一毫秒生成相同 id 的概率）
+static MSG_ID_BASE: OnceLock<u64> = OnceLock::new();
+
+fn msg_id_base() -> u64 {
+    *MSG_ID_BASE.get_or_init(|| {
+        // 简单伪随机：纳秒时间戳 + 函数地址散列，无需外部随机源
+        let t = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15);
+        let p = &msg_id_base as *const _ as usize as u64;
+        (t ^ p.rotate_left(32)).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    })
+}
+
+/// 生成 64 位数字消息 id（十进制字符串，约 19-20 位，比 36 位 UUID 短一半）。
+///
+/// 布局：高 42 位 = 自 UNIX 纪元起的毫秒时间戳；低 22 位 = 进程内递增计数器
+/// （与随机基座异或，同进程绝不重复、跨进程碰撞概率极低）。
+/// 兼容性：`Message.id` / 压缩 `<completionId>` 均按字符串处理，数字格式无缝兼容。
+pub fn gen_message_id() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let seq = MSG_ID_SEQ.fetch_add(1, Ordering::Relaxed);
+    let low = (msg_id_base() ^ seq) & 0x3F_FFFF; // 低 22 位
+    ((now << 22) | low).to_string()
+}
 
 /// 消息角色
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

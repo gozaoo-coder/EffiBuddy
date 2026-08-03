@@ -1,17 +1,26 @@
 <script setup lang="ts">
 /**
- * CompressionSheet —— 消息压缩进度浮窗(编排壳)
+ * CompressionSheet —— 消息压缩浮窗（编排壳，重构版）
  *
- * 区块编排:阶段进度条(CompressionStageBar)、错误提示、决策统计、
- * Token 节省卡片、流式输出、决策列表(CompressionActionCard × 3 种数据源)、
- * 空状态与底部操作区。
- * 卡片级 UI 与阶段条 UI 已原子化为子组件,本文件只保留容器与编排逻辑。
+ * 数据仪表盘化编排：
+ *  - 上下文用量仪表盘（CompressionGauge：当前用量 / 阈值线 / 压缩后预估）
+ *  - 压缩效果指标卡（CompressionLevelSteps：已压缩 n tokens / 节省 n% / 上一轮压缩大小 n%）
+ *  - 决策统计占比条（CompressionStatsBar：keep/hide/replace 堆叠 + 图例）
+ *  - 自动压缩设置面板（CompressionSettingsPanel，可展开，保存不重建 agent）
+ *  - 阶段进度条 / 错误提示 / 流式输出 / 决策列表（保留）
+ *  - 底部操作增强：再次压缩升级（done 且未达上限）/ 清除压缩状态（danger）
+ *
+ * 卡片级 UI 全部原子化为子组件，本文件只保留容器与编排逻辑。
  */
-import { inject } from 'vue'
+import { computed, inject, ref } from 'vue'
 import MarkdownRender from 'markstream-vue'
 import { Button, Icon, BindSheet } from '../basic'
 import CompressionStageBar from './CompressionStageBar.vue'
 import CompressionActionCard from './CompressionActionCard.vue'
+import CompressionGauge from './CompressionGauge.vue'
+import CompressionLevelSteps from './CompressionLevelSteps.vue'
+import CompressionStatsBar from './CompressionStatsBar.vue'
+import CompressionSettingsPanel from './CompressionSettingsPanel.vue'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
 
 const store = inject(CHAT_STORE_KEY)!
@@ -27,11 +36,70 @@ const {
   expandedActions,
   compressActionStats,
   compressSavedInfo,
+  compressLevel,
+  compressBaseTokens,
+  compressCurrentTokens,
+  compressionSettings,
+  compressingSettings,
   toggleActionExpand,
   triggerCompress,
   closeCompressionSheet,
   clearCompression,
+  loadCompressionSettings,
+  saveCompressionSettings,
 } = store.compression
+
+const core = store.core
+
+/** 最高压缩等级（与后端 MAX_COMPRESSION_LEVEL 对齐） */
+const MAX_LEVEL = 3
+
+// ---------- 上下文用量仪表盘数据 ----------
+const ctxUsed = computed(() => core.contextUsedTokens.value)
+const ctxMax = computed(() => core.contextMaxTokens.value)
+const ctxThreshold = computed(() => compressionSettings.value?.threshold_percent ?? 80)
+// 压缩后预估用量 = 当前用量 - 已节省 tokens（无节省数据时为 null）
+const ctxAfter = computed(() => {
+  const saved = compressSavedInfo.value?.savedTokens ?? 0
+  if (saved <= 0) return null
+  return Math.max(0, ctxUsed.value - saved)
+})
+
+// 当前是否存在压缩状态（底部"清除"按钮的依据）
+const hasCompressionState = computed(
+  () => !!compressExistingState.value || compressActions.value.length > 0,
+)
+const isMaxLevel = computed(() => compressLevel.value >= MAX_LEVEL)
+
+// 统计展示：done 用本轮结果，idle+existing 用既有状态
+const statKeep = computed(() =>
+  compressStage.value === 'done'
+    ? compressActionStats.value.keep
+    : (compressExistingState.value?.actions.filter((a) => a.method === 'keep').length ?? 0),
+)
+const statHide = computed(() =>
+  compressStage.value === 'done'
+    ? compressActionStats.value.hide
+    : (compressExistingState.value?.actions.filter((a) => a.method === 'hide').length ?? 0),
+)
+const statReplace = computed(() =>
+  compressStage.value === 'done'
+    ? compressActionStats.value.replace
+    : (compressExistingState.value?.actions.filter((a) => a.method === 'replace').length ?? 0),
+)
+const statTotalIds = computed(() =>
+  compressStage.value === 'done'
+    ? compressActionStats.value.totalIds
+    : (compressExistingState.value?.actions.reduce((s, a) => s + a.message_ids.length, 0) ?? 0),
+)
+
+// 设置面板展开/收起
+const settingsOpen = ref(false)
+
+// 设置变更 → 后端保存
+async function onSettingsChange(s: Parameters<typeof saveCompressionSettings>[0]) {
+  await saveCompressionSettings(s)
+}
 
 // 三种决策列表数据源:streaming(实时) / done(最终) / existing(历史)
 const actionSources = [
@@ -46,7 +114,7 @@ const actionSources = [
   {
     key: 'done' as const,
     visible: () => compressStage.value === 'done' && compressActions.value.length > 0,
-    title: () => `压缩决策（${compressActions.value.length} 条 · 点击展开查看原文）`,
+    title: () => `压缩决策（第 ${compressLevel.value} 级 · ${compressActions.value.length} 条 · 点击展开查看原文）`,
     hint: '',
     actions: () => compressActions.value,
     interactive: true,
@@ -57,7 +125,7 @@ const actionSources = [
       compressStage.value === 'idle' &&
       !!compressExistingState.value &&
       compressExistingState.value.actions.length > 0,
-    title: () => '上次压缩结果',
+    title: () => `上次压缩结果（第 ${compressLevel.value} 级）`,
     hint: '',
     actions: () => compressExistingState.value?.actions ?? [],
     interactive: true,
@@ -71,6 +139,24 @@ const actionSources = [
       <!-- 顶部阶段进度条 -->
       <CompressionStageBar />
 
+      <!-- 上下文用量仪表盘：当前用量 / 阈值线 / 压缩后预估 -->
+      <CompressionGauge
+        :used-tokens="ctxUsed"
+        :max-tokens="ctxMax"
+        :threshold-percent="ctxThreshold"
+        :after-tokens="ctxAfter"
+        label="上下文使用"
+      />
+
+        <!-- 压缩效果指标：已压缩 n tokens / 比未压缩前节省 n% / 上一轮压缩大小 n% -->
+        <CompressionLevelSteps
+          v-if="compressStage === 'idle' || compressStage === 'done'"
+          :level="compressLevel"
+          :max-level="MAX_LEVEL"
+          :base-tokens="compressBaseTokens"
+          :current-tokens="compressCurrentTokens"
+        />
+
       <!-- 错误提示 -->
       <div v-if="compressStage === 'error'" class="compress-error-box">
         <div class="compress-error-title">
@@ -80,62 +166,28 @@ const actionSources = [
         <div class="compress-error-msg">{{ compressError }}</div>
       </div>
 
-      <!-- 决策统计(done 阶段或已有压缩状态)-->
-      <div
+      <!-- 决策统计占比条(done 阶段或已有压缩状态)-->
+      <CompressionStatsBar
         v-if="compressStage === 'done' || (compressStage === 'idle' && compressExistingState)"
-        class="compress-stats"
-      >
-        <div class="compress-stat-item keep">
-          <span class="compress-stat-num">{{
-            compressStage === 'done'
-              ? compressActionStats.keep
-              : (compressExistingState?.actions.filter((a) => a.method === 'keep').length ?? 0)
-          }}</span>
-          <span class="compress-stat-label">保持</span>
-        </div>
-        <div class="compress-stat-item hide">
-          <span class="compress-stat-num">{{
-            compressStage === 'done'
-              ? compressActionStats.hide
-              : (compressExistingState?.actions.filter((a) => a.method === 'hide').length ?? 0)
-          }}</span>
-          <span class="compress-stat-label">隐藏</span>
-        </div>
-        <div class="compress-stat-item replace">
-          <span class="compress-stat-num">{{
-            compressStage === 'done'
-              ? compressActionStats.replace
-              : (compressExistingState?.actions.filter((a) => a.method === 'replace').length ?? 0)
-          }}</span>
-          <span class="compress-stat-label">替换</span>
-        </div>
-        <div class="compress-stat-item total">
-          <span class="compress-stat-num">{{
-            compressStage === 'done'
-              ? compressActionStats.totalIds
-              : (compressExistingState?.actions.reduce((s, a) => s + a.message_ids.length, 0) ?? 0)
-          }}</span>
-          <span class="compress-stat-label">涉及消息</span>
-        </div>
-      </div>
+        :keep="statKeep"
+        :hide="statHide"
+        :replace="statReplace"
+        :total-ids="statTotalIds"
+      />
 
-      <!-- Token 节省量卡片:基于 actions + messages 估算(4 字符 ≈ 1 token)-->
-      <div
-        v-if="compressSavedInfo && compressSavedInfo.savedTokens > 0"
-        class="compress-saved"
-        :class="{ 'is-done': compressStage === 'done' }"
-      >
-        <div class="compress-saved-icon">
-          <Icon name="check" :size="14" />
-        </div>
-        <div class="compress-saved-text">
-          <div class="compress-saved-title">
-            节省约 <span class="compress-saved-num">{{ compressSavedInfo.savedTokens }}</span> tokens
-          </div>
-          <div class="compress-saved-desc">
-            {{ compressSavedInfo.savedChars }} 字符 · 占历史 {{ compressSavedInfo.percent }}%
-          </div>
-        </div>
+        <!-- 自动压缩设置面板(可展开,保存不重建 agent)-->
+      <div class="compress-settings-wrap">
+        <button class="compress-settings-toggle" type="button" @click="settingsOpen = !settingsOpen">
+          <Icon name="settings" :size="14" />
+          <span>自动压缩设置</span>
+          <Icon :name="settingsOpen ? 'chevron-up' : 'chevron-down'" :size="12" class="cc-caret" />
+        </button>
+        <CompressionSettingsPanel
+          v-if="settingsOpen && compressionSettings"
+          :settings="compressionSettings"
+          :saving="compressingSettings"
+          @change="onSettingsChange"
+        />
       </div>
 
       <!-- 流式输出区(streaming 阶段实时增长;done 后展示完整 raw_text)-->
@@ -185,8 +237,9 @@ const actionSources = [
         </div>
       </div>
 
-      <!-- 底部操作区 -->
+      <!-- 底部操作区:增强(再次压缩升级 / 清除) -->
       <div class="compress-footer">
+        <!-- idle:开始压缩 -->
         <Button
           v-if="compressStage === 'idle'"
           variant="primary"
@@ -198,26 +251,46 @@ const actionSources = [
           <template #icon><Icon name="merge" :size="18" /></template>
           开始压缩
         </Button>
+
+        <!-- done 且未达上限:再次压缩升级到下一级 -->
         <Button
-          v-else-if="compressStage === 'done' || compressStage === 'error'"
-          variant="normal"
+          v-else-if="compressStage === 'done' && !isMaxLevel"
+          variant="primary"
           block
-          @click="closeCompressionSheet"
+          :loading="compressing"
+          :disabled="compressing"
+          @click="triggerCompress"
         >
+          <template #icon><Icon name="merge" :size="18" /></template>
+          再次压缩 → 第 {{ compressLevel + 1 }} 级
+        </Button>
+
+        <!-- done 且已达上限 -->
+        <Button v-else-if="compressStage === 'done' && isMaxLevel" variant="normal" block disabled>
+          <Icon name="check" :size="16" />
+          已达最高压缩等级（L{{ MAX_LEVEL }}）
+        </Button>
+
+        <!-- error:关闭 -->
+        <Button v-else-if="compressStage === 'error'" variant="normal" block @click="closeCompressionSheet">
           关闭
         </Button>
+
+        <!-- streaming:进行中 -->
         <Button v-else variant="text" block disabled>
           <Icon name="loader" :size="16" />
           压缩进行中…
         </Button>
+
+        <!-- 清除压缩状态(危险操作,醒目提示) -->
         <Button
-          v-if="(compressStage === 'idle' || compressStage === 'done') && compressExistingState"
-          variant="text"
+          v-if="(compressStage === 'idle' || compressStage === 'done') && hasCompressionState"
+          variant="danger"
           block
           @click="clearCompression"
         >
           <Icon name="delete" :size="16" />
-          清除压缩状态
+          清除压缩状态（恢复全量历史）
         </Button>
       </div>
     </div>
@@ -260,95 +333,36 @@ const actionSources = [
   word-break: break-word;
 }
 
-/* 决策统计:四宫格 */
-.compress-stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+
+/* 设置面板:可展开容器 */
+.compress-settings-wrap {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
-.compress-stat-item {
+.compress-settings-toggle {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 10px 4px;
+  gap: 6px;
+  padding: 8px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-}
-
-.compress-stat-num {
-  font-size: 18px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.compress-stat-label {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.compress-stat-item.keep .compress-stat-num { color: var(--success, #10a37f); }
-.compress-stat-item.hide .compress-stat-num { color: var(--muted); }
-.compress-stat-item.replace .compress-stat-num { color: var(--warn, #d97757); }
-.compress-stat-item.total .compress-stat-num { color: var(--text); }
-
-/* Token 节省量卡片:横排图标 + 标题 + 描述,配色用 success */
-.compress-saved {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: rgba(16, 163, 127, 0.08);
-  border: 1px solid rgba(16, 163, 127, 0.25);
-  transition: all 0.3s ease;
-}
-
-.compress-saved.is-done {
-  animation: compress-saved-pop 0.4s ease;
-}
-
-@keyframes compress-saved-pop {
-  0% { transform: scale(0.96); opacity: 0; }
-  60% { transform: scale(1.02); }
-  100% { transform: scale(1); opacity: 1; }
-}
-
-.compress-saved-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--success) 14%, transparent);
-  color: var(--success);
-  flex-shrink: 0;
-}
-
-.compress-saved-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.compress-saved-title {
   font-size: 13px;
+  font-weight: 600;
   color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.2s ease;
 }
 
-.compress-saved-num {
-  font-weight: 700;
-  color: var(--success);
-  font-variant-numeric: tabular-nums;
+.compress-settings-toggle:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
 }
 
-.compress-saved-desc {
-  font-size: 12px;
+.cc-caret {
+  margin-left: auto;
   color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 /* 流式输出区 */

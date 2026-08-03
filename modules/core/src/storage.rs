@@ -8,7 +8,15 @@
 //! - 读-改-写原子性：`rename`/`set_pinned`/`set_working_dir`/`append_message`
 //!   使用**每会话独立锁**，仅阻塞同一会话的并发操作，不同会话互不阻塞
 //! - 使用 `with_capacity` 预分配 list 返回值，避免多次扩容
+//! - 使用 `with_capacity` 预分配 list 返回值，避免多次扩容
 //! - 所有方法返回 `Result`，错误以 `CoreError::Io`/`Serde` 上抛
+//!
+//! ## 版本控制（git 风格）
+//!
+//! 用 `with_versions(...)` 构造可启用会话历史版本控制：每次 `append_message`
+//! 自动追加一个 `Append` 提交（提交/消息池/引用仓库位于 `<root>/.versions/`）；
+//! `version_*` 委托方法在会话锁内同步执行「版本操作 + 工作区覆盖」，
+//! 支持开启分支 / 保存临时版本 / 回溯版本 / 撤回至此消息前 / 检出引用。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{Conversation, CoreError, Message, Result};
+use crate::versions::{RefSummary, VersionList, VersionOpResult, VersionStore};
 
 /// 会话元信息（轻量，不含消息体），用于侧栏列表展示
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +80,8 @@ pub struct ConversationStore {
     /// 每会话独立锁表：`conversation_id → Arc<Mutex<()>>`。
     /// 外层 `StdMutex` 仅短暂持有（无 IO/await），内层 `tokio::Mutex` 跨 await 持有。
     locks: std::sync::Arc<StdMutex<HashMap<String, std::sync::Arc<Mutex<()>>>>>,
+    /// 可选的会话版本仓库存储（git 风格历史）。`None` 表示未启用版本控制。
+    versions: Option<VersionStore>,
 }
 
 impl ConversationStore {
@@ -81,6 +92,19 @@ impl ConversationStore {
         Ok(Self {
             root,
             locks: std::sync::Arc::new(StdMutex::new(HashMap::new())),
+            versions: None,
+        })
+    }
+
+    /// 创建启用版本控制的会话存储（git 风格历史，仓库位于 `<root>/.versions/`）。
+    pub fn with_versions(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        std::fs::create_dir_all(&root).map_err(CoreError::Io)?;
+        let versions = VersionStore::new(root.join(".versions"))?;
+        Ok(Self {
+            root,
+            locks: std::sync::Arc::new(StdMutex::new(HashMap::new())),
+            versions: Some(versions),
         })
     }
 
@@ -320,7 +344,142 @@ impl ConversationStore {
             .unwrap_or_else(|| Conversation::new(conv_id.to_string(), created_at));
         conv.push(msg);
         self.save(&conv).await?;
+        // git 风格版本控制：每次追加自动提交（失败仅告警，不阻塞消息持久化）
+        if let Some(versions) = &self.versions {
+            if let Err(e) = versions
+                .commit_append(conv_id, &conv.messages, created_at)
+                .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    conversation_id = %conv_id,
+                    "版本提交失败（不影响消息持久化）"
+                );
+            }
+        }
         Ok(conv)
+    }
+
+    /// 用指定消息列表覆盖会话（版本操作回溯/撤回/检出后同步工作区）。
+    /// 自动更新 `updated_at` 为当前时间戳。
+    pub async fn replace_messages(
+        &self,
+        id: &str,
+        messages: Vec<Message>,
+        now: u64,
+    ) -> Result<Conversation> {
+        let mut conv = self
+            .load(id)
+            .await?
+            .unwrap_or_else(|| Conversation::new(id.to_string(), now));
+        conv.messages = messages;
+        conv.updated_at = now;
+        self.save(&conv).await?;
+        Ok(conv)
+    }
+
+    // ---------- 会话版本控制（git 风格，委托 versions 模块） ----------
+
+    /// 版本仓库句柄；未启用时返回友好错误
+    fn version_store(&self) -> Result<&VersionStore> {
+        self.versions
+            .as_ref()
+            .ok_or_else(|| CoreError::Msg("会话版本控制未启用（使用 ConversationStore::with_versions 构造）".into()))
+    }
+
+    /// 开启分支：从包含 `message_id` 的消息点创建新分支并切换 HEAD，
+    /// 工作区同步为该消息点快照（其后的消息被留在原分支）。
+    pub async fn version_create_branch(
+        &self,
+        id: &str,
+        message_id: &str,
+        now: u64,
+    ) -> Result<VersionOpResult> {
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
+        let versions = self.version_store()?;
+        let result = versions.create_branch(id, message_id, now).await?;
+        self.replace_messages(id, result.messages.clone(), now).await?;
+        Ok(result)
+    }
+
+    /// 保存临时版本：在包含 `message_id` 的消息点打 `temp-*` 书签（不移动 HEAD）
+    pub async fn version_save_temp(
+        &self,
+        id: &str,
+        message_id: &str,
+        note: String,
+        now: u64,
+    ) -> Result<RefSummary> {
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
+        self.version_store()?
+            .save_temp_version(id, message_id, note, now)
+            .await
+    }
+
+    /// 回溯版本：重置 HEAD 到包含 `message_id` 的提交（丢弃其后消息）
+    pub async fn version_rollback(
+        &self,
+        id: &str,
+        message_id: &str,
+        now: u64,
+    ) -> Result<VersionOpResult> {
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
+        let versions = self.version_store()?;
+        let result = versions.rollback_to_message(id, message_id, now).await?;
+        self.replace_messages(id, result.messages.clone(), now).await?;
+        Ok(result)
+    }
+
+    /// 撤回至此消息前：重置 HEAD 到该消息提交的父提交（丢弃该消息及其后全部）
+    pub async fn version_undo_before(
+        &self,
+        id: &str,
+        message_id: &str,
+        now: u64,
+    ) -> Result<VersionOpResult> {
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
+        let versions = self.version_store()?;
+        let result = versions.undo_before_message(id, message_id, now).await?;
+        self.replace_messages(id, result.messages.clone(), now).await?;
+        Ok(result)
+    }
+
+    /// 检出到指定引用（分支/临时版本/检查点），工作区同步为对应快照
+    pub async fn version_checkout(
+        &self,
+        id: &str,
+        ref_name: &str,
+        now: u64,
+    ) -> Result<VersionOpResult> {
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
+        let versions = self.version_store()?;
+        let result = versions.checkout_ref(id, ref_name, now).await?;
+        self.replace_messages(id, result.messages.clone(), now).await?;
+        Ok(result)
+    }
+
+    /// 会话版本列表（当前分支提交链 + 全部引用）
+    pub async fn version_list(&self, id: &str) -> Result<VersionList> {
+        match &self.versions {
+            Some(v) => v.list_versions(id).await,
+            None => Ok(VersionList {
+                head: "main".to_string(),
+                refs: Vec::new(),
+                commits: Vec::new(),
+            }),
+        }
+    }
+
+    /// 删除引用（临时版本/检查点/分支；main 不可删除）
+    pub async fn version_delete_ref(&self, id: &str, ref_name: &str) -> Result<()> {
+        let lock = self.conv_lock(id);
+        let _guard = lock.lock().await;
+        self.version_store()?.delete_ref(id, ref_name).await
     }
 
     /// 删除指定 conversation，不存在返回 Ok(())
@@ -328,6 +487,10 @@ impl ConversationStore {
         let path = self.path_for(id);
         if path.exists() {
             tokio::fs::remove_file(&path).await.map_err(CoreError::Io)?;
+        }
+        // 联动清理会话版本仓库（git 风格历史）
+        if let Some(versions) = &self.versions {
+            versions.clear(id).await?;
         }
         Ok(())
     }

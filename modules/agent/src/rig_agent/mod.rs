@@ -45,6 +45,7 @@ mod chat_agent_impl;
 mod compression;
 mod context;
 mod tools;
+mod user_interrupt;
 pub use auto_classify::{
     AUTO_CLASSIFY_PREAMBLE, AutoClassifyResult, build_auto_classify_prompt,
     call_auto_classify_agent, parse_auto_classify_response,
@@ -53,6 +54,7 @@ pub use compression::{
     COMPRESSION_PREAMBLE, CompressionStreamItem, call_compression_agent,
     call_compression_agent_stream,
 };
+pub use user_interrupt::PendingUserMessages;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -78,10 +80,6 @@ pub(super) const RECENT_HISTORY_WITH_MEMORY: usize = 0;
 /// 长会话的 token 预算由消息压缩系统（compress_message 命令）维护，
 /// 而非在 prompt 拼装层硬截断。
 pub(super) const HISTORY_TRUNCATE_CHARS: usize = 0;
-/// 助手消息的思考（reasoning）注入上下文的单条长度上限（字符）。
-/// 推理模型的 thinking 可能非常长，全量注入会快速耗尽上下文窗口；
-/// 这里对单条 reasoning 做截断兜底，长会话的进一步预算仍由压缩系统维护。
-pub(super) const REASONING_IN_CONTEXT_CHARS: usize = 2000;
 /// 自动注入的可用技能条数上限（RAG 检索 Top-K）
 /// 仅注入 name + description 摘要，agent 通过 get_skill_detail / enable_skill 深入使用
 pub(super) const SKILL_AUTO_INJECT_LIMIT: usize = 3;
@@ -189,9 +187,9 @@ pub struct RigAgent {
     /// None 时不注册 dispatch_remote_task 工具；Some 时 LLM 可列出在线设备并派发任务。
     /// 用 trait object 避免 agent crate 依赖 effisuite-p2p（依赖倒置）。
     pub(super) remote_task_dispatcher: Option<Arc<dyn RemoteTaskDispatcher>>,
-    /// 后台命令会话管理器：shell_session_start / send / read / list / kill 工具据此
+    /// 后台命令会话管理器：shell_session_start / send / read / wait / list / kill 工具据此
     /// 启用并交互常驻 cmd/sh 会话（静默后台运行，前端底栏实时展示）。
-    /// None 时不注册这 5 个工具。
+    /// None 时不注册这 6 个工具。
     pub(super) shell_sessions: Option<Arc<crate::shell_session::ShellSessionManager>>,
     /// 运行时 agent 公共会话交流池存储：跨会话协作基础设施。
     /// None 时不注册 pool_* 工具、不注入 `[Agent 交流池]` 上下文段。
@@ -200,5 +198,9 @@ pub struct RigAgent {
     /// 子 agent 为 Some(session_id)（agent_id 按 `sa:<session_id>` 推导）。
     pub(super) pool_sub_agent_id: Option<String>,
     /// 子 agent 的交流池显示名（主 agent 为 None，取会话标题）。
+    /// 子 agent 的交流池显示名（主 agent 为 None，取会话标题）。
     pub(super) pool_sub_agent_name: Option<String>,
+    /// 用户中断注入队列句柄（AI 生成期间排队消息）：Some 时 build_agent 注册
+    /// InjectPendingUserHook，在下一个 completion 前把排队消息插入模型输入。
+    pub(super) pending_user_messages: Option<Arc<PendingUserMessages>>,
 }

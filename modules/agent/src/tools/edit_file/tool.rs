@@ -79,7 +79,11 @@ impl Tool for EditFileTool {
             ""
         };
         format!(
-            "按行号精确编辑本地文本文件，**不覆盖整文件**。与 read_file / search_file 配合：\
+            "**代码修改优先用正则**：当改动具有规律性（批量替换某函数调用、统一命名/格式、\
+             \"所有 `println!` 调用\"、`TODO` 注释等），请**优先使用 `edit_file_regex`**\
+             （正则匹配替换，支持首处/全部 + 捕获组引用），比手数行号更稳更快；\
+             `edit_file` 用于需要精确控制行号的单点编辑（如插入/替换特定某几行、追加）。\n\n\
+             按行号精确编辑本地文本文件，**不覆盖整文件**。与 read_file / search_file 配合：\
              先读取或搜索拿到行号，再替换指定行。\n\n\
              **操作模式**（edits 为操作数组，每个元素一种模式）：\n\
              1. 替换：start_line（+ 可选 end_line）+ text，把该行/该区间整段替换为 text；\
@@ -92,8 +96,8 @@ impl Tool for EditFileTool {
               **可选参数**：dry_run=true 仅预览不写盘（大改前先确认安全，返回完整 diff 与行号变化）；\
               diff_context=N 控制变更明细上下文行数（默认 1，0 = 只显示变更行）。\n\
               **行数校准**：替换模式下若 text 行数与 (end_line - start_line + 1) 不一致，\
-              报告会明确标注声明行数与实际写入行数，便于核对的下次操作。\
-              路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}{history_hint}"
+                 报告会明确标注声明行数与实际写入行数，便于核对的下次操作。\
+                 路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}{history_hint}"
         )
     }
 
@@ -107,7 +111,7 @@ impl Tool for EditFileTool {
                 },
                 "edits": {
                     "type": "array",
-                    "description": "编辑操作列表，按行号自动排序执行；行号指编辑前原文件（1-based）",
+                      "description": "编辑操作列表，按行号自动排序执行；行号指编辑前原文件（1-based）。规律性批量改动请改用 edit_file_regex",
                     "items": {
                         "type": "object",
                         "properties": {

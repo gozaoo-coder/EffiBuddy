@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
- * AgentPoolItem —— 交流池单条目卡片
+ * AgentPoolItem —— 交流池会话卡片（会话维度）
  *
- * 从 AgentPoolRail.vue 抽取的独立组件，职责：
- * - 渲染条目头部：名称 + 类型徽标（主/子）+ 状态徽标 + @ 收件箱角标 + 折叠箭头
- * - 折叠态：任务摘要 + 最近上报（若与任务不同）+ 相对时间
- * - 展开态：研究报告 + todoTree 摘要 + 收件箱 @ 消息列表（含提问 / 回复）
+ * 从 AgentPoolRail.vue 抽取的独立组件，展示一个"会话"及其全部活跃窗口：
+ * - 折叠态头部：会话标题 + 状态徽标 + 活跃窗口数 + @ 角标 + 折叠箭头 + 相对时间
+ * - 展开态：
+ *   · 活跃窗口列表（主 agent 第一个，子 agent 其后）→ 点击在 main-content 打开
+ *   · 主 agent 的研究报告 / todoTree 摘要
+ *   · 该会话全部 @ 消息（含提问 / 回复）
  *
  * 动画管线设计（全流程）：
  * - 展开/折叠：anime.js 驱动 maxHeight + opacity 过渡，避免 v-if 立即卸载 DOM
@@ -13,20 +15,27 @@
  *   · 折叠：从 scrollHeight,opacity:1 → 0,0（200ms inOut(2)）
  *   · 中断处理：anime.js 自动覆盖正在进行的动画，无缝接续
  * - 状态徽标 pulse：进行中状态 dot 1.2s 无限脉冲
- * - hover 背景：CSS background-color 过渡（150ms）
- * - @ 角标 pop：首次出现时 scale(0→1.15→1) 一次性动画
  */
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { animate } from 'animejs'
 import { Icon } from './basic'
-import type { PoolEntry } from '../types'
+import AgentPoolWindowItem from './AgentPoolWindowItem.vue'
+import type { PoolSession, PoolWindow } from '../composables/useAgentPool'
+import { useAgentPool } from '../composables/useAgentPool'
 
 const props = defineProps<{
-  /** 交流池条目 */
-  entry: PoolEntry
+  /** 会话模型（由 useAgentPool().sessions 提供） */
+  session: PoolSession
 }>()
 
-// 折叠状态：默认折叠（用户主动点击展开查看详情）
+const emit = defineEmits<{
+  /** 点击窗口行：请求在 main-content 打开该窗口 */
+  (e: 'open-window', w: PoolWindow): void
+}>()
+
+const { statusLabel, formatRelativeTime } = useAgentPool()
+
+// 折叠状态：默认折叠（用户主动点击展开查看窗口列表）
 const collapsed = ref(true)
 const bodyRef = ref<HTMLElement | null>(null)
 let animating = false
@@ -35,7 +44,6 @@ function toggle() {
   if (animating) return
   animating = true
   if (collapsed.value) {
-    // 展开：先把 v-if 显示出来，下一帧测量 scrollHeight 并动画
     collapsed.value = false
     nextTick(() => {
       const el = bodyRef.value
@@ -56,7 +64,6 @@ function toggle() {
       })
     })
   } else {
-    // 折叠：先把当前高度动画到 0，再 v-show 隐藏
     const el = bodyRef.value
     if (!el) {
       collapsed.value = true
@@ -77,40 +84,28 @@ function toggle() {
   }
 }
 
-/** 待处理 @ 消息数（pending 状态） */
-function pendingAtCount(entry: PoolEntry): number {
-  let n = 0
-  for (const m of entry.inbox) {
-    if (m.status === 'pending') n++
+/** 主 agent 条目（研究报告 / todoTree 来源） */
+const mainEntry = computed(() =>
+  props.session.entries.find((e) => e.kind === 'main'),
+)
+
+/** 该会话全部 @ 消息（跨条目聚合，按时间倒序） */
+const inbox = computed(() => {
+  const list: { from_name: string; question: string; reply?: string | null; status: string; created_at: number }[] = []
+  for (const e of props.session.entries) {
+    for (const m of e.inbox) {
+      list.push({
+        from_name: m.from_name,
+        question: m.question,
+        reply: m.reply,
+        status: m.status,
+        created_at: m.created_at,
+      })
+    }
   }
-  return n
-}
-
-/** 中文状态标签 */
-function statusLabel(s: PoolEntry['status']): string {
-  if (s === 'in_progress') return '进行中'
-  if (s === 'waiting') return '等待中'
-  return '已完成'
-}
-
-/** 中文条目类型标签 */
-function kindLabel(k: PoolEntry['kind']): string {
-  return k === 'main' ? '主' : '子'
-}
-
-/** 格式化相对时间 */
-function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  if (diff < 2592000000) return `${Math.floor(diff / 86400000)}天前`
-  try {
-    return new Date(ts).toLocaleDateString()
-  } catch {
-    return ''
-  }
-}
+  list.sort((a, b) => b.created_at - a.created_at)
+  return list
+})
 
 /** 截断长文本 */
 function truncate(s: string, max: number): string {
@@ -121,43 +116,44 @@ function truncate(s: string, max: number): string {
 </script>
 
 <template>
-  <div
-    class="ap-item"
-    :class="[`status-${entry.status}`, `kind-${entry.kind}`]"
-    @click="toggle"
-  >
+  <div class="ap-item" :class="`st-${session.status}`">
     <!-- 头部 -->
-    <div class="ap-item-head">
-      <span class="ap-item-glyph" :class="`kind-${entry.kind}`">
-        <Icon :name="entry.kind === 'main' ? 'robot' : 'sparkles'" :size="14" />
+    <div class="ap-item-head" @click="toggle">
+      <span class="ap-item-glyph">
+        <Icon name="merge" :size="14" />
       </span>
 
       <div class="ap-item-info">
         <div class="ap-item-title-row">
-          <span class="ap-item-name">{{ entry.name || '未命名 agent' }}</span>
-          <span class="ap-item-kind" :class="`kind-${entry.kind}`">{{ kindLabel(entry.kind) }}</span>
-          <span class="ap-item-status" :class="`status-${entry.status}`">
+          <span class="ap-item-name">{{ session.title }}</span>
+          <span class="ap-item-status" :class="`st-${session.status}`">
             <span class="ap-item-status-dot" />
-            {{ statusLabel(entry.status) }}
+            {{ statusLabel(session.status) }}
           </span>
         </div>
-        <div class="ap-item-task">{{ truncate(entry.task || '（无任务描述）', 60) }}</div>
         <div class="ap-item-meta">
-          {{ formatRelativeTime(entry.updated_at) }}
-          <template v-if="entry.last_report && entry.last_report !== entry.task">
-            · {{ truncate(entry.last_report, 30) }}
+          <span class="ap-item-wins" :title="`${session.activeCount} 个活跃窗口`">
+            <Icon name="chat" :size="10" />
+            {{ session.activeCount }} 窗口
+          </span>
+          <template v-if="session.pendingAtCount > 0">
+            <span class="ap-item-at-count">
+              <Icon name="message" :size="10" />
+              {{ session.pendingAtCount }} @
+            </span>
           </template>
+          <span class="ap-item-time">{{ formatRelativeTime(session.updatedAt) }}</span>
         </div>
       </div>
 
       <!-- @ 收件箱角标（仅 pending > 0 时显示） -->
       <span
-        v-if="pendingAtCount(entry) > 0"
+        v-if="session.pendingAtCount > 0"
         class="ap-item-at-badge"
-        :title="`${pendingAtCount(entry)} 条待处理 @ 消息`"
+        :title="`${session.pendingAtCount} 条待处理 @ 消息`"
       >
         <Icon name="message" :size="11" />
-        {{ pendingAtCount(entry) > 99 ? '99+' : pendingAtCount(entry) }}
+        {{ session.pendingAtCount > 99 ? '99+' : session.pendingAtCount }}
       </span>
 
       <!-- 折叠箭头 -->
@@ -166,42 +162,65 @@ function truncate(s: string, max: number): string {
       </span>
     </div>
 
-    <!-- 展开内容（v-if + anime.js 动画） -->
+    <!-- 展开内容（v-show + anime.js 动画） -->
     <div v-show="!collapsed" ref="bodyRef" class="ap-item-body">
       <div class="ap-item-body-inner">
-        <!-- 研究报告 -->
-        <div v-if="entry.research_report.trim()" class="ap-item-section">
+        <!-- 活跃窗口列表：第一个是主 agent，其余是子 agent -->
+        <div class="ap-item-section">
+          <div class="ap-item-section-label">
+            <Icon name="chat" :size="12" />
+            活跃窗口（{{ session.windows.length }}）
+            <span class="ap-item-section-hint">点击进入查看</span>
+          </div>
+          <div class="ap-item-windows">
+            <AgentPoolWindowItem
+              v-for="w in session.windows"
+              :key="`${w.kind}-${w.windowId}`"
+              :window="w"
+              @open="(win) => emit('open-window', win)"
+            />
+          </div>
+        </div>
+
+        <!-- 主 agent 研究报告 -->
+        <div
+          v-if="mainEntry && mainEntry.research_report.trim()"
+          class="ap-item-section"
+        >
           <div class="ap-item-section-label">
             <Icon name="book" :size="12" />
             研究报告
           </div>
-          <div class="ap-item-section-text">{{ entry.research_report }}</div>
+          <div class="ap-item-section-text">{{ mainEntry.research_report }}</div>
         </div>
 
-        <!-- todoTree 摘要 -->
-        <div v-if="entry.todo_summary.trim()" class="ap-item-section">
+        <!-- 主 agent todoTree 摘要 -->
+        <div
+          v-if="mainEntry && mainEntry.todo_summary.trim()"
+          class="ap-item-section"
+        >
           <div class="ap-item-section-label">
             <Icon name="check" :size="12" />
             todoTree
           </div>
-          <pre class="ap-item-section-pre">{{ entry.todo_summary }}</pre>
+          <pre class="ap-item-section-pre">{{ mainEntry.todo_summary }}</pre>
         </div>
 
-        <!-- 收件箱 @ 消息 -->
-        <div v-if="entry.inbox.length > 0" class="ap-item-section">
+        <!-- @ 消息 -->
+        <div v-if="inbox.length > 0" class="ap-item-section">
           <div class="ap-item-section-label">
             <Icon name="message" :size="12" />
-            @ 消息（{{ entry.inbox.length }}）
+            @ 消息（{{ inbox.length }}）
           </div>
           <div class="ap-item-inbox">
             <div
-              v-for="m in entry.inbox"
-              :key="m.at_id"
+              v-for="(m, i) in inbox"
+              :key="i"
               class="ap-item-at-msg"
               :class="`at-${m.status}`"
             >
               <div class="ap-item-at-q">
-                <span class="ap-item-at-from">{{ m.from_name || m.from }}</span>
+                <span class="ap-item-at-from">{{ m.from_name || '未知' }}</span>
                 <span class="ap-item-at-time">{{ formatRelativeTime(m.created_at) }}</span>
               </div>
               <div class="ap-item-at-text">{{ m.question }}</div>
@@ -218,8 +237,7 @@ function truncate(s: string, max: number): string {
 
         <!-- 元信息 -->
         <div class="ap-item-meta-detail">
-          <span>agent_id: {{ entry.agent_id }}</span>
-          <span>conversation: {{ truncate(entry.conversation_id, 12) }}</span>
+          <span>conversation: {{ truncate(session.conversationId, 12) }}</span>
         </div>
       </div>
     </div>
@@ -243,15 +261,19 @@ function truncate(s: string, max: number): string {
   background: var(--card);
 }
 
-.ap-item.status-in_progress {
+.ap-item.st-in_progress {
   border-left: 2px solid var(--primary, #4a7eff);
 }
 
-.ap-item.status-waiting {
+.ap-item.st-waiting {
   border-left: 2px solid var(--warn, #f0c04a);
 }
 
-.ap-item.status-completed {
+.ap-item.st-idle {
+  border-left: 2px solid var(--muted);
+}
+
+.ap-item.st-completed {
   border-left: 2px solid var(--success, #3ecf8e);
   opacity: 0.85;
 }
@@ -276,14 +298,8 @@ function truncate(s: string, max: number): string {
   margin-top: 1px;
 }
 
-.ap-item-glyph.kind-main {
+.ap-item-glyph .app-icon {
   color: var(--primary);
-  background: rgba(74, 126, 255, 0.12);
-}
-
-.ap-item-glyph.kind-sub_agent {
-  color: var(--warn);
-  background: rgba(240, 192, 74, 0.12);
 }
 
 .ap-item-info {
@@ -305,30 +321,7 @@ function truncate(s: string, max: number): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 140px;
-}
-
-.ap-item-kind {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-xs);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.ap-item-kind.kind-main {
-  color: var(--primary);
-  background: rgba(74, 126, 255, 0.14);
-}
-
-.ap-item-kind.kind-sub_agent {
-  color: var(--warn);
-  background: rgba(240, 192, 74, 0.14);
+  max-width: 130px;
 }
 
 /* 状态徽标 */
@@ -349,16 +342,20 @@ function truncate(s: string, max: number): string {
   flex-shrink: 0;
 }
 
-.ap-item-status.status-in_progress .ap-item-status-dot {
+.ap-item.st-in_progress .ap-item-status-dot {
   background: var(--primary, #4a7eff);
   animation: ap-item-pulse 1.2s ease-in-out infinite;
 }
 
-.ap-item-status.status-waiting .ap-item-status-dot {
+.ap-item.st-waiting .ap-item-status-dot {
   background: var(--warn, #f0c04a);
 }
 
-.ap-item-status.status-completed .ap-item-status-dot {
+.ap-item.st-idle .ap-item-status-dot {
+  background: var(--muted);
+}
+
+.ap-item.st-completed .ap-item-status-dot {
   background: var(--success, #3ecf8e);
 }
 
@@ -367,22 +364,41 @@ function truncate(s: string, max: number): string {
   50% { opacity: 0.4; }
 }
 
-.ap-item-task {
-  font-size: 12px;
-  color: var(--text);
+/* 元信息行 */
+.ap-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
   margin-top: 3px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ap-item-meta {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.ap-item-wins {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.ap-item-at-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--danger);
+  flex-shrink: 0;
+}
+
+.ap-item-time {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* @ 收件箱角标 */
@@ -457,6 +473,17 @@ function truncate(s: string, max: number): string {
   font-size: 11px;
   font-weight: 600;
   color: var(--muted);
+}
+
+.ap-item-section-hint {
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.ap-item-windows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .ap-item-section-text {

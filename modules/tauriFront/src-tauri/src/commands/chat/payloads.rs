@@ -19,6 +19,14 @@ pub(super) struct StreamErrorPayload<'a> {
     pub(super) error: &'a str,
 }
 
+/// agent 被用户手动停止（agent-stopped 事件）
+///
+/// 携带已产生（已持久化）的部分回复内容，前端据此落盘流式气泡并复位发送状态。
+#[derive(Debug, serde::Serialize)]
+pub(super) struct AgentStoppedPayload<'a> {
+    pub(super) conversation_id: &'a str,
+    pub(super) content: &'a str,
+}
 /// 推理增量 payload（agent-reasoning 事件）
 #[derive(Debug, serde::Serialize)]
 pub(super) struct AgentReasoningPayload<'a> {
@@ -68,6 +76,8 @@ pub(super) struct AgentBillingPayload<'a> {
     pub(super) cache_miss_tokens: u64,
     /// 输出 token 总数
     pub(super) output_tokens: u64,
+    /// 思维链（reasoning）token 总数
+    pub(super) reasoning_tokens: u64,
     /// 总 token 数（缓存命中 + 未命中 + 输出）
     pub(super) total_tokens: u64,
     /// 是否已配置计费单价；false 时各 cost 字段为 0，前端只显示 token
@@ -90,6 +100,7 @@ pub(super) struct BillingSummary {
     pub(super) cache_hit_tokens: u64,
     pub(super) cache_miss_tokens: u64,
     pub(super) output_tokens: u64,
+    pub(super) reasoning_tokens: u64,
     pub(super) total_tokens: u64,
     pub(super) cache_hit_cost: f64,
     pub(super) cache_miss_cost: f64,
@@ -129,6 +140,7 @@ impl BillingSummary {
             cache_hit_tokens,
             cache_miss_tokens,
             output_tokens,
+            reasoning_tokens: summary.reasoning_tokens,
             total_tokens,
             cache_hit_cost,
             cache_miss_cost,

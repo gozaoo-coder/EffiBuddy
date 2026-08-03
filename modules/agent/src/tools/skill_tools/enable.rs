@@ -141,7 +141,7 @@ impl Tool for EnableSkillTool {
 
         // 把 preamble 作为 System 消息追加到会话历史
         let sys_msg = Message::new(
-            uuid::Uuid::new_v4().to_string(),
+            effisuite_core::gen_message_id(),
             Role::System,
             preamble,
             now_ms(),

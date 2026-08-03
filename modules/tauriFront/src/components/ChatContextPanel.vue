@@ -2,30 +2,23 @@
 /**
  * ChatContextPanel —— 聊天主内容右栏
  *
- * 两个页签：
+ * 三个页签：
  * 1. 概览（Overview）：todoTree 卡片 / 上下文窗口可视化 / 用量指标 / 用量分析
- * 2. 压缩上下文（Compressed Context）：压缩机制设置（阈值可调）+ 压缩决策列表
+ * 2. 压缩上下文（Compressed Context）：仪表盘化压缩页签（编排壳见 chat/CompressContextPanel.vue）
+ * 3. 会话版本管理（Session Version）：自研快照引擎版本管理（SessionVersionPanel / GitContextPanel）
  *
  * 数据来源：
  * - todoTree：`get_todo_tree` / `save_todo_tree` / `clear_todo_tree` + `todo-tree-updated` 事件
- * - 压缩状态：`get_compression_state` / `clear_compression_state` / `compress_messages_stream`
- * - 压缩设置：`get_config` / `set_config`
+ * - 压缩状态 / 设置：由 store.compression 统一管理（事件层实时监听 agent-compress-* 事件）
  */
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, inject } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { Icon, Button, IconButton, Switch, Slider, useToast } from './basic'
-import TodoTreeNode from './todo/TodoTreeNode.vue'
-import type {
-  Message,
-  TodoItem,
-  TodoNode,
-    TodoStatus,
-  CompressionState,
-  CompressionAction,
-  CompressionSettings,
-  AgentConfig,
-} from '../types'
+import { Icon, IconButton, useToast } from './basic'
+import CompressContextPanel from './chat/CompressContextPanel.vue'
+import GitContextPanel from './GitContextPanel.vue'
+import { CHAT_STORE_KEY } from '../composables/chat/store'
+import type { Message, TodoItem, TodoNode, TodoStatus } from '../types'
 
 const props = defineProps<{
   /** 当前会话 id（null 表示未建立会话） */
@@ -41,15 +34,15 @@ const props = defineProps<{
     cache_hit_per_m: number
     cache_miss_per_m: number
     output_per_m: number
-  } | null
-  /** 是否正在流式发送中（压缩页签按钮态用） */
-  streaming?: boolean
-}>()
+    } | null
+  }>()
 
 const { toast } = useToast()
+// store：压缩状态/设置由 ChatWindow 级 store.compression 统一管理（实时事件驱动）
+const store = inject(CHAT_STORE_KEY)!
 
 // ===================== 页签 =====================
-type PanelTab = 'overview' | 'compress'
+type PanelTab = 'overview' | 'compress' | 'git'
 const activeTab = ref<PanelTab>('overview')
 
 // ===================== todoTree =====================
@@ -195,93 +188,10 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
-// ===================== 压缩设置（f6） =====================
-const compressSettings = ref<CompressionSettings>({
-  threshold_percent: 80,
-  auto_compress: true,
-  compress_tool_calls: true,
-  compress_sentences: true,
-})
+// ===================== 压缩设置（store 统一管理，实时事件驱动） =====================
+// 阈值来自全局压缩设置；右栏压缩页签（CompressContextPanel）直接复用 store.compression
+const compressSettings = computed(() => store.compression.compressionSettings.value)
 
-async function loadConfig() {
-  try {
-    const cfg = await invoke<AgentConfig>('get_config')
-    if (cfg.compression_settings) compressSettings.value = cfg.compression_settings
-  } catch {
-    /* 默认值 */
-  }
-}
-function saveSettings() {
-  void (async () => {
-    try {
-      const cfg = await invoke<AgentConfig>('get_config')
-      cfg.compression_settings = { ...compressSettings.value }
-      await invoke('set_config', { config: cfg })
-      toast({ content: '压缩设置已保存', type: 'success' })
-    } catch (e) {
-      toast({ content: `保存压缩设置失败：${e}`, type: 'error' })
-    }
-  })()
-}
-
-// ===================== 压缩状态 & 决策列表 =====================
-const compressState = ref<CompressionState | null>(null)
-const compressing = ref(false)
-
-async function loadCompression() {
-  const id = props.conversationId
-  if (!id || id.startsWith('__')) {
-    compressState.value = null
-    return
-  }
-  try {
-    compressState.value = await invoke<CompressionState | null>('get_compression_state', {
-      conversationId: id,
-    })
-  } catch {
-    compressState.value = null
-  }
-}
-
-async function runCompress() {
-  const id = props.conversationId
-  if (!id || compressing.value) return
-  compressing.value = true
-  try {
-    await invoke('compress_messages_stream', { conversationId: id })
-    await loadCompression()
-    toast({ content: '压缩完成', type: 'success' })
-  } catch (e) {
-    toast({ content: `压缩失败：${e}`, type: 'error' })
-  } finally {
-    compressing.value = false
-  }
-}
-async function clearCompression() {
-  const id = props.conversationId
-  if (!id) return
-  try {
-    await invoke('clear_compression_state', { conversationId: id })
-    compressState.value = null
-    toast({ content: '已清除压缩状态', type: 'success' })
-  } catch (e) {
-    toast({ content: `清除失败：${e}`, type: 'error' })
-  }
-}
-
-// 决策计数
-  const actionStats = computed(() => {
-    const actions = compressState.value?.actions ?? []
-    let keep = 0
-    let hide = 0
-    let replace = 0
-    for (const a of actions) {
-      if (a.method === 'keep') keep++
-      else if (a.method === 'hide') hide++
-      else replace++
-    }
-    return { keep, hide, replace, total: actions.length }
-  })
 
 function fmtYuan(n: number): string {
   if (!Number.isFinite(n)) return '—'
@@ -390,26 +300,15 @@ watch(
   () => props.conversationId,
   () => {
     loadTodos()
-    loadCompression()
   },
 )
 
 onMounted(async () => {
   loadTodos()
-  loadCompression()
-  loadConfig()
   unlistens.push(
     await listen<{ conversation_id: string }>('todo-tree-updated', (e) => {
       if (!props.conversationId || e.payload.conversation_id === props.conversationId) {
         loadTodos()
-      }
-    }),
-  )
-  // 压缩完成事件 → 刷新压缩状态
-  unlistens.push(
-    await listen<{ conversation_id: string }>('agent-compress-done', (e) => {
-      if (!props.conversationId || e.payload.conversation_id === props.conversationId) {
-        loadCompression()
       }
     }),
   )
@@ -420,11 +319,6 @@ onUnmounted(() => {
   unlistens = []
 })
 
-function actionLabel(m: CompressionAction): string {
-  if (m.method === 'keep') return '保持'
-  if (m.method === 'hide') return '隐藏'
-  return '替换'
-}
 </script>
 
 <template>
@@ -449,6 +343,16 @@ function actionLabel(m: CompressionAction): string {
           <Icon name="merge" :size="15" />
         <span>压缩上下文</span>
       </button>
+          <button
+            type="button"
+            class="ctx-tab"
+            :class="{ active: activeTab === 'git' }"
+            title="会话版本管理：每次 edit 等操作自动保存工作区快照，可撤回/回溯"
+            @click="activeTab = 'git'"
+          >
+            <Icon name="history" :size="15" />
+            <span>会话版本管理</span>
+          </button>
     </div>
 
     <div class="ctx-body">
@@ -599,87 +503,20 @@ function actionLabel(m: CompressionAction): string {
         </section>
       </template>
 
-      <!-- ==================== 压缩上下文 ==================== -->
-      <template v-else>
-        <!-- 压缩机制设置（f6） -->
-        <section class="ctx-card">
-          <div class="ctx-card-head">
-            <span class="ctx-card-title">压缩机制</span>
-          </div>
-          <div class="setting-row">
-            <div class="setting-label">自动压缩阈值</div>
-            <div class="setting-slider">
-              <Slider
-                v-model="compressSettings.threshold_percent"
-                :min="1"
-                :max="100"
-                :step="1"
-                size="sm"
-                show-value
-                @change="saveSettings"
-              />
-            </div>
-          </div>
-          <div class="setting-row">
-            <div class="setting-label">达到阈值自动压缩</div>
-            <Switch v-model="compressSettings.auto_compress" @change="saveSettings" />
-          </div>
-          <div class="setting-row">
-            <div class="setting-label">工具调用 / 返回压缩</div>
-            <Switch v-model="compressSettings.compress_tool_calls" @change="saveSettings" />
-          </div>
-          <div class="setting-row">
-            <div class="setting-label">逐句对话压缩</div>
-            <Switch v-model="compressSettings.compress_sentences" @change="saveSettings" />
-          </div>
-        </section>
+        <!-- ==================== 压缩上下文 ==================== -->
+        <template v-else-if="activeTab === 'compress'">
+          <!-- 仪表盘化压缩页签（编排壳见 chat/CompressContextPanel.vue，实时事件驱动） -->
+          <CompressContextPanel />
+        </template>
 
-        <!-- 压缩操作 -->
-        <section class="ctx-card">
-          <div class="ctx-card-head">
-            <span class="ctx-card-title">压缩操作</span>
-            <span v-if="compressState" class="ctx-card-badge">
-              上次 {{ new Date(compressState.updated_at).toLocaleTimeString() }}
-            </span>
-          </div>
-          <div class="compress-actions">
-            <Button size="sm" :loading="compressing" @click="runCompress">立即压缩</Button>
-              <Button v-if="compressState" size="sm" variant="text" @click="clearCompression">
-              清除压缩状态
-            </Button>
-          </div>
-          <div v-if="actionStats.total > 0" class="compress-stats">
-            <span class="cs cs-keep">保持 {{ actionStats.keep }}</span>
-            <span class="cs cs-hide">隐藏 {{ actionStats.hide }}</span>
-            <span class="cs cs-replace">替换 {{ actionStats.replace }}</span>
-          </div>
-        </section>
-
-        <!-- 决策列表 -->
-        <section class="ctx-card">
-          <div class="ctx-card-head">
-            <span class="ctx-card-title">压缩决策</span>
-          </div>
-          <div v-if="!compressState || compressState.actions.length === 0" class="ctx-empty">
-            尚未压缩。压缩只影响后续发给 LLM 的 prompt，界面仍显示原始消息。
-          </div>
-          <div v-else class="action-list">
-            <div
-              v-for="(a, i) in compressState.actions"
-              :key="i"
-              class="action-item"
-              :class="a.method"
-            >
-              <span class="action-method">{{ actionLabel(a) }}</span>
-              <span class="action-ids">{{ a.message_ids.length }} 条</span>
-              <span class="action-reason" :title="a.reason">{{ a.reason }}</span>
-            </div>
-          </div>
-        </section>
-      </template>
-    </div>
-  </aside>
-</template>
+        <!-- ==================== git 版本管理 ==================== -->
+        <GitContextPanel
+          v-else-if="activeTab === 'git'"
+          :conversation-id="conversationId"
+        />
+      </div>
+    </aside>
+  </template>
 
 <style scoped>
 .ctx-panel {
@@ -695,43 +532,80 @@ function actionLabel(m: CompressionAction): string {
 
 .ctx-tabs {
   display: flex;
-  gap: 4px;
-  padding: 8px;
+  gap: 2px;
+  padding: 8px 8px 0;
   border-bottom: 1px solid var(--border);
   background: var(--card);
   flex-shrink: 0;
 }
 
 .ctx-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 10px;
+  padding: 7px 10px 9px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: transparent;
   color: var(--muted);
   font-size: var(--fs-sm);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
 }
 .ctx-tab:hover {
   background: var(--hover);
   color: var(--text);
 }
 .ctx-tab.active {
-  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  background: color-mix(in srgb, var(--primary) 10%, var(--card));
   color: var(--primary);
   font-weight: 600;
+}
+/* 激活指示条 */
+.ctx-tab::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  transition: background 0.18s ease;
+}
+.ctx-tab.active::after {
+  background: var(--primary);
 }
 
 .ctx-body {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  overflow-x: hidden;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.ctx-body::-webkit-scrollbar {
+  width: 8px;
+}
+.ctx-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.ctx-body::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+.ctx-body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .ctx-card {
@@ -740,6 +614,10 @@ function actionLabel(m: CompressionAction): string {
   border-radius: var(--radius-md);
   padding: 10px 12px;
   flex-shrink: 0;
+  transition: border-color 0.15s ease;
+}
+.ctx-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 22%, var(--border));
 }
 .ctx-card-head {
   display: flex;
@@ -756,6 +634,10 @@ function actionLabel(m: CompressionAction): string {
   font-size: var(--fs-xs);
   color: var(--muted);
   margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg);
+  white-space: nowrap;
 }
 .ctx-card-actions {
   margin-left: auto;
@@ -765,7 +647,7 @@ function actionLabel(m: CompressionAction): string {
 .ctx-empty {
   font-size: var(--fs-xs);
   color: var(--muted);
-  padding: 8px 0;
+  padding: 10px 2px;
   line-height: 1.6;
 }
 
@@ -1054,82 +936,4 @@ function actionLabel(m: CompressionAction): string {
   padding-top: 2px;
 }
 
-/* ---------- 压缩设置 ---------- */
-.setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0;
-}
-.setting-label {
-  font-size: var(--fs-sm);
-  color: var(--text);
-}
-.setting-slider {
-  width: 130px;
-}
-.compress-actions {
-  display: flex;
-  gap: 6px;
-}
-.compress-stats {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: var(--fs-xs);
-}
-.cs-keep {
-  color: var(--success);
-}
-.cs-hide {
-  color: var(--muted);
-}
-.cs-replace {
-  color: #fa8c16;
-}
-
-/* ---------- 决策列表 ---------- */
-.action-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.action-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-size: var(--fs-xs);
-}
-.action-method {
-  padding: 1px 6px;
-  border-radius: var(--radius-full);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.action-item.keep .action-method {
-  background: color-mix(in srgb, var(--success) 14%, var(--card));
-  color: var(--success);
-}
-.action-item.hide .action-method {
-  background: color-mix(in srgb, var(--muted) 18%, var(--card));
-  color: var(--muted);
-}
-.action-item.replace .action-method {
-  background: color-mix(in srgb, #fa8c16 14%, var(--card));
-  color: #fa8c16;
-}
-.action-ids {
-  color: var(--muted);
-  flex-shrink: 0;
-}
-.action-reason {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-}
 </style>

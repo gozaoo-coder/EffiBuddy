@@ -303,7 +303,7 @@ impl SubAgentManager {
         }
         // 2. 追加用户消息并推送 started
         messages.push(Message::new(
-            uuid::Uuid::new_v4().to_string(),
+            effisuite_core::gen_message_id(),
             Role::User,
             args.prompt.clone(),
             now_ms(),
@@ -421,7 +421,7 @@ impl SubAgentManager {
         // 先释放 stream 对 messages 的借用
         drop(stream);
         messages.push(Message::new(
-            uuid::Uuid::new_v4().to_string(),
+            effisuite_core::gen_message_id(),
             Role::Assistant,
             full.clone(),
             now_ms(),

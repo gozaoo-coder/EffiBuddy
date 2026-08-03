@@ -27,10 +27,17 @@ pub(crate) fn skills_dir() -> std::path::PathBuf {
 }
 
 /// 插件存储目录：`<appdata>/plugins`
-pub(crate) fn plugins_dir() -> std::path::PathBuf {
-    appdata_root().join("plugins")
-}
+  /// 插件存储目录：`<appdata>/plugins`
+  pub(crate) fn plugins_dir() -> std::path::PathBuf {
+      appdata_root().join("plugins")
+  }
 
+  /// 插件配置存储目录：`<appdata>/plugin_configs`
+  ///
+  /// 每插件一个 `<safe_id>.json`，命名空间隔离，卸载插件时清理。
+  pub(crate) fn plugin_configs_dir() -> std::path::PathBuf {
+      appdata_root().join("plugin_configs")
+  }
 /// 压缩状态存储目录：`<appdata>/compression`
 pub(crate) fn compression_dir() -> std::path::PathBuf {
     appdata_root().join("compression")

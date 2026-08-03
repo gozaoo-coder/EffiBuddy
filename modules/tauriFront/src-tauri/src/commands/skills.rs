@@ -99,11 +99,19 @@ pub(crate) async fn delete_skill(state: tauri::State<'_, AppState>, id: String) 
 /// 失败仅记录日志不阻断主流程：索引短暂过期不影响已有技能可用性，
 /// 下次增删或重启时会再次 rebuild 自愈。
 pub(crate) async fn rebuild_skill_index(state: &AppState) {
-    if let Err(e) = state
-        .skill_index
-        .rebuild_from_store(&state.skill_store)
-        .await
-    {
+    rebuild_skill_index_from(&state.skill_index, &state.skill_store).await;
+}
+
+/// 重建技能 RAG 索引：从 SkillStore 全量加载并刷新 SkillIndex。
+///
+/// 与 [`rebuild_skill_index`] 等价，但只依赖两个可 Clone 的存储句柄，
+/// 可在 `'static` 后台任务（如应用启动时的插件技能同步）中调用，
+/// 无需持有 `&AppState` 跨 await。
+pub(crate) async fn rebuild_skill_index_from(
+    skill_index: &effisuite_core::SkillIndex,
+    skill_store: &effisuite_core::SkillStore,
+) {
+    if let Err(e) = skill_index.rebuild_from_store(skill_store).await {
         tracing::warn!(error = %e, "技能索引 rebuild 失败，将在下次增删或重启时重试");
     }
 }

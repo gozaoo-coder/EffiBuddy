@@ -1,4 +1,13 @@
 <script setup lang="ts">
+/**
+ * EffiSuite 应用根组件
+ *
+ * 布局（2026-08 重构）：
+ * - 顶栏 TitleBar：无品牌，左栏一 / 左栏二模态切换按钮 + 窗口控件
+ * - 左栏一 IconRail：双模态（纯图标 / 图标+文字），数据驱动 + 插件按钮 + 「修改侧栏icon」
+ * - 左栏二 SecondRailHost：HistoryRail 展开 / 收起封装，含 交流池/模型配置 三态切换
+ * - 主内容区：多页签（聊天 / ASR / 子 agent / 插件页面）
+ */
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -6,15 +15,14 @@ import TitleBar from './components/TitleBar.vue'
 import TabBar from './components/TabBar.vue'
 import TabContent from './components/TabContent.vue'
 import IconRail, { type RailView } from './components/IconRail.vue'
-import HistoryRail from './components/HistoryRail.vue'
-import AgentPoolRail from './components/AgentPoolRail.vue'
+import SecondRailHost from './components/SecondRailHost.vue'
 import P2pPanel from './components/P2pPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import PluginPanel from './components/PluginPanel.vue'
 import ClawHubPanel from './components/ClawHubPanel.vue'
 import SchedulePanel from './components/SchedulePanel.vue'
-import ModelSettingsRail, { type ModelSettingsView } from './components/model-settings/ModelSettingsRail.vue'
+import type { ModelSettingsView } from './components/model-settings/ModelSettingsRail.vue'
 import ModelSettingsContent from './components/model-settings/ModelSettingsContent.vue'
 import { ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
 import { applyThemeNow } from './composables/useTheme'
@@ -23,14 +31,16 @@ import { useAsr } from './composables/useAsr'
 import { useP2p } from './composables/useP2p'
 import { useAgentPool } from './composables/useAgentPool'
 import { useAnimeTransition } from './composables/useAnimeTransition'
+import { usePluginContributions } from './composables/usePluginContributions'
+import { useAppActions } from './composables/appActions'
 import type { ConversationTitlePayload } from './types'
 
 const agentBackend = ref('')
 // 各功能面板状态（均从 IconRail 触发）
 // P2P 设备 composable：pendingCount 驱动角标、refreshAll 在面板打开时刷新数据
 const { pendingCount, refreshAll } = useP2p()
-// 交流池 composable：activeCount 驱动 IconRail 角标（实时刷新由 composable 内部事件监听负责）
-const { activeCount: poolActiveCount } = useAgentPool()
+// 交流池 composable：activeSessionCount 驱动 IconRail 角标（实时刷新由 composable 内部事件监听负责）
+const { activeSessionCount: poolActiveCount } = useAgentPool()
 const p2pPanelOpen = ref(false)
 const settingsOpen = ref(false)
 const scheduledTasksOpen = ref(false)
@@ -61,15 +71,21 @@ const activeTab = getActive()
 const { install: installAsrEvents } = useAsr()
 let uninstallAsrEvents: (() => void) | null = null
 
-// 当前激活 chat 页签的 conversationId：供 HistoryRail 高亮 + SettingsPanel 上下文
+// 当前激活 chat 页签的 conversationId：供左栏二高亮 + SettingsPanel 上下文
 // 非 chat 页签激活时返回 null（历史列表不高亮）
 const activeChatConvId = computed<string | null>(() => {
   const t = activeTab.value
   return t?.kind === 'chat' ? (t.conversationId ?? null) : null
 })
 
-// HistoryRail 实例引用：用于在会话变更时调用 refresh()
-const historyRailRef = ref<{ refresh: () => void } | null>(null)
+// SecondRailHost 实例引用：用于在会话变更时调用 refresh()
+const secondRailRef = ref<{ refresh: () => void } | null>(null)
+
+// 插件贡献注册：拉取已安装插件的声明式贡献（左栏按钮 / 页面 / 命令）
+const { install: installPluginContributions } = usePluginContributions()
+
+// 全局动作中枢：供空态引导卡片 / 插件页面调用 App 级动作
+const { register: registerAction } = useAppActions()
 
 // 事件取消订阅句柄集合
 let unlistens: UnlistenFn[] = []
@@ -174,10 +190,31 @@ onMounted(async () => {
   // 全局单例：install 内部有 installed 标记，重复调用安全
   uninstallAsrEvents = await installAsrEvents()
 
-  // 监听 set_title 工具成功更新标题事件：刷新 HistoryRail 列表 + 同步页签标题
+  // 注册全局动作（供空态引导卡片 / 插件页面解耦调用）
+  registerAction('new-chat', () => handleSelectConv(null))
+  registerAction('open-clawhub', openClawHub)
+  registerAction('open-settings', openSettingsPanel)
+  registerAction('open-plugin-panel', () => {
+    skillPanelOpen.value = false
+    pluginPanelOpen.value = true
+  })
+  registerAction('open-skill-panel', () => {
+    pluginPanelOpen.value = false
+    skillPanelOpen.value = true
+  })
+  registerAction('open-asr', () => openAsrTab('asr-stream'))
+  registerAction('open-todo', () => openPluginPage('effisuite/user-todo'))
+  registerAction('open-automation', () => {
+    scheduledTasksOpen.value = true
+  })
+
+  // 加载插件声明式贡献（左栏按钮 / 页面 / 命令）
+  await installPluginContributions()
+
+  // 监听 set_title 工具成功更新标题事件：刷新左栏二列表 + 同步页签标题
   unlistens.push(
     await listen<ConversationTitlePayload>('conversation-title-updated', (e) => {
-      historyRailRef.value?.refresh()
+      secondRailRef.value?.refresh()
       const { conversation_id, title } = e.payload
       if (title) {
         const tab = findChatByConversationId(conversation_id)
@@ -199,7 +236,7 @@ function onSettingsSaved(backend: string) {
   toast({ content: `Agent 已切换：${backend}`, type: 'success' })
 }
 
-// HistoryRail 选择会话（null 表示新建聊天，title 仅已有会话携带）
+// 左栏二选择会话（null 表示新建聊天，title 仅已有会话携带）
 // 多页签语义：已打开则激活，未打开则新建页签；新建聊天复用全局唯一 __new_chat__ 页签
 function handleSelectConv(id: string | null, title?: string | null) {
   if (id === null) {
@@ -234,9 +271,9 @@ function handleSelectConv(id: string | null, title?: string | null) {
   })
 }
 
-// 页签内容会话变更（新建会话建立 / 流式结束）→ 刷新 HistoryRail 列表
+// 页签内容会话变更（新建会话建立 / 流式结束）→ 刷新左栏二列表
 function onConversationChanged() {
-  historyRailRef.value?.refresh()
+  secondRailRef.value?.refresh()
 }
 
 // 从 IconRail 打开 P2P 设备面板（同时刷新数据）
@@ -272,21 +309,25 @@ function openClawHub() {
   clawhubPanelOpen.value = true
 }
 
-// 左2栏切换动画：HistoryRail ↔ ModelSettingsRail
-const { onEnter: onSecondRailEnter, onLeave: onSecondRailLeave } = useAnimeTransition({
-  enter: {
-    opacity: [0, 1],
-    translateX: [-12, 0],
-    duration: 240,
-    ease: 'out(3)',
-  },
-  leave: {
-    opacity: [1, 0],
-    translateX: [0, -8],
-    duration: 180,
-    ease: 'inOut(2)',
-  },
-})
+// 打开插件页面页签（单例：同 id 已存在则仅激活）
+function openPluginPage(pageId: string) {
+  openTab({
+    id: `plugin-page:${pageId}`,
+    kind: 'plugin',
+    title: '插件页',
+    icon: 'puzzle',
+    closable: true,
+    instanceKey: '',
+    pluginPageId: pageId,
+  })
+  // 打开插件页面时返回聊天主视图（关闭其它面板/二级栏目）
+  closeAllPanels()
+}
+
+// 插件命令触发：当前版本提示，未来可路由到 agent 技能执行
+function handlePluginCommand(commandId: string) {
+  toast({ content: `插件命令触发：${commandId}`, type: 'info' })
+}
 
 // 主内容区切换动画：TabContent ↔ ModelSettingsContent
 const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
@@ -307,43 +348,34 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
 
 <template>
   <div class="app-shell">
-    <!-- 自定义标题栏：左侧品牌、右上角窗口控件（不再显示模型胶囊） -->
+    <!-- 自定义标题栏：左栏模态切换 + 窗口控件（无品牌，已移除 icon 与 effiBuddy 字样） -->
     <TitleBar />
 
     <main class="app-main">
-      <!-- 第一栏：router（纯图标 + hover 提示） -->
+      <!-- 左栏一：router（双模态：纯图标 / 图标+文字；数据驱动 + 插件按钮） -->
       <IconRail
         :active="activeView"
         :pending-pair-count="pendingCount"
         :pool-active-count="poolActiveCount"
         @select="onRailSelect"
+        @open-plugin-page="openPluginPage"
+        @open-plugin-command="handlePluginCommand"
         @open-clawhub="openClawHub"
         @open-p2p="openP2pPanel"
         @open-settings="openSettingsPanel"
         @open-asr="openAsrTab"
       />
 
-      <!-- 第二栏：根据模式切换（聊天=HistoryRail / 交流池=AgentPoolRail / 模型配置=ModelSettingsRail）
-           三态互斥：poolOpen 与 modelConfigOpen 不会同时为 true（onRailSelect 中保证） -->
-      <Transition :css="false" @enter="onSecondRailEnter" @leave="onSecondRailLeave" mode="out-in">
-        <AgentPoolRail
-          v-if="poolOpen"
-          key="pool"
-        />
-        <ModelSettingsRail
-          v-else-if="modelConfigOpen"
-          key="model-settings"
-          :active="modelSettingsView"
-          @select="onModelSettingsSelect"
-        />
-        <HistoryRail
-          v-else
-          key="history"
-          ref="historyRailRef"
-          :active-id="activeChatConvId"
-          @select-conversation="handleSelectConv"
-        />
-      </Transition>
+      <!-- 左栏二：SecondRailHost 封装 展开/收起 + 交流池/模型配置 三态切换 -->
+      <SecondRailHost
+        ref="secondRailRef"
+        :pool-open="poolOpen"
+        :model-config-open="modelConfigOpen"
+        :model-settings-view="modelSettingsView"
+        :active-chat-conv-id="activeChatConvId"
+        @select-conversation="handleSelectConv"
+        @select-model-settings="onModelSettingsSelect"
+      />
 
       <!-- 主内容区：根据模式切换（聊天模式=多页签 / 模型配置模式=模型设置面板） -->
       <Transition :css="false" @enter="onMainEnter" @leave="onMainLeave" mode="out-in">

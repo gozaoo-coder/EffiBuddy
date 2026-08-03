@@ -39,13 +39,16 @@ const activeTab = computed<TabItem | null>(
 // ============= 方法 =============
 
 /**
- * 打开页签：同 id 已存在则仅激活，否则新增并激活。
+ * 打开页签：同 id 已存在则仅激活（activate=true 时），否则新增。
  * instanceKey 自动生成（调用方无需提供），用于 Vue <component :key> 稳定标识。
+ *
+ * @param activate 是否同时激活该页签（默认 true）。传 false 时后台打开：
+ *                 新页签追加到列表但不切换焦点，供子 agent 会话等自动打开的窗口使用。
  */
-function openTab(tab: TabItem): void {
+function openTab(tab: TabItem, activate: boolean = true): void {
   const existing = tabs.value.find((t) => t.id === tab.id)
   if (existing) {
-    activeTabId.value = tab.id
+    if (activate) activeTabId.value = tab.id
     return
   }
   // 确保实例 key 存在且唯一（调用方一般不传，此处兜底）
@@ -53,7 +56,7 @@ function openTab(tab: TabItem): void {
     tab.instanceKey = genInstanceKey()
   }
   tabs.value.push(tab)
-  activeTabId.value = tab.id
+  if (activate) activeTabId.value = tab.id
 }
 
 /**

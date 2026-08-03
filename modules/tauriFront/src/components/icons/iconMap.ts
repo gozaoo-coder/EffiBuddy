@@ -36,6 +36,9 @@ import {
   PuzzleIcon,
   InformationCircleIcon,
   GitMergeIcon,
+  GitBranchIcon,
+  GitCommitIcon,
+  Bookmark01Icon,
   PowerIcon,
   KeyboardIcon,
   CornerDownLeftIcon,
@@ -80,6 +83,8 @@ import {
   Clock01Icon,
   AlarmClockIcon,
   Alert01Icon,
+  StopIcon,
+  PauseIcon,
 } from '@hugeicons/core-free-icons'
 
 /** Hugeicons 图标数据类型（[tag, attrs][]），由所有图标导出共享。 */
@@ -138,11 +143,17 @@ export const iconMap: Record<string, IconData> = {
   'device-watch': Watch01Icon,
   tablet: Tablet01Icon,
 
-  // 插件 / 信息 / 合并 / 电源 / 键盘
+  // 插件 / 信息 / 合并 / 分支 / 书签 / 历史 / 电源 / 键盘
   puzzle: PuzzleIcon,
   plugin: PuzzleIcon,
   info: InformationCircleIcon,
   merge: GitMergeIcon,
+  branch: GitBranchIcon,
+  'git-branch': GitBranchIcon,
+  bookmark: Bookmark01Icon,
+  'temp-version': Bookmark01Icon,
+  history: GitCommitIcon,
+  'git-commit': GitCommitIcon,
   power: PowerIcon,
   'power-off': PowerIcon,
   keyboard: KeyboardIcon,
@@ -219,6 +230,10 @@ export const iconMap: Record<string, IconData> = {
   alarm: AlarmClockIcon,
   warning: Alert01Icon,
   alert: Alert01Icon,
+
+  // 停止 / 暂停（生成中停止、计时暂停等）
+  stop: StopIcon,
+  pause: PauseIcon,
 }
 
 /**

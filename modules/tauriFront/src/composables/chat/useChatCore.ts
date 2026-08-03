@@ -17,6 +17,10 @@ import { NEW_CHAT_TAB_ID } from '../useTabs'
 import type { Conversation, Message, PickedFile } from '../../types'
 import type { useAutoScroll } from './useAutoScroll'
 
+
+/** 模块级消息 id 计数器（与后端 gen_message_id() 同布局：高 42 位毫秒时间戳 + 低 22 位递增计数器）。
+ *  前端仅在流式/本地气泡期间临时使用（落盘后以后端持久化 id 为准），统一为短数字字符串。 */
+let idSeq = 0
 /** 当前激活模型信息(含计费单价),用于上下文窗口大小 + 历史计费重算 */
 export interface ActiveModelInfo {
   id: string
@@ -67,9 +71,11 @@ export function useChatCore(
   const activeId = ref<string | null>(props.conversationId ?? null)
   const messages = ref<Message[]>([])
   const input = ref('')
-  const sending = ref(false)
-  /** 会话级工作区路径:None 表示未设置(回退到技能级或进程默认) */
-  const workingDir = ref<string | null>(null)
+    const sending = ref(false)
+    /** 生成期间排队待插入的用户消息条数（AI 生成中仍可发送，在下一 completion 前插入） */
+    const queuedCount = ref(0)
+    /** 会话级工作区路径:None 表示未设置(回退到技能级或进程默认) */
+    const workingDir = ref<string | null>(null)
   const workingDirSheetOpen = ref(false)
   /** 底部工具/附件 Sheet(由 composer 打开,ToolSheet 渲染) */
   const toolSheetOpen = ref(false)
@@ -96,13 +102,32 @@ export function useChatCore(
   }
 
   // ---------- 上下文使用统计 ----------
+  // 上下文真实占用以 API usage 的 prompt_tokens 为准（agent-usage.input_tokens）：
+  // token 是模型分词器的真实计数，不能靠 字符串.length/4 估算；且 prompt_tokens
+  // 天然包含注入的思维链（（思考：...））、系统提示、记忆等整段 prompt。
+  // 流式期间由 agent-usage 事件实时更新；会话加载时从历史消息 usage 恢复；
+  // 均无真实数据（如未记录 usage 的旧会话）才回退为字符估算兜底。
+  const realContextUsedTokens = ref<number | null>(null)
+
   const contextMaxTokens = computed(() =>
     activeModelInfo.value?.context_window_tokens ?? fallbackContextTokens,
   )
   const contextUsedChars = computed(() =>
-    messages.value.reduce((sum, m) => sum + (m.content?.length ?? 0), 0),
+    messages.value.reduce((sum, m) => {
+      let chars = m.content?.length ?? 0
+      // 字符统计仅作兜底/参考展示，不作为上下文占用口径：
+      if (m.reasoning) chars += m.reasoning.length
+      return sum + chars
+    }, 0),
   )
-  const contextUsedTokens = computed(() => Math.ceil(contextUsedChars.value / 4))
+  const contextUsedTokens = computed(() =>
+    realContextUsedTokens.value ?? Math.ceil(contextUsedChars.value / 4),
+  )
+
+  /** 用真实 token 占用更新上下文使用仪表盘（agent-usage 事件 / 历史恢复共用） */
+  function setContextUsedTokens(tokens: number | null) {
+    realContextUsedTokens.value = tokens
+  }
 
   function toggleCtxPanel() {
     ctxPanelOpen.value = !ctxPanelOpen.value
@@ -119,6 +144,7 @@ export function useChatCore(
     if (!id) {
       messages.value = []
       workingDir.value = null
+      realContextUsedTokens.value = null
       hooks.resetAll()
       return
     }
@@ -128,6 +154,17 @@ export function useChatCore(
       const conv = await invoke<Conversation | null>('get_conversation', { id })
       messages.value = conv?.messages ?? []
       workingDir.value = conv?.working_dir ?? null
+      // 从历史消息恢复上下文真实占用：取最后一条带 usage 的 assistant 消息的
+      // input_tokens（该消息生成时的 prompt_tokens 即当时的真实上下文占用）
+      let realTokens: number | null = null
+      for (let i = messages.value.length - 1; i >= 0; i--) {
+        const u = messages.value[i].usage
+        if (u && u.input_tokens > 0) {
+          realTokens = u.input_tokens
+          break
+        }
+      }
+      realContextUsedTokens.value = realTokens
       // 切换会话:清空上一会话的 meta / 引用 / 任务模式,再恢复新会话元数据
       hooks.resetAll()
       await hooks.afterLoad()
@@ -143,6 +180,7 @@ export function useChatCore(
       console.warn('get_conversation failed', e)
       messages.value = []
       workingDir.value = null
+      realContextUsedTokens.value = null
       hooks.resetAll()
     }
   }
@@ -211,29 +249,16 @@ export function useChatCore(
   }
 
   // ---------- 通用工具 ----------
-  function newId(): string {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-      return crypto.randomUUID()
+    function newId(): string {
+      const now = BigInt(Date.now())
+      const seq = BigInt(idSeq++ & 0x3fffff)
+      return ((now << 22n) | seq).toString()
     }
-    return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  }
 
   function formatFileSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  }
-
-  // ---------- 快捷胶囊 ----------
-  const quickActions = [
-    { label: 'PPT', icon: 'image' },
-    { label: '集群', icon: 'globe' },
-    { label: '网站', icon: 'globe' },
-    { label: '深度研究', icon: 'search' },
-  ]
-
-  function applyQuickAction(label: string) {
-    input.value = `帮我做一个${label}相关的方案`
   }
 
   // ---------- 空状态 ----------
@@ -244,13 +269,14 @@ export function useChatCore(
     emit,
     isDark,
     toast,
-    activeId,
-    messages,
-    input,
-    sending,
-    workingDir,
-    workingDirSheetOpen,
-    toolSheetOpen,
+      activeId,
+      messages,
+      input,
+      sending,
+        queuedCount,
+      workingDir,
+      workingDirSheetOpen,
+      toolSheetOpen,
     shellBarExpanded,
     shellActiveCount,
     toggleShellBar,
@@ -260,6 +286,7 @@ export function useChatCore(
     contextMaxTokens,
     contextUsedChars,
     contextUsedTokens,
+    setContextUsedTokens,
     toggleCtxPanel,
     setSessionHooks,
     loadConversation,
@@ -269,9 +296,7 @@ export function useChatCore(
     pickWorkingDir,
     clearWorkingDir,
     newId,
-    formatFileSize,
-    quickActions,
-    applyQuickAction,
-    isEmptyHome,
+      formatFileSize,
+      isEmptyHome,
+    }
   }
-}

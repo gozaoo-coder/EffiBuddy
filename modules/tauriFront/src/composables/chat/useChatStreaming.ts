@@ -116,66 +116,81 @@ export function useChatStreaming(
     autoscroll.scrollBottom()
   }
 
-  async function appendStreamToken(token: string) {
-    // 工具结果后下一段文本应新建气泡(实现"每段答复独立气泡")
-    if (needNewBubbleAfterTool.value) {
-      streamingBubbleId.value = null
-      needNewBubbleAfterTool.value = false
-    }
-    if (!streamingBubbleId.value) {
-      streamingBubbleId.value = core.newId()
-      await addMessage({
-        id: streamingBubbleId.value,
-        role: 'assistant',
-        content: token,
-        timestamp: Date.now(),
-      })
-    } else {
-      const target = core.messages.value.find((m) => m.id === streamingBubbleId.value)
-      if (target) {
-        target.content += token
+    async function appendStreamToken(token: string) {
+      // 工具结果后下一段文本应新建气泡(实现"每段答复独立气泡")
+      if (needNewBubbleAfterTool.value) {
+        streamingBubbleId.value = null
+        needNewBubbleAfterTool.value = false
       }
+      // 生成期间用户排队插入的消息:若当前流式气泡之后已有用户气泡,
+      // 新一轮回复应另起气泡,避免追加到排队消息之前的旧气泡里。
+      if (streamingBubbleId.value) {
+        const idx = core.messages.value.findIndex((m) => m.id === streamingBubbleId.value)
+        if (core.messages.value.slice(idx + 1).some((m) => m.role === 'user')) {
+          streamingBubbleId.value = null
+        }
+      }
+      if (!streamingBubbleId.value) {
+        streamingBubbleId.value = core.newId()
+        await addMessage({
+          id: streamingBubbleId.value,
+          role: 'assistant',
+          content: token,
+          timestamp: Date.now(),
+        })
+      } else {
+        const target = core.messages.value.find((m) => m.id === streamingBubbleId.value)
+        if (target) {
+          target.content += token
+        }
+        await nextTick()
+        autoscroll.scrollBottom()
+      }
+      // 收到文本 token 表示推理阶段已结束
+      if (streamingBubbleId.value) {
+        const meta = bubbleMeta[streamingBubbleId.value]
+        if (meta && meta.isThinking) meta.isThinking = false
+      }
+    }
+
+  // ---------- 推理事件 ----------
+    async function onReasoning(content: string) {
+      // 工具结果后新一轮推理也应新建气泡(新一轮思考 = 新一段答复)
+      if (needNewBubbleAfterTool.value) {
+        streamingBubbleId.value = null
+        needNewBubbleAfterTool.value = false
+      }
+      // 生成期间用户排队插入的消息:若当前流式气泡之后已有用户气泡,新一轮思考另起气泡
+      if (streamingBubbleId.value) {
+        const idx = core.messages.value.findIndex((m) => m.id === streamingBubbleId.value)
+        if (core.messages.value.slice(idx + 1).some((m) => m.role === 'user')) {
+          streamingBubbleId.value = null
+        }
+      }
+      // 若当前气泡已有正文内容(该段答复已开始/完成),新一轮思考应另起气泡:
+      // 避免把新的 thinking 追加混入已有正文气泡,导致 thinking 与正文串位/覆盖。
+      if (
+        streamingBubbleId.value &&
+        core.messages.value.some((m) => m.id === streamingBubbleId.value && m.content)
+      ) {
+        streamingBubbleId.value = null
+      }
+      if (!streamingBubbleId.value) {
+        // 没有气泡时先创建一个空的 assistant 气泡
+        streamingBubbleId.value = core.newId()
+        await addMessage({
+          id: streamingBubbleId.value,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+        })
+      }
+      const meta = ensureMeta(streamingBubbleId.value)
+      meta.isThinking = true
+      meta.reasoning += content
       await nextTick()
       autoscroll.scrollBottom()
     }
-    // 收到文本 token 表示推理阶段已结束
-    if (streamingBubbleId.value) {
-      const meta = bubbleMeta[streamingBubbleId.value]
-      if (meta && meta.isThinking) meta.isThinking = false
-    }
-  }
-
-  // ---------- 推理事件 ----------
-  async function onReasoning(content: string) {
-    // 工具结果后新一轮推理也应新建气泡(新一轮思考 = 新一段答复)
-    if (needNewBubbleAfterTool.value) {
-      streamingBubbleId.value = null
-      needNewBubbleAfterTool.value = false
-    }
-    // 若当前气泡已有正文内容(该段答复已开始/完成),新一轮思考应另起气泡:
-    // 避免把新的 thinking 追加混入已有正文气泡,导致 thinking 与正文串位/覆盖。
-    if (
-      streamingBubbleId.value &&
-      core.messages.value.some((m) => m.id === streamingBubbleId.value && m.content)
-    ) {
-      streamingBubbleId.value = null
-    }
-    if (!streamingBubbleId.value) {
-      // 没有气泡时先创建一个空的 assistant 气泡
-      streamingBubbleId.value = core.newId()
-      await addMessage({
-        id: streamingBubbleId.value,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-      })
-    }
-    const meta = ensureMeta(streamingBubbleId.value)
-    meta.isThinking = true
-    meta.reasoning += content
-    await nextTick()
-    autoscroll.scrollBottom()
-  }
 
   // ---------- 工具调用事件 ----------
   async function onToolCall(call: AgentToolCallPayload) {
@@ -376,7 +391,7 @@ export function useChatStreaming(
         input_tokens: p.cache_hit_tokens + p.cache_miss_tokens,
         output_tokens: p.output_tokens,
         total_tokens: p.total_tokens,
-        reasoning_tokens: 0,
+        reasoning_tokens: p.reasoning_tokens,
         cache_hit_tokens: p.cache_hit_tokens,
         cache_miss_tokens: p.cache_miss_tokens,
         rounds: p.rounds,
@@ -484,6 +499,7 @@ export function useChatStreaming(
           cache_hit_tokens,
           cache_miss_tokens,
           output_tokens,
+          reasoning_tokens: m.usage.reasoning_tokens,
           total_tokens: m.usage.total_tokens,
           priced,
           cache_hit_cost,

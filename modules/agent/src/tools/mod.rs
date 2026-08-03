@@ -122,7 +122,7 @@ pub use set_title::SetTitleTool;
 pub use shell::ShellTool;
 pub use crate::shell_session::{
     ShellSessionKillTool, ShellSessionListTool, ShellSessionReadTool, ShellSessionSendTool,
-    ShellSessionStartTool,
+    ShellSessionStartTool, ShellSessionWaitTool,
 };
 pub use skill_tools::{
     GetSkillDetailTool, InstallClawHubSkillTool, ListInstalledSkillsTool,

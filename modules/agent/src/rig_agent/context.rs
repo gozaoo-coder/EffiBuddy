@@ -39,7 +39,7 @@ use crate::agent::ContextPreview;
 
 use super::{
     HISTORY_TRUNCATE_CHARS, MEMORY_AUTO_INJECT_LIMIT, RECENT_HISTORY_WITH_MEMORY,
-    REASONING_IN_CONTEXT_CHARS, RigAgent, SKILL_AUTO_INJECT_LIMIT,
+      RigAgent, SKILL_AUTO_INJECT_LIMIT,
     SKILL_SEARCH_MIN_QUERY_LEN,
 };
 
@@ -314,12 +314,12 @@ impl RigAgent {
                 s.push_str(&m.content);
                 // 把助手消息的思考过程（reasoning）一并注入上下文：
                 // 让模型在后续轮次仍能看到自己过去的推理，避免"thinking 不保存到上下文"。
-                // thinking 可能非常长，做单条截断兜底，避免推理文本耗尽上下文窗口。
+                // 完整注入、不截断：thinking 是对话上下文的一部分，省略会丢失推理；
+                // 长会话的 token 预算由消息压缩系统维护，不在拼装层硬截断。
                 if m.role == Role::Assistant {
                     if let Some(r) = m.reasoning.as_deref().filter(|r| !r.is_empty()) {
-                        let r = truncate_reasoning(r, REASONING_IN_CONTEXT_CHARS);
                         s.push_str("\n（思考：");
-                        s.push_str(&r);
+                        s.push_str(r);
                         s.push('）');
                     }
                 }
@@ -487,15 +487,4 @@ fn short_conv_id(id: &str) -> &str {
     } else {
         &id[..id.ceil_char_boundary(8)]
     }
-}
-
-/// 按字符数截断 reasoning（按 UTF-8 边界），避免推理文本耗尽上下文窗口。
-/// reasoning 超过上限时截断并追加省略号，提示模型内容被截断。
-fn truncate_reasoning(r: &str, max_chars: usize) -> String {
-    if r.chars().count() <= max_chars {
-        return r.to_string();
-    }
-    let mut s: String = r.chars().take(max_chars).collect();
-    s.push('…');
-    s
 }

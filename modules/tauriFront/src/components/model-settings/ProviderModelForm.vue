@@ -210,33 +210,40 @@ const modelDropdownOptions = computed<DropdownOption[]>(() => {
 const hasModelRecommendations = computed(() => modelDropdownOptions.value.length > 0)
 
 async function fetchRemoteModels() {
-  if (!draft.value.base_url.trim()) {
-    toast({ content: '请先填写 Base URL', type: 'warn' })
-    return
-  }
-  if (!draft.value.api_key.trim()) {
-    toast({ content: '请先填写 API Key', type: 'warn' })
-    return
-  }
-  fetchingModels.value = true
-  try {
-    const list = await invoke<RemoteModelInfo[]>('list_remote_models', {
-      baseUrl: draft.value.base_url,
-      apiKey: draft.value.api_key,
-    })
-    remoteModels.value = list
-    if (list.length === 0) {
-      toast({ content: 'API 返回空列表', type: 'warn' })
-    } else {
-      toast({ content: `已获取 ${list.length} 个可用模型`, type: 'success' })
+    if (!draft.value.base_url.trim()) {
+      toast({ content: '请先填写 Base URL', type: 'warn' })
+      return
     }
-  } catch (e) {
-    toast({ content: `拉取模型失败：${e}`, type: 'error' })
-    remoteModels.value = []
-  } finally {
-    fetchingModels.value = false
+    fetchingModels.value = true
+    try {
+      const list = await invoke<RemoteModelInfo[]>('list_remote_models', {
+        baseUrl: draft.value.base_url.trim(),
+        apiKey: draft.value.api_key.trim(),
+      })
+      remoteModels.value = list
+      if (list.length === 0) {
+        toast({ content: 'API 返回空列表（服务未返回可用模型）', type: 'warn' })
+      } else {
+        toast({ content: `已获取 ${list.length} 个可用模型`, type: 'success' })
+      }
+    } catch (e) {
+      toast({ content: `拉取模型失败：${errText(e)}`, type: 'error' })
+      remoteModels.value = []
+    } finally {
+      fetchingModels.value = false
+    }
   }
-}
+
+  /** 把 invoke 抛出的未知错误转成可读字符串（可能是 string / Error / 对象） */
+  function errText(e: unknown): string {
+    if (typeof e === 'string') return e
+    if (e instanceof Error) return e.message
+    try {
+      return JSON.stringify(e)
+    } catch {
+      return String(e)
+    }
+  }
 
 function onModelNameDropdownChange(v: string | number, _opt: DropdownOption) {
   draft.value.model_name = String(v)

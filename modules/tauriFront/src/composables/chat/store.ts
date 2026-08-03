@@ -16,6 +16,8 @@ import type { useMessageMenu } from './useMessageMenu'
 import type { useImagePreview } from './useImagePreview'
 import type { useAutoScroll } from './useAutoScroll'
 import type { useAskUser } from './useAskUser'
+import type { useVersioning } from './useVersioning'
+import type { useChatSend } from './useChatSend'
 
 export interface ChatStore {
   core: ReturnType<typeof useChatCore>
@@ -26,6 +28,8 @@ export interface ChatStore {
   preview: ReturnType<typeof useImagePreview>
   autoscroll: ReturnType<typeof useAutoScroll>
   askUser: ReturnType<typeof useAskUser>
+  versioning: ReturnType<typeof useVersioning>
+  send: ReturnType<typeof useChatSend>
 }
 
 export const CHAT_STORE_KEY: InjectionKey<ChatStore> = Symbol('chat-store')

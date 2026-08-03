@@ -153,7 +153,7 @@ async fn execute_skill(
     let conv_id = format!("schedule-{}-{}", task_id, now);
 
     // 把 preamble 作为 user 消息注入并取回历史
-    let user_msg = Message::new(uuid::Uuid::new_v4().to_string(), Role::User, preamble, now);
+    let user_msg = Message::new(effisuite_core::gen_message_id(), Role::User, preamble, now);
     let conv = match store.append_message(&conv_id, user_msg, now).await {
         Ok(c) => c,
         Err(e) => {
@@ -176,7 +176,7 @@ async fn execute_skill(
     match agent.chat(&history).await {
         Ok(reply) => {
             let assistant_msg = Message::new(
-                uuid::Uuid::new_v4().to_string(),
+                effisuite_core::gen_message_id(),
                 Role::Assistant,
                 reply.clone(),
                 now_ms(),
