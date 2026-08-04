@@ -63,12 +63,22 @@ where
 
 /// Parse tool arguments from a streamed string payload.
 /// Some providers emit an empty string for parameterless tool calls; normalize that to `{}`.
+///
+/// EffiSuite vendored patch: JSON 解析失败时回退到 XML 形式（`<_KEY_>value</_KEY_>`），
+/// 让工具同时支持 JSON 与 XML 两种输入，缓解 JSON 转义问题。XML 由
+/// [`crate::xml_tool_args::parse_xml_tool_arguments`] 转换；两种都失败才返回 JSON 错误。
 pub fn parse_tool_arguments(arguments: &str) -> serde_json::Result<serde_json::Value> {
     if arguments.trim().is_empty() {
         return Ok(serde_json::Value::Object(serde_json::Map::new()));
     }
 
-    serde_json::from_str(arguments)
+    match serde_json::from_str(arguments) {
+        Ok(value) => Ok(value),
+        Err(json_err) => match crate::xml_tool_args::parse_xml_tool_arguments(arguments) {
+            Some(value) => Ok(value),
+            None => Err(json_err),
+        },
+    }
 }
 
 /// This module is helpful in cases where raw json objects are serialized and deserialized as
@@ -374,5 +384,24 @@ mod tests {
     fn test_parse_tool_arguments_valid_json() {
         let parsed = parse_tool_arguments(r#"{"key":"value"}"#).unwrap();
         assert_eq!(parsed, serde_json::json!({"key": "value"}));
+    }
+
+    // EffiSuite vendored patch: JSON 解析失败时回退到 XML 形式（<_KEY_> 标签）
+    #[test]
+    fn test_parse_tool_arguments_xml_fallback() {
+        let parsed = parse_tool_arguments(
+            "<_PATH_>src/main.rs</_PATH_><_START_LINE_>3</_START_LINE_>",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({"path": "src/main.rs", "start_line": 3})
+        );
+    }
+
+    #[test]
+    fn test_parse_tool_arguments_keeps_json_error_for_garbage() {
+        let err = parse_tool_arguments("this is not json or xml").unwrap_err();
+        assert!(err.is_syntax() || err.is_data());
     }
 }

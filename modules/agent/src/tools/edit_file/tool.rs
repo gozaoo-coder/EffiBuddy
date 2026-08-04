@@ -95,11 +95,14 @@ impl Tool for EditFileTool {
               一次最多 {MAX_OPS} 个操作。text 推荐用 <content>...</content> 包裹避免转义（同 write_file）。\n\
               **可选参数**：dry_run=true 仅预览不写盘（大改前先确认安全，返回完整 diff 与行号变化）；\
               diff_context=N 控制变更明细上下文行数（默认 1，0 = 只显示变更行）。\n\
-              **行数校准**：替换模式下若 text 行数与 (end_line - start_line + 1) 不一致，\
-                 报告会明确标注声明行数与实际写入行数，便于核对的下次操作。\
-                 路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}{history_hint}"
-        )
-    }
+               **行数校准**：替换模式下若 text 行数与 (end_line - start_line + 1) 不一致，\
+               报告会明确标注声明行数与实际写入行数，便于核对的下次操作。\
+               **参数也可整体用 XML 传入**（与 JSON 等价，系统自动识别）：每个参数一个标签，\
+               形如 <_参数名_>值</_参数名_>，例如 <_PATH_>src/main.rs</_PATH_>；edits 数组\
+               用重复的 <_ITEM_> 包裹元素表达，text 内容可写在标签之间免转义。\
+               路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}{history_hint}"
+    )
+}
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({

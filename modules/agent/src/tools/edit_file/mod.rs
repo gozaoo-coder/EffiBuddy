@@ -69,4 +69,6 @@ mod ops_tests;
 #[cfg(test)]
 mod report_tests;
 #[cfg(test)]
+mod xml_input_tests;
+#[cfg(test)]
 mod tests_common;

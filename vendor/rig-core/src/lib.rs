@@ -175,6 +175,7 @@ pub mod tool;
 pub mod transcription;
 pub mod vector_store;
 pub mod wasm_compat;
+pub(crate) mod xml_tool_args;
 
 // Re-export commonly used types and traits
 pub use completion::message;

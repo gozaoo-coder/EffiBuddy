@@ -110,8 +110,11 @@ impl Tool for EditFileRegexTool {
              - case_sensitive：默认 false（不区分大小写）\n\
              - dry_run=true 仅预览命中位置与上下文，不写入磁盘\n\
              - diff_context=N 命中明细上下文行数（每侧，默认 1，0=只显示命中行）\n\n\
-             **安全**：编译失败返回友好错误；建议先用 dry_run 确认匹配范围再执行。\
-             {history_hint}\n{cwd_hint}"
+               **安全**：编译失败返回友好错误；建议先用 dry_run 确认匹配范围再执行。\
+               **参数也可整体用 XML 传入**（与 JSON 等价，系统自动识别）：每个参数一个标签，\
+               形如 <_参数名_>值</_参数名_>，例如 <_PATTERN_>fn \\w+</_PATTERN_>、\
+               <_REPLACEMENT_>替换文本</_REPLACEMENT_>，正则里的反斜杠/引号无需 JSON 转义。\
+               {history_hint}\n{cwd_hint}"
         )
     }
 

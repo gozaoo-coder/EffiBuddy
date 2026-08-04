@@ -109,7 +109,10 @@ impl Tool for WriteFileTool {
              <content>文件原始内容，可含 < > & \" \\ 等任意字符</content>\n\n\
              若内容本身包含字面量 `</content>`，改用 CDATA 包裹：\n\
              <content><![CDATA[任意内容，包括 </content> 字面量]]></content>\n\n\
-             不推荐直接传裸文本：需要 JSON 转义（双引号、反斜杠、换行），容易写错。\n\n{cwd_hint}"
+             不推荐直接传裸文本：需要 JSON 转义（双引号、反斜杠、换行），容易写错。\n\n\
+              **参数也可整体用 XML 传入**（与 JSON 等价，系统自动识别）：\n\
+              每个参数一个标签，形如 <_参数名_>值</_参数名_>，例如 <_PATH_>test.txt</_PATH_>、\n\
+              <_CONTENT_>代码内容，无需 JSON 转义</_CONTENT_>。\n\n{cwd_hint}"
         )
     }
 
