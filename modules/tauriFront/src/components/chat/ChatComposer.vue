@@ -6,9 +6,9 @@
  * 发送/语音按钮、meta pills(工作区 / 压缩徽章 / 右栏面板开关)。
  * 发送编排在 useChatSend(引用拼接 → 建会话 → 流式调用)实现,本组件只渲染 UI。
  */
-import { ref, inject, watch } from 'vue'
+import { ref, computed, inject, watch } from 'vue'
 import { animate } from 'animejs'
-import { Button, IconButton, Icon, Switch, SegmentedButton, useToast } from '../basic'
+import { Button, IconButton, Icon, Menu, useToast, type MenuItemOption } from '../basic'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
 
 const store = inject(CHAT_STORE_KEY)!
@@ -34,7 +34,7 @@ const { quoteChips, scrollToMessage, removeQuote } = store.menu
   const { compressBadgeInfo, compressSavedInfo, compressionSheetOpen } = store.compression
   const { versioning } = store
   const { sheetOpen: versionSheetOpen } = versioning
-  // 发送编排已抽到 useChatSend(core/streaming/taskMode/menu/autoscroll 组合),
+  // 发送编排已抽到 useChatSend(core/streaming/menu/autoscroll 组合),
   // 输入栏只保留 UI:渲染按钮状态 + 触发发送/停止。
   const { send, stopGenerating } = store.send
 
@@ -87,6 +87,41 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+// ---------- 推理设置菜单（思考开关 + reasoning_effort 等级） ----------
+const reasoningMenuVisible = ref(false)
+const reasoningBtnRef = ref<HTMLElement | null>(null)
+
+const effortLabels: Record<'low' | 'high' | 'max', string> = {
+  low: '低',
+  high: '高',
+  max: '顶级',
+}
+
+/** pill 文案:关闭 → 「思考已关」;开启 → 「思考·等级」 */
+const reasoningLabel = computed(() =>
+  thinking.value ? `思考·${effortLabels[reasoningEffort.value]}` : '思考已关',
+)
+
+const reasoningItems = computed<MenuItemOption[]>(() => [
+  { key: 'off', label: '关闭思考', selected: !thinking.value },
+  {
+    key: 'low',
+    label: '低',
+    selected: thinking.value && reasoningEffort.value === 'low',
+    divided: true,
+  },
+  { key: 'high', label: '高', selected: thinking.value && reasoningEffort.value === 'high' },
+  { key: 'max', label: '顶级', selected: thinking.value && reasoningEffort.value === 'max' },
+])
+
+function onReasoningSelect(item: MenuItemOption) {
+  if (item.key === 'off') {
+    thinking.value = false
+    return
+  }
+  thinking.value = true
+  reasoningEffort.value = item.key as 'low' | 'high' | 'max'
+}
 
 </script>
 
@@ -173,23 +208,21 @@ function onKeydown(e: KeyboardEvent) {
             <template #icon><Icon name="arrow-up" :size="22" /></template>
           </Button>
         </div>
-        <!-- 推理设置:思考开关 + reasoning_effort 等级（输入框下方） -->
-        <div class="composer-reasoning">
-          <span class="reasoning-label"><Icon name="thinking" :size="14" /> 思考</span>
-          <Switch v-model="thinking" size="sm" />
-          <SegmentedButton
-            v-if="thinking"
-            v-model="reasoningEffort"
-            :options="[
-              { label: '低', value: 'low' },
-              { label: '高', value: 'high' },
-              { label: '顶级', value: 'max' },
-            ]"
-            size="sm"
-          />
-        </div>
       <!-- 工作区 + 压缩 + 面板开关(输出栏圆环+token 显示已移除)-->
       <div class="composer-meta">
+        <!-- 推理设置:点击弹出 Menu 选择思考开关与 reasoning_effort 等级 -->
+        <button
+          ref="reasoningBtnRef"
+          type="button"
+          class="meta-pill meta-pill--reasoning"
+          :class="{ 'meta-pill--reasoning-on': thinking }"
+          title="推理设置（思考开关 / 推理强度）"
+          @click="reasoningMenuVisible = !reasoningMenuVisible"
+        >
+          <Icon name="thinking" :size="14" />
+          <span class="meta-pill-text">{{ reasoningLabel }}</span>
+          <Icon :name="reasoningMenuVisible ? 'chevron-down' : 'chevron-up'" :size="13" />
+        </button>
         <button
           type="button"
           class="meta-pill meta-pill--wd"
@@ -248,18 +281,29 @@ function onKeydown(e: KeyboardEvent) {
               <span class="meta-pill-text">版本</span>
           </button>
           <!-- 右栏上下文面板开关 -->
-        <button
-          type="button"
-          class="meta-pill meta-pill--ctx"
-          :class="{ 'meta-pill--ctx-on': ctxPanelOpen }"
-          :title="ctxPanelOpen ? '收起上下文面板' : '展开上下文面板（todoTree / 用量 / 压缩）'"
-          @click="toggleCtxPanel()"
-        >
-          <Icon name="discover" :size="14" />
-          <span class="meta-pill-text">{{ ctxPanelOpen ? '收起面板' : '展开面板' }}</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            class="meta-pill meta-pill--ctx"
+            :class="{ 'meta-pill--ctx-on': ctxPanelOpen }"
+            :title="ctxPanelOpen ? '收起上下文面板' : '展开上下文面板（todoTree / 用量 / 压缩）'"
+            @click="toggleCtxPanel()"
+          >
+            <Icon name="discover" :size="14" />
+            <span class="meta-pill-text">{{ ctxPanelOpen ? '收起面板' : '展开面板' }}</span>
+          </button>
+        </div>
     </div>
+
+    <!-- 推理设置菜单:位于输入栏上方弹出 -->
+    <Menu
+      v-model:visible="reasoningMenuVisible"
+      :items="reasoningItems"
+      :trigger-ref="reasoningBtnRef"
+      title="推理设置"
+      placement="top-start"
+      :min-width="140"
+      @select="onReasoningSelect"
+    />
   </div>
 </template>
 
@@ -378,22 +422,16 @@ function onKeydown(e: KeyboardEvent) {
   gap: 6px;
 }
 
-/* 推理设置行:思考开关 + reasoning_effort 等级（输入框下方） */
-.composer-reasoning {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px;
-  min-height: 22px;
+/* 推理设置 pill:开启思考时用 primary 收敛色高亮 */
+.meta-pill--reasoning-on {
+  color: var(--primary);
 }
 
-.reasoning-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--muted);
-  user-select: none;
+.meta-pill--reasoning-on:hover,
+.meta-pill--reasoning:hover {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
 /* 上下文 ring + 工作区 meta 行 */

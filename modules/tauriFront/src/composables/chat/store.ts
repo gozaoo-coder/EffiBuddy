@@ -11,7 +11,6 @@ import type { InjectionKey } from 'vue'
 import type { useChatCore } from './useChatCore'
 import type { useChatStreaming } from './useChatStreaming'
 import type { useChatCompression } from './useChatCompression'
-import type { useTaskMode } from './useTaskMode'
 import type { useMessageMenu } from './useMessageMenu'
 import type { useImagePreview } from './useImagePreview'
 import type { useAutoScroll } from './useAutoScroll'
@@ -23,7 +22,6 @@ export interface ChatStore {
   core: ReturnType<typeof useChatCore>
   streaming: ReturnType<typeof useChatStreaming>
   compression: ReturnType<typeof useChatCompression>
-  taskMode: ReturnType<typeof useTaskMode>
   menu: ReturnType<typeof useMessageMenu>
   preview: ReturnType<typeof useImagePreview>
   autoscroll: ReturnType<typeof useAutoScroll>

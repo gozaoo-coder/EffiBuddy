@@ -2,7 +2,7 @@
 /**
  * AssistantContent —— 助手消息正文渲染(推理 / 工具调用 / 子 agent / Markdown)
  *
- * 被 MessageBubble(独立气泡)与 TaskBubble(长程任务气泡)共用,
+ * 被 MessageBubble(普通消息气泡)使用,
  * 只负责「一段助手输出的内容呈现」,不含气泡外壳与交互菜单。
  */
 import MarkdownRender from 'markstream-vue'

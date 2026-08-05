@@ -6,20 +6,18 @@
  * 供聊天输入栏（ChatComposer）与空态引导卡片（ChatHome 一键示例）复用，
  * 避免在两个组件里重复实现发送逻辑。
  *
- * 依赖：core / streaming / taskMode / menu / autoscroll，
+ * 依赖：core / streaming / menu / autoscroll，
  * 均在 ChatWindow 组装各领域 store 后一起 provide（见 store.ts）。
  */
 import { invoke } from '@tauri-apps/api/core'
 import type { useAutoScroll } from './useAutoScroll'
 import type { useChatCore } from './useChatCore'
 import type { useChatStreaming } from './useChatStreaming'
-import type { useTaskMode } from './useTaskMode'
 import type { useMessageMenu } from './useMessageMenu'
 
 export function useChatSend(
   core: ReturnType<typeof useChatCore>,
   streaming: ReturnType<typeof useChatStreaming>,
-  taskMode: ReturnType<typeof useTaskMode>,
   menu: ReturnType<typeof useMessageMenu>,
   autoscroll: ReturnType<typeof useAutoScroll>,
 ) {
@@ -77,8 +75,6 @@ export function useChatSend(
       return
     }
     core.sending.value = true
-    // 新一轮用户输入：重置「是否任务回合」标记（新内容不再合并进旧长程任务气泡）
-    taskMode.beginNewTurn()
     // 推理设置（thinking 开关 + reasoning_effort）：关闭时传 null（后端不注入参数）
     const reasoning = core.thinking.value
       ? { thinking: true, effort: core.reasoningEffort.value }

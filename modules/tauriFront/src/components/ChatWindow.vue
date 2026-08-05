@@ -3,7 +3,7 @@
  * ChatWindow —— 聊天主窗口(编排壳)
  *
  * 职责边界:只做「组装」——
- *  1. 创建各领域 store(useChatCore / useChatStreaming / useTaskMode /
+ *  1. 创建各领域 store(useChatCore / useChatStreaming /
  *     useMessageMenu / useChatCompression / useImagePreview / useAutoScroll /
  *     useAskUser / useVersioning)
  *  2. 注入会话级生命周期钩子(resetAll / afterLoad)
@@ -11,7 +11,7 @@
  *  4. provide 共享 store,组装原子子组件
  *
  * 具体业务逻辑已下沉到 composables/chat/* 与 components/chat/*,
- * 本文件不再包含任何消息渲染 / 压缩 / 任务 / 菜单等实现细节。
+ * 本文件不再包含任何消息渲染 / 压缩 / 菜单等实现细节。
  *
  * 对外接口保持不变:props backend / conversationId,
  * emits update:conversation-id / conversation-changed(由 ChatTab 透传)。
@@ -37,7 +37,6 @@ import { CHAT_STORE_KEY } from '../composables/chat/store'
 import { useAutoScroll } from '../composables/chat/useAutoScroll'
 import { useChatCore } from '../composables/chat/useChatCore'
 import { useChatStreaming } from '../composables/chat/useChatStreaming'
-import { useTaskMode } from '../composables/chat/useTaskMode'
 import { useMessageMenu } from '../composables/chat/useMessageMenu'
 import { useChatCompression } from '../composables/chat/useChatCompression'
 import { useImagePreview } from '../composables/chat/useImagePreview'
@@ -58,25 +57,23 @@ const emit = defineEmits<{
 }>()
 
 // ---------- 领域 store 创建 ----------
-// 依赖顺序:autoscroll(无依赖)→ core → streaming / taskMode / menu / compression / preview
+// 依赖顺序:autoscroll(无依赖)→ core → streaming / menu / compression / preview
 // 状态为实例级:每个 ChatWindow(即每个会话页签)一份,KeepAlive 多实例互不污染。
 const autoscroll = useAutoScroll()
 const core = useChatCore(props, emit, autoscroll)
 const streaming = useChatStreaming(core, autoscroll)
-const taskMode = useTaskMode(core)
 const menu = useMessageMenu(core, streaming)
 const compression = useChatCompression(core)
   const preview = useImagePreview()
   const askUser = useAskUser(core, streaming)
   const versioning = useVersioning(core)
-  const send = useChatSend(core, streaming, taskMode, menu, autoscroll)
+  const send = useChatSend(core, streaming, menu, autoscroll)
 
 // ---------- 会话级生命周期钩子 ----------
 // loadConversation 在会话切换/清空时调用 resetAll,加载成功后调用 afterLoad。
 core.setSessionHooks({
     resetAll: () => {
       streaming.resetAll()
-      taskMode.resetAll()
       menu.resetAll()
       askUser.resetAll()
       core.backToParent() // 退出子代理内嵌视图
@@ -89,16 +86,13 @@ core.setSessionHooks({
     streaming.restoreBubbleMetaFromHistory()
     // 历史消息附件回填 base64
     await streaming.loadConversationAttachments()
-    // 任务清单:非空即进入长程任务模式
-    await taskMode.loadTodoTree()
-    taskMode.syncFromTodo()
     // 刷新会话版本列表(切换会话/回溯后保持一致)
     await versioning.loadVersions()
   },
 })
 
 // ---------- 事件订阅(后端流式事件 + conversationId watch + 生命周期) ----------
-useChatEvents(core, streaming, compression, taskMode)
+useChatEvents(core, streaming, compression)
 
 // 加载全局压缩设置(自动压缩阈值/开关),供压缩浮窗设置面板展示与编辑
 void compression.loadCompressionSettings()
@@ -107,7 +101,6 @@ void compression.loadCompressionSettings()
     core,
     streaming,
     compression,
-    taskMode,
     menu,
     preview,
     autoscroll,
@@ -165,7 +158,7 @@ const { confirmState: versionConfirmState, closeConfirm } = versioning
 
         <!-- 空状态首页:中央品牌区 + 快捷胶囊(子代理视图下隐藏) -->
         <ChatHome v-if="isEmptyHome && !subAgentId" />
-        <!-- 消息列表(含长程任务气泡) -->
+        <!-- 消息列表 -->
         <ChatMessageList v-else-if="!subAgentId" />
         <!-- 子代理内嵌视图:点击子代理卡片后主视图切换为该子代理全流程,
              顶栏面包屑 `[ 父标题 ] / [ 子代理标题 ]` 提示当前位置,点击父标题可返回 -->

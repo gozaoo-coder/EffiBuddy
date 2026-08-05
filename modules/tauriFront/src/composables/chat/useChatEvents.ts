@@ -25,13 +25,11 @@ import type {
 import type { useChatCore } from './useChatCore'
 import type { useChatStreaming } from './useChatStreaming'
 import type { useChatCompression } from './useChatCompression'
-import type { useTaskMode } from './useTaskMode'
 
 export function useChatEvents(
   core: ReturnType<typeof useChatCore>,
   streaming: ReturnType<typeof useChatStreaming>,
   compression: ReturnType<typeof useChatCompression>,
-  taskMode: ReturnType<typeof useTaskMode>,
 ) {
   let unlistens: UnlistenFn[] = []
 
@@ -49,15 +47,7 @@ export function useChatEvents(
       { immediate: false },
     )
 
-    // 任务清单更新事件:右栏 / todo_write 工具每次增删改都会 emit
-    // 多会话过滤:仅处理当前活跃会话(长程任务气泡与 todoTree 状态联动)
-    unlistens.push(
-      await listen<{ conversation_id: string }>('todo-tree-updated', (e) => {
-        const p = e.payload
-        if (core.activeId.value && p.conversation_id !== core.activeId.value) return
-        void taskMode.loadTodoTree()
-      }),
-    )
+    // 任务清单更新事件由右栏 ChatContextPanel 自行监听处理(todoTree 展示)
 
     unlistens.push(
       await listen<StreamTokenPayload>('agent-token', async (e) => {
@@ -80,8 +70,6 @@ export function useChatEvents(
       await listen<AgentToolCallPayload>('agent-tool-call', async (e) => {
         const p = e.payload
         if (core.activeId.value !== p.conversation_id) return
-        // 长程任务模式:agent 调用 todo_write 建立任务树 → 聚合为任务气泡
-        if (p.tool_name === 'todo_write') taskMode.markTaskTurn(streaming.streamingBubbleId.value)
         await streaming.onToolCall(p)
       }),
     )

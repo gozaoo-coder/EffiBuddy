@@ -4,7 +4,6 @@
  * 气泡聚合规则:
  *  - 文本 + 工具调用归同一气泡;工具结果后下一段文本/推理新建气泡
  *  - 连续多个工具无中间文本时,工具调用仍追加到当前气泡(视觉连贯)
- *  - 长程任务回合产生的 assistant 气泡由 TaskMode 聚合隐藏
  */
 import { ref, reactive, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
