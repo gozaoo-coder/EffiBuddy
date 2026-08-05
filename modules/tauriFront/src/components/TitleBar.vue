@@ -4,18 +4,29 @@
  *
  * 布局（2026-08 重构）：
  * - 左侧：左栏一（IconRail）模态切换 + 左栏二（HistoryRail）模态切换按钮
- * - 中间：拖拽区域（data-tauri-drag-region）
+ * - 中间：多页签栏（TabBar）+ 拖拽区域（data-tauri-drag-region）
  * - 右上角窗口控件：最小化 / 最大化(还原) / 关闭
  *
  * 已移除：品牌 logo 与 "EffiBuddy" 字样（用户要求去掉顶栏品牌信息）。
  * 模态状态由 useLayoutModes 全局单例管理，跨组件实时响应并持久化 localStorage。
+ *
+ * 拖拽说明：titlebar-center 上的 data-tauri-drag-region 为裸属性，
+ * 仅直接点击该区域自身才触发拖拽（Tauri 2 脚本行为）；TabBar 内的
+ * 按钮/非空白区域不会触发窗口拖拽，可正常交互。
  *
  * 非 Tauri 环境（纯浏览器预览）自动降级：控件空操作、不报错。
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
+import TabBar from './TabBar.vue'
 import { useLayoutModes } from '../composables/useLayoutModes'
+
+// 模型配置模式：隐藏聊天页签栏（与主内容区切换保持一致）
+withDefaults(
+  defineProps<{ modelConfigOpen?: boolean }>(),
+  { modelConfigOpen: false },
+)
 
 const { modes, toggleRail1Mode, toggleRail2Mode } = useLayoutModes()
 
@@ -134,8 +145,10 @@ async function close() {
       </button>
     </div>
 
-    <!-- 中间拖拽区 -->
-    <div class="titlebar-center" data-tauri-drag-region></div>
+    <!-- 中间：聊天多页签栏 + 拖拽区（裸 data-tauri-drag-region：仅直接点击空白处拖拽，页签可交互） -->
+    <div class="titlebar-center" data-tauri-drag-region>
+      <TabBar v-if="!modelConfigOpen" />
+    </div>
 
     <!-- 右上角窗口控件：非拖拽区域 -->
     <div class="titlebar-controls">
@@ -244,7 +257,7 @@ async function close() {
   position: absolute;
   top: calc(100% + 6px);
   left: 50%;
-  transform: translateX(-50%) translateY(-4px);
+  transform: translateX(0%) translateY(-4px);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -266,13 +279,13 @@ async function close() {
 .mode-btn:hover .mode-tip {
   opacity: 1;
   visibility: visible;
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(0%) translateY(0);
 }
 
 .tip-title {
   font-size: var(--fs-xs);
   color: var(--muted);
-  padding: 2px 6px;
+  padding: 2px 0;
   white-space: nowrap;
 }
 
@@ -286,7 +299,8 @@ async function close() {
 }
 
 .tip-opt.active {
-  color: var(--primary);
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
   font-weight: 600;
 }
 

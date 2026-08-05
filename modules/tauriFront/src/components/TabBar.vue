@@ -468,13 +468,17 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 页签栏已移入标题栏中间区域（titlebar-center）：
+   撑满标题栏高度、去除底部分割线（标题栏自带边框），
+   背景透明融入标题栏；min/max-width 约束防止超出中间区域 */
 .tab-bar {
   display: flex;
   align-items: stretch;
-  height: 38px;
+  height: 100%;
   flex-shrink: 0;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  max-width: 100%;
+  background: transparent;
   user-select: none;
   position: relative;
 }
@@ -529,8 +533,10 @@ onBeforeUnmount(() => {
   color: var(--text);
 }
 
+/* 激活页签：背景与主内容区同色，视觉上“融入”内容层，
+   与暗色页签栏形成明确的层级落差 */
 .tab-item.active {
-  background: var(--card);
+  background: var(--bg);
   color: var(--text);
 }
 
@@ -616,7 +622,7 @@ onBeforeUnmount(() => {
   padding-right: 12px;
 }
 
-/* ---------- 底部高亮指示器 ---------- */
+/* ---------- 底部高亮指示器：压住页签栏底部分割线 ---------- */
 .tab-indicator {
   position: absolute;
   bottom: 0;
@@ -627,7 +633,7 @@ onBeforeUnmount(() => {
   border-radius: 1px 1px 0 0;
   pointer-events: none;
   transition: opacity var(--duration-fast) var(--ease-standard);
-  z-index: 1;
+  z-index: 2;
   will-change: transform, width, left;
 }
 

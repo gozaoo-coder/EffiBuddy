@@ -12,7 +12,6 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TitleBar from './components/TitleBar.vue'
-import TabBar from './components/TabBar.vue'
 import TabContent from './components/TabContent.vue'
 import IconRail, { type RailView } from './components/IconRail.vue'
 import SecondRailHost from './components/SecondRailHost.vue'
@@ -348,8 +347,8 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
 
 <template>
   <div class="app-shell">
-    <!-- 自定义标题栏：左栏模态切换 + 窗口控件（无品牌，已移除 icon 与 effiBuddy 字样） -->
-    <TitleBar />
+    <!-- 自定义标题栏：左栏模态切换 + 中间页签栏 + 窗口控件（无品牌，已移除 icon 与 effiBuddy 字样） -->
+    <TitleBar :model-config-open="modelConfigOpen" />
 
     <main class="app-main">
       <!-- 左栏一：router（双模态：纯图标 / 图标+文字；数据驱动 + 插件按钮） -->
@@ -380,7 +379,6 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       <!-- 主内容区：根据模式切换（聊天模式=多页签 / 模型配置模式=模型设置面板） -->
       <Transition :css="false" @enter="onMainEnter" @leave="onMainLeave" mode="out-in">
         <section v-if="!modelConfigOpen" key="chat" class="chat-area">
-          <TabBar />
           <TabContent
             :backend="agentBackend"
             @conversation-changed="onConversationChanged"
