@@ -262,6 +262,7 @@ function formatRelativeTime(ts: number): string {
 /* 非多选模式下的 active 高亮（黑 alpha 低对比度） */
 .hr-item.active {
   background: rgba(0, 0, 0, 0.08);
+  padding: 4px 7px;
 }
 
 .hr-item.active .hr-item-title {
