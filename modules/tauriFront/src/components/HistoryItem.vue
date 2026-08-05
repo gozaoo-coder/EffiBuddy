@@ -497,29 +497,37 @@ function formatRelativeTime(ts: number): string {
   }
 }
 
-/* 操作按钮容器 */
+/* 操作按钮容器：绝对定位到右端，不占布局空间，使 .hr-item-meta 能贴到父容器最右端；
+   hover 时 meta 隐藏、操作按钮在原位浮现（指针事件仅在可见时启用） */
 .hr-item-actions {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 10px;
+  margin-block: auto;
   display: flex;
   align-items: center;
   gap: 2px;
-  flex-shrink: 0;
   opacity: 0;
   transform: translateX(4px);
+  pointer-events: none;
   transition: opacity 0.15s var(--ease-standard),
     transform 0.15s var(--ease-standard);
-  align-self: center;
 }
 
 .hr-item:hover .hr-item-actions {
   opacity: 1;
   transform: translateX(0);
+  pointer-events: auto;
 }
 
-/* 触屏环境：无 hover，始终显示 */
+/* 触屏环境：无 hover，始终显示；恢复为占位布局避免与 meta 重叠 */
 @media (hover: none) {
   .hr-item-actions {
+    position: static;
     opacity: 0.6;
     transform: none;
+    pointer-events: auto;
   }
 
   .hr-item:hover .hr-item-actions {
