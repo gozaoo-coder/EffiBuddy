@@ -84,7 +84,7 @@ export function useChatStreaming(
   // bubble spawn 动画:仅 opacity + scale,不操作 height。
   // 高度变化交给浏览器原生 reflow + markstream-vue 的 smooth-streaming 处理,
   // 避免 ResizeObserver + offsetHeight 在流式场景下的抽搐问题。
-  async function addMessage(msg: Message) {
+  async function addMessage(msg: Message, withAnim = true) {
     core.messages.value.push(msg)
     await nextTick()
     const el = document.getElementById('msg-' + msg.id)
@@ -93,24 +93,27 @@ export function useChatStreaming(
       return
     }
 
-    // 初始状态:透明 + 缩放 0.96(轻微,避免大幅缩放导致内容模糊)
-    el.style.opacity = '0'
-    el.style.transform = 'scale(0.96)'
-    el.style.transformOrigin = 'center top'
-    // 强制 reflow 确保 anime.js 起点准确
-    void el.offsetHeight
+    // 思考/工具气泡（空的 ProcessSection 区块）不播放入场动画，直接显示
+    if (withAnim) {
+      // 初始状态:透明 + 缩放 0.96(轻微,避免大幅缩放导致内容模糊)
+      el.style.opacity = '0'
+      el.style.transform = 'scale(0.96)'
+      el.style.transformOrigin = 'center top'
+      // 强制 reflow 确保 anime.js 起点准确
+      void el.offsetHeight
 
-    animate(el, {
-      opacity: [0, 1],
-      scale: [0.96, 1],
-      duration: 280,
-      ease: 'out(3)',
-      onComplete: () => {
-        el.style.opacity = ''
-        el.style.transform = ''
-        el.style.transformOrigin = ''
-      },
-    })
+      animate(el, {
+        opacity: [0, 1],
+        scale: [0.96, 1],
+        duration: 280,
+        ease: 'out(3)',
+        onComplete: () => {
+          el.style.opacity = ''
+          el.style.transform = ''
+          el.style.transformOrigin = ''
+        },
+      })
+    }
 
     autoscroll.scrollBottom()
   }
@@ -175,14 +178,17 @@ export function useChatStreaming(
         streamingBubbleId.value = null
       }
       if (!streamingBubbleId.value) {
-        // 没有气泡时先创建一个空的 assistant 气泡
+        // 没有气泡时先创建一个空的 assistant 气泡（思考框：跳过 spawn 动画）
         streamingBubbleId.value = core.newId()
-        await addMessage({
-          id: streamingBubbleId.value,
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-        })
+        await addMessage(
+          {
+            id: streamingBubbleId.value,
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+          },
+          false,
+        )
       }
       const meta = ensureMeta(streamingBubbleId.value)
       meta.isThinking = true
@@ -192,47 +198,51 @@ export function useChatStreaming(
     }
 
   // ---------- 工具调用事件 ----------
-  async function onToolCall(call: AgentToolCallPayload) {
-    if (!streamingBubbleId.value) {
-      streamingBubbleId.value = core.newId()
-      await addMessage({
-        id: streamingBubbleId.value,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
+    async function onToolCall(call: AgentToolCallPayload) {
+      if (!streamingBubbleId.value) {
+        // 没有气泡时先创建一个空的 assistant 气泡（工具组：跳过 spawn 动画）
+        streamingBubbleId.value = core.newId()
+        await addMessage(
+          {
+            id: streamingBubbleId.value,
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+          },
+          false,
+        )
+      }
+      const meta = ensureMeta(streamingBubbleId.value)
+      // 收到 tool call 表示推理阶段结束
+      meta.isThinking = false
+      meta.toolCalls.push({
+        call_id: call.call_id,
+        tool_name: call.tool_name,
+        arguments: call.arguments,
+        result: null,
+        is_error: false,
+        pending: true,
       })
+      await nextTick()
+      autoscroll.scrollBottom()
     }
-    const meta = ensureMeta(streamingBubbleId.value)
-    // 收到 tool call 表示推理阶段结束
-    meta.isThinking = false
-    meta.toolCalls.push({
-      call_id: call.call_id,
-      tool_name: call.tool_name,
-      arguments: call.arguments,
-      result: null,
-      is_error: false,
-      pending: true,
-    })
-    await nextTick()
-    autoscroll.scrollBottom()
-  }
 
   // ---------- 工具结果事件 ----------
-  async function onToolResult(result: AgentToolResultPayload) {
-    if (!streamingBubbleId.value) return
-    const meta = bubbleMeta[streamingBubbleId.value]
-    if (!meta) return
-    const target = meta.toolCalls.find((c) => c.call_id === result.call_id)
-    if (target) {
-      target.result = result.output
-      target.is_error = result.is_error
-      target.pending = false
+    async function onToolResult(result: AgentToolResultPayload) {
+      if (!streamingBubbleId.value) return
+      const meta = bubbleMeta[streamingBubbleId.value]
+      if (!meta) return
+      const target = meta.toolCalls.find((c) => c.call_id === result.call_id)
+      if (target) {
+        target.result = result.output
+        target.is_error = result.is_error
+        target.pending = false
+      }
+      // 标记:下一个文本/推理 token 应新建气泡
+      needNewBubbleAfterTool.value = true
+      await nextTick()
+      autoscroll.scrollBottom()
     }
-    // 标记:下一个文本/推理 token 应新建气泡
-    needNewBubbleAfterTool.value = true
-    await nextTick()
-    autoscroll.scrollBottom()
-  }
 
   // ---------- 附件 ----------
   // 调用 read_attachment 命令把图片文件读成 base64 data URL,缓存到 attachmentUrls。

@@ -281,7 +281,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   font-size: 13px;
 }
 
-/* 嵌入模式：无外层卡片，每条工具调用为独立圆角卡片行（可视化风格） */
+/* 嵌入模式：无外层卡片，每条工具调用为单行文档流样式（无卡片、无边框、无底色） */
 .tool-group.embedded {
   margin: 0;
   background: transparent;
@@ -294,29 +294,58 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   border-top: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
+/* 单行布局：icon + 工具名/状态 + 参数摘要 全在一行内，超出省略 */
 .tool-group.embedded .tool-item {
-  height: 34px;
-  max-height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  border-radius: var(--radius-lg);
-  background: var(--card-2, rgba(0, 0, 0, 0.03));
-  transition: border-color var(--duration-fast, 120ms) var(--ease-standard, ease),
-    background var(--duration-fast, 120ms) var(--ease-standard, ease);
+  height: auto;
+  min-height: 22px;
+  max-height: none;
+  padding: 0 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  gap: 6px;
+  transition: none;
 }
 
 .tool-group.embedded .tool-item:hover {
-  background: var(--card, rgba(0, 0, 0, 0.05));
-  border-color: color-mix(in srgb, var(--primary, #4f7cff) 35%, var(--border, rgba(0, 0, 0, 0.08)));
+  background: transparent;
+  border-color: transparent;
 }
 
 .tool-group.embedded .tool-icon {
-  width: 20px;
-  font-size: 16px;
-  color: var(--primary, #4f7cff);
+  width: 16px;
+  font-size: 14px;
+}
+
+.tool-group.embedded .tool-info {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-group.embedded .tool-name-row {
+  flex-shrink: 1;
+  min-width: 0;
+  gap: 5px;
+}
+
+.tool-group.embedded .tool-name {
+  font-size: 12px;
+}
+
+.tool-group.embedded .tool-args {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.tool-group.embedded .tool-status {
+  font-size: 10.5px;
+  padding: 0;
+  background: transparent;
 }
 
 /* 执行中的状态小圆点：呼吸动画 */

@@ -8,7 +8,8 @@
  * - 展开后：推理文本为灰色小字段落，工具列表以嵌入模式(无卡片)呈现
  * - 点击标题行可随时手动展开/折叠
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
+import { animate } from 'animejs'
 import { Icon } from '../basic'
 import ToolCallGroup from '../ToolCallGroup.vue'
 import type { ToolCallRecord } from '../../types'
@@ -36,6 +37,8 @@ const busy = computed(
 
 // 历史消息（加载时已全部完成）默认折叠；进行中默认展开
 const collapsed = ref(!busy.value)
+const bodyRef = ref<HTMLElement | null>(null)
+const reasoningRef = ref<HTMLElement | null>(null)
 
 // 已思考时长（秒）
 const thinkStart = ref<number>(Date.now())
@@ -65,10 +68,11 @@ watch(
       collapseTimer = null
     }
     if (b && !was) {
+      // 进行中 → 直接展开（无动画）
       collapsed.value = false
     } else if (!b && was) {
       collapseTimer = setTimeout(() => {
-        collapsed.value = true
+        collapseNow()
       }, 600)
     }
   },
@@ -79,8 +83,48 @@ function toggle() {
     clearTimeout(collapseTimer)
     collapseTimer = null
   }
-  collapsed.value = !collapsed.value
+  if (collapsed.value) expandNow()
+  else collapseNow()
 }
+
+// 展开：直接显示（无动画），并把思考内容定位到底部
+function expandNow() {
+  collapsed.value = false
+  nextTick(() => {
+    const el = reasoningRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+// 合并：仅高度变小动画（不做透明度变化）
+function collapseNow() {
+  const el = bodyRef.value
+  if (el) {
+    animate(el, {
+      maxHeight: [`${el.scrollHeight}px`, '0px'],
+      duration: 200,
+      ease: 'inOut(2)',
+      onComplete: () => {
+        collapsed.value = true
+        el.style.maxHeight = ''
+      },
+    })
+  } else {
+    collapsed.value = true
+  }
+}
+
+// 思考内容实时滚动到底部（流式增长时跟随）
+watch(
+  () => props.reasoning,
+  () => {
+    if (collapsed.value) return
+    nextTick(() => {
+      const el = reasoningRef.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  },
+)
 
 // 标题摘要文案：推理 + 工具数量合并
 const titleText = computed(() => {
@@ -121,8 +165,8 @@ const titleText = computed(() => {
     </div>
 
     <!-- 展开内容：推理文本 + 嵌入模式工具列表 -->
-    <div v-show="!collapsed" class="process-body">
-      <div v-if="reasoning" class="process-reasoning">{{ reasoning }}</div>
+    <div v-show="!collapsed" ref="bodyRef" class="process-body">
+      <div v-if="reasoning" ref="reasoningRef" class="process-reasoning">{{ reasoning }}</div>
       <ToolCallGroup v-if="toolCalls.length" :calls="toolCalls" embedded />
     </div>
   </div>
@@ -204,7 +248,8 @@ const titleText = computed(() => {
   color: var(--muted, #888);
 }
 
-/* 展开内容：左侧细线标识层级，缩进与上下 margin 加大，与标题行/正文明确区分 */
+/* 展开内容：左侧细线标识层级，缩进与上下 margin 加大，与标题行/正文明确区分；
+   overflow:hidden 供合并时的高度缩小动画裁剪内容 */
 .process-body {
   margin: 8px 0 6px 8px;
   padding: 2px 0 2px 12px;
@@ -212,6 +257,7 @@ const titleText = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow: hidden;
 }
 
 .process-reasoning {
