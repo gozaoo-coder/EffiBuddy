@@ -441,25 +441,21 @@ button:disabled {
   /* 消息列表只允许纵向滚动：横向溢出（如 hover 操作栏、超宽代码块）一律裁切，
      避免异常出现横向滚动条 */
   overflow-x: hidden;
-    padding: 56px 24px 24px; /* 顶部 56px 为悬浮顶栏(ChatTopBar)让位 */
+    padding: 56px 24px 16px; /* 顶部 56px 为悬浮顶栏(ChatTopBar)让位 */
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px; /* 紧凑间距：agent 回复文档化后视觉更连贯 */
 }
 
 .msg-bubble {
-  max-width: 80%;
   min-width: 0; /* flex 子项允许收缩，防超宽内容撑破消息列表 */
-  padding: 10px 14px;
-  border-radius: var(--radius-xl);
   word-break: break-word;
-  white-space: pre-wrap;
   font-size: 14px;
   line-height: 1.6;
-  box-shadow: var(--shadow-sm);
 }
 
-.msg-bubble.streaming {
+/* 流式中的用户气泡：虚线描边提示 */
+.msg-bubble.role-user.streaming {
   border: 1px dashed var(--primary);
 }
 
@@ -476,19 +472,29 @@ button:disabled {
   }
 }
 
+/* 仅用户消息使用气泡样式：右对齐主色圆角气泡 */
 .msg-bubble.role-user {
   align-self: flex-end;
+  max-width: 80%;
+  padding: 10px 14px;
   background: var(--primary);
   color: #fff;
+  border-radius: var(--radius-xl);
   border-bottom-right-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  white-space: pre-wrap;
 }
 
+/* agent 回复文档化：无背景无边框、通栏排版，像文档段落一样简洁 */
 .msg-bubble.role-assistant {
-  align-self: flex-start;
-  background: var(--card);
+  align-self: stretch;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: var(--radius-sm);
   /* AI 消息使用 MarkdownRender 渲染，交给 markdown 处理换行/空白 */
   white-space: normal;
 }
@@ -501,7 +507,7 @@ button:disabled {
 }
 
 .msg-bubble.role-assistant .markstream-vue p {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
 }
 
 .msg-bubble.role-assistant .markstream-vue p:last-child {

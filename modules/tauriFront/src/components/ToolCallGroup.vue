@@ -17,10 +17,17 @@ import { animate } from 'animejs'
 import { BindSheet, Icon } from './basic'
 import type { ToolCallRecord } from '../types'
 
-const props = defineProps<{
-  /** 工具调用记录列表（按时间顺序） */
-  calls: ToolCallRecord[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    /** 工具调用记录列表（按时间顺序） */
+    calls: ToolCallRecord[]
+    /** 嵌入模式：去掉卡片外观与自带组标题，由外层(如 ProcessSection)统一控制折叠 */
+    embedded?: boolean
+  }>(),
+  {
+    embedded: false,
+  },
+)
 
 // 整组是否折叠：多条默认折叠，单条默认展开
 const groupCollapsed = ref(props.calls.length > 1)
@@ -165,9 +172,9 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
 </script>
 
 <template>
-  <div v-if="calls.length > 0" class="tool-group">
-    <!-- 组标题：54px -->
-    <div class="group-header" @click="toggleGroup">
+  <div v-if="calls.length > 0" class="tool-group" :class="{ embedded }">
+    <!-- 组标题：54px（嵌入模式下由外层提供标题，隐藏） -->
+    <div v-if="!embedded" class="group-header" @click="toggleGroup">
       <span class="group-icon"><Icon name="tool" :size="16" /></span>
       <span class="group-title">
         {{ calls.length === 1 ? '使用了工具' : `使用了 ${calls.length} 个工具` }}
@@ -176,8 +183,8 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
       <span class="group-arrow"><Icon :name="groupCollapsed ? 'chevron-right' : 'chevron-down'" :size="12" /></span>
     </div>
 
-    <!-- 工具列表：每条 54px -->
-    <div v-show="!groupCollapsed" ref="groupBodyRef" class="group-body">
+    <!-- 工具列表：每条 54px（嵌入模式下始终展示，折叠由外层控制） -->
+    <div v-show="embedded || !groupCollapsed" ref="groupBodyRef" class="group-body">
       <div
         v-for="(c, idx) in calls"
         :key="c.call_id"
@@ -247,6 +254,27 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   overflow: hidden;
   font-size: 13px;
+}
+
+/* 嵌入模式：无卡片外观，融入文档流（ProcessSection 内使用） */
+.tool-group.embedded {
+  margin: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.tool-group.embedded .group-body {
+  border-top: none;
+}
+
+.tool-group.embedded .tool-item {
+  height: 30px;
+  max-height: 30px;
+  padding: 0 6px;
+  border-bottom: none;
+  border-radius: var(--radius-sm, 8px);
 }
 
 /* 组标题：38px */

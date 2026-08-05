@@ -6,8 +6,7 @@
  * 只负责「一段助手输出的内容呈现」,不含气泡外壳与交互菜单。
  */
 import MarkdownRender from 'markstream-vue'
-import ReasoningBox from '../ReasoningBox.vue'
-import ToolCallGroup from '../ToolCallGroup.vue'
+import ProcessSection from './ProcessSection.vue'
 import SubAgentMiniCard from './SubAgentMiniCard.vue'
 import type { Message } from '../../types'
 import type { BubbleMeta } from '../../composables/chat/useChatStreaming'
@@ -21,16 +20,12 @@ defineProps<{
 </script>
 
 <template>
-  <!-- 推理折叠框:仅在存在 reasoning 时渲染 -->
-  <ReasoningBox
-    v-if="meta?.reasoning"
-    :content="meta.reasoning"
-    :is-thinking="meta.isThinking"
-  />
-  <!-- 工具调用提示组:仅在存在 tool calls 时渲染 -->
-  <ToolCallGroup
-    v-if="meta?.toolCalls.length"
-    :calls="meta.toolCalls"
+  <!-- 推理 + 工具调用合并区块：单行摘要标题，进行中展开、完成后自动折叠 -->
+  <ProcessSection
+    v-if="meta?.reasoning || meta?.toolCalls.length"
+    :reasoning="meta?.reasoning ?? ''"
+    :is-thinking="meta?.isThinking ?? false"
+    :tool-calls="meta?.toolCalls ?? []"
   />
     <!-- 子 agent 过程卡片：主视图不作大量片段展开，仅一张紧凑可点卡片，点击进入子代理视图 -->
     <div v-if="meta?.subAgents.length" class="msg-subagents">
@@ -56,10 +51,11 @@ defineProps<{
 </template>
 
 <style scoped>
-/* 子 agent 过程卡片区:位于工具调用组与正文之间 */
+/* 子 agent 过程卡片区:位于过程区块与正文之间 */
 .msg-subagents {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 </style>
