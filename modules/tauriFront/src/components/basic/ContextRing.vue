@@ -40,23 +40,25 @@ const color = computed(() => {
   return '#43a047' // 绿
 })
 
-// SVG 几何参数：viewBox 36×36，圆心 (18,18)，半径 14，描边 4
-const R = 14
-const CIRCUMFERENCE = 2 * Math.PI * R
+// SVG 几何参数：viewBox 36×36，圆心 (18,18)，半径 13.75，描边 6（更粗的环）
+// circle 设 pathLength="100"，dasharray 直接按百分比映射（如 30% → 30），
+// 避免自行计算周长带来的偏差；linecap 用 butt 保证弧长与真实占比严格一致
+// （round 端帽会在两端各外扩 strokeWidth/2，小占比时视觉上明显偏大）
+const R = 13.75
+const STROKE = 6
 const trackStyle = computed(() => ({
   stroke: 'var(--border, rgba(0,0,0,0.1))',
-  strokeWidth: 4,
+  strokeWidth: STROKE,
   fill: 'none',
 }))
 const progressStyle = computed(() => ({
   stroke: color.value,
-  strokeWidth: 4,
+  strokeWidth: STROKE,
   fill: 'none',
-  strokeLinecap: 'round' as const,
-  strokeDasharray: `${(ratio.value * CIRCUMFERENCE).toFixed(2)} ${CIRCUMFERENCE.toFixed(2)}`,
+  strokeLinecap: 'butt' as const,
+  strokeDasharray: `${(ratio.value * 100).toFixed(2)} 100`,
   // 从顶部 12 点开始顺时针：rotate(-90) 围绕圆心 (18,18)
   transform: 'rotate(-90 18 18)',
-  transition: 'stroke-dasharray 0.3s ease, stroke 0.3s ease',
 }))
 
 const sizeStyle = computed(() => {
@@ -68,8 +70,8 @@ const sizeStyle = computed(() => {
 <template>
   <span class="context-ring" :style="sizeStyle" aria-hidden="true">
     <svg viewBox="0 0 36 36" class="context-ring-svg">
-      <circle cx="18" cy="18" :r="R" v-bind="trackStyle" />
-      <circle cx="18" cy="18" :r="R" v-bind="progressStyle" />
+      <circle cx="18" cy="18" :r="R" pathLength="100" v-bind="trackStyle" />
+      <circle cx="18" cy="18" :r="R" pathLength="100" v-bind="progressStyle" />
     </svg>
   </span>
 </template>
@@ -87,5 +89,10 @@ const sizeStyle = computed(() => {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+/* transition 必须走 CSS 而非 SVG 属性才能生效 */
+.context-ring-svg circle:last-child {
+  transition: stroke-dasharray 0.3s ease, stroke 0.3s ease;
 }
 </style>
