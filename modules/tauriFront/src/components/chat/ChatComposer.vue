@@ -30,8 +30,6 @@ const {
   } = store.core
 const { quoteChips, scrollToMessage, removeQuote } = store.menu
   const { compressBadgeInfo, compressSavedInfo, compressionSheetOpen } = store.compression
-  const { versioning } = store
-  const { sheetOpen: versionSheetOpen } = versioning
   // 发送编排已抽到 useChatSend(core/streaming/menu/autoscroll 组合),
   // 输入栏只保留 UI:渲染按钮状态 + 触发发送/停止。
   const { send, stopGenerating } = store.send
@@ -45,11 +43,11 @@ watch(input, (val, old) => {
     const ta = textareaRef.value
     if (!ta) return
     ta.style.height = 'auto'
-    const target = Math.min(ta.scrollHeight, 120)
+    const target = Math.min(ta.scrollHeight, 96)
     ta.style.height = target + 'px'
     void ta.offsetHeight
     animate(ta, {
-      height: '56px',
+      height: '44px',
       duration: 200,
       ease: 'out(3)',
     })
@@ -67,8 +65,8 @@ function autoResize() {
   const naturalHeight = ta.scrollHeight
   // 立即恢复当前高度,避免视觉跳变
   ta.style.height = currentHeight + 'px'
-  // 目标高度:不低于 56px(两行),不超过 120px
-  const targetHeight = Math.min(Math.max(naturalHeight, 56), 120)
+  // 目标高度:不低于 44px(两行),不超过 96px
+  const targetHeight = Math.min(Math.max(naturalHeight, 44), 96)
   // 强制 reflow,确保 animejs 起点正确
   void ta.offsetHeight
   animate(ta, {
@@ -135,7 +133,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 <template>
   <!-- 图一风格底部输入栏:卡片式复合输入框 -->
-  <div class="composer-kimi" :class="{ focused: composerFocused }">
+  <div class="composer" :class="{ focused: composerFocused }">
     <!-- 引用块区 -->
     <div v-if="quoteChips.length" class="quote-chips">
       <div
@@ -144,7 +142,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
         class="quote-chip"
         @click="scrollToMessage(q.messageId)"
       >
-        <Icon name="quote" :size="14" />
+        <Icon name="quote" :size="12" />
         <span class="quote-chip-text">{{ q.snippet }}</span>
         <button
           type="button"
@@ -152,7 +150,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           title="移除引用"
           @click.stop="removeQuote(q.messageId)"
         >
-          <Icon name="close" :size="14" />
+          <Icon name="close" :size="12" />
         </button>
       </div>
     </div>
@@ -185,7 +183,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           title="添加图片和文件（Ctrl+U）"
           @click="toolSheetOpen = true"
         >
-          <Icon name="attachment" :size="14" />
+          <Icon name="attachment" :size="12" />
           <span>添加图片和文件</span>
           <kbd class="attach-pill-kbd">Ctrl U</kbd>
         </button>
@@ -193,8 +191,8 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 
       <!-- 底部操作栏:+ 按钮 + meta pills + 右侧发送按钮 -->
       <div class="composer-actions">
-        <IconButton size="md" container title="附件" @click="toolSheetOpen = true">
-          <Icon name="plus" :size="20" />
+        <IconButton size="sm" container title="附件" @click="toolSheetOpen = true">
+          <Icon name="plus" :size="16" />
         </IconButton>
         <!-- 推理设置:点击弹出 Menu 选择思考开关与 reasoning_effort 等级 -->
         <button
@@ -205,9 +203,9 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           title="推理设置（思考开关 / 推理强度）"
           @click="reasoningMenuVisible = !reasoningMenuVisible"
         >
-          <Icon name="thinking" :size="14" />
+          <Icon name="thinking" :size="12" />
           <span class="meta-pill-text">{{ reasoningLabel }}</span>
-          <Icon :name="reasoningMenuVisible ? 'chevron-down' : 'chevron-up'" :size="13" />
+          <Icon :name="reasoningMenuVisible ? 'chevron-down' : 'chevron-up'" :size="11" />
         </button>
         <button
           type="button"
@@ -215,7 +213,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           :title="workingDir ?? '未设置'"
           @click="workingDirSheetOpen = true"
         >
-          <Icon name="folder" :size="14" />
+          <Icon name="folder" :size="12" />
           <span class="meta-pill-text meta-pill-text--ellipsis">
             {{ workingDir ? workingDir : '默认工作区' }}
           </span>
@@ -227,7 +225,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
             class="meta-pill meta-pill--queued"
             :title="`${queuedCount} 条消息将在 AI 的下一个回复轮次前插入`"
           >
-            <Icon name="clock" :size="14" />
+            <Icon name="clock" :size="12" />
             <span class="meta-pill-text">已排队 {{ queuedCount }} 条</span>
           </button>
           <!-- 压缩状态徽章:仅当当前会话已有压缩状态时显示,点击跳到压缩浮窗 -->
@@ -238,7 +236,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
               :title="`当前会话已压缩 ${compressBadgeInfo.count} 条消息（第 ${compressBadgeInfo.level} 级 · ${compressBadgeInfo.actionCount} 条决策）${compressSavedInfo && compressSavedInfo.savedTokens > 0 ? ` · 节省约 ${compressSavedInfo.savedTokens} tokens` : ''} · 点击查看`"
               @click="compressionSheetOpen = true"
             >
-              <Icon name="merge" :size="14" />
+              <Icon name="merge" :size="12" />
                 <span class="meta-pill-text">已压缩 {{ compressBadgeInfo.count }}<template v-if="compressBadgeInfo.level > 0">·L{{ compressBadgeInfo.level }}</template><template v-if="compressSavedInfo && compressSavedInfo.savedTokens > 0">·↓{{ compressSavedInfo.savedTokens }}</template></span>
               </button>
         <!-- 命令会话折叠开关:展开/收起底部 ShellSessionBar(实时展示 AI 的 shell 工作状态) -->
@@ -249,24 +247,13 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           :title="shellBarExpanded ? '折叠命令会话栏' : '展开命令会话栏'"
           @click="toggleShellBar()"
         >
-          <Icon name="keyboard" :size="14" />
+          <Icon name="keyboard" :size="12" />
           <span class="meta-pill-text">
             命令会话
             <span v-if="shellActiveCount > 0" class="meta-pill-badge">{{ shellActiveCount }}</span>
           </span>
-            <Icon :name="shellBarExpanded ? 'chevron-down' : 'chevron-up'" :size="13" />
+            <Icon :name="shellBarExpanded ? 'chevron-down' : 'chevron-up'" :size="11" />
           </button>
-          <!-- 会话版本管理入口:分支 / 临时版本 / 回溯 / 撤回 -->
-          <button
-            type="button"
-            class="meta-pill meta-pill--ver"
-            title="会话版本管理（分支 / 临时版本 / 回溯 / 撤回）"
-              @click="versionSheetOpen = true"
-          >
-            <Icon name="history" :size="14" />
-              <span class="meta-pill-text">版本</span>
-          </button>
-
           <!-- 右侧占位:把发送/停止按钮推到操作栏最右 -->
           <div class="composer-actions-spacer" />
 
@@ -274,25 +261,25 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           <Button
             v-if="sending"
             icon-only
-            size="md"
+            size="sm"
             variant="danger"
             class="composer-send"
             title="停止生成"
             @click="stopGenerating"
           >
-            <template #icon><Icon name="stop" :size="18" /></template>
+            <template #icon><Icon name="stop" :size="16" /></template>
           </Button>
           <Button
             v-else
             icon-only
-            size="md"
+            size="sm"
             :variant="input.trim() ? 'primary' : 'normal'"
             :disabled="!input.trim()"
             class="composer-send"
             title="发送（Enter）"
             @click="send"
           >
-            <template #icon><Icon name="arrow-up" :size="18" /></template>
+            <template #icon><Icon name="arrow-up" :size="16" /></template>
           </Button>
         </div>
     </div>
@@ -314,12 +301,12 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 .composer-input {
   width: 100%;
   resize: none;
-  min-height: 56px;
-  max-height: 120px;
-  padding: 6px 8px 4px;
+  min-height: 44px;
+  max-height: 96px;
+  padding: 4px 6px 2px;
   font-family: inherit;
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.45;
   color: var(--text);
   background: transparent;
   border: none;
@@ -339,17 +326,17 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 .quote-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 4px 8px;
+  gap: 4px;
+  padding: 0 2px 6px;
 }
 
 .quote-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   max-width: 280px;
-  padding: 4px 8px 4px 10px;
-  font-size: 12px;
+  padding: 3px 8px 3px 9px;
+  font-size: 11px;
   color: var(--text);
   background: color-mix(in srgb, var(--primary) 8%, var(--card));
   border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
@@ -373,8 +360,8 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border: none;
   border-radius: 50%;
   background: transparent;
@@ -390,20 +377,20 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 /* ---------- composer 升级 ---------- */
 /* focus 上抬:用 transform 避免 layout reflow,配合 transition 平滑 */
-.composer-kimi {
+.composer {
   transition: transform 0.18s ease;
 }
 
-.composer-kimi.focused {
+.composer.focused {
   transform: translateY(-2px);
 }
 
-/* composer-container 包裹层:亮色浅灰,暗色用 --card-2 */
+/* composer-container 包裹层:亮色浅灰,暗色用 --card-2;紧凑排版 */
 .composer-container {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px 8px;
+  gap: 4px;
+  padding: 8px 10px 6px;
   background: var(--card-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -414,7 +401,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
   background: #f8f9fa;
 }
 
-.composer-kimi.focused .composer-container {
+.composer.focused .composer-container {
   border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
 }
@@ -429,9 +416,9 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 .attach-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  font-size: 12px;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
   color: var(--muted);
   background: var(--card);
   border: 1px solid var(--border);
@@ -447,8 +434,8 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 }
 
 .attach-pill-kbd {
-  padding: 1px 6px;
-  font-size: 10px;
+  padding: 1px 5px;
+  font-size: 9px;
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
@@ -461,7 +448,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 .composer-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
   padding: 0 2px;
 }
@@ -491,9 +478,9 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 .meta-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 12px;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   background: transparent;
@@ -510,7 +497,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 }
 
 .meta-pill--wd {
-  max-width: 240px;
+  max-width: 200px;
 }
 
 /* 压缩状态徽章:仅当会话已压缩时显示,配色用 success 收敛色 */
@@ -558,23 +545,18 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--success);
   background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
-  /* 会话版本管理入口:primary 收敛色,与面板开关同风格 */
-  .meta-pill--ver:hover {
-    color: var(--primary);
-    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
-    background: color-mix(in srgb, var(--primary) 8%, transparent);
-  }
+  /* 会话版本管理入口已移除(composer 不再提供入口) */
 
 .meta-pill-text {
   overflow: hidden;
@@ -583,6 +565,6 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 }
 
 .meta-pill-text--ellipsis {
-  max-width: 200px;
+  max-width: 180px;
 }
 </style>

@@ -20,6 +20,7 @@ import { provide, onUnmounted } from 'vue'
 import ShellSessionBar from './ShellSessionBar.vue'
 import ChatContextPanel from './ChatContextPanel.vue'
 import { Menu, Dialog } from './basic'
+import GradualBlur from './basic/GradualBlur.vue'
 import ChatHome from './chat/ChatHome.vue'
 import ChatTopBar from './chat/ChatTopBar.vue'
 import SubAgentWindow from './SubAgentWindow.vue'
@@ -140,6 +141,17 @@ const { confirmState: versionConfirmState, closeConfirm } = versioning
   <div class="chat-window">
     <!-- 聊天主区(侧栏已提升为 App 级 SideNav 抽屉) -->
       <section class="chat-main">
+        <!-- 顶部渐进模糊层(vue-bits gradual-blur 移植):消息滚入顶部时渐进虚化;
+             层级:chat-topbar / composer 之上,普通消息流之下 -->
+        <GradualBlur
+          v-if="!subAgentId"
+          position="top"
+          height="96px"
+          :strength="2.5"
+          :div-count="5"
+          :z-index="20"
+          curve="bezier"
+        />
         <!-- 顶部悬浮顶栏：标题(默认态可点击修改；子代理态显示 `[ 父标题 ] / [ 子代理标题 ]` 面包屑)
              + 收起面板 + 上下文用量 ring(hover 浮出文字) -->
         <ChatTopBar
@@ -166,18 +178,18 @@ const { confirmState: versionConfirmState, closeConfirm } = versioning
           <SubAgentWindow :session-id="subAgentId ?? ''" embedded />
         </div>
 
-        <!-- Kimi 风格底部输入栏(子代理视图下隐藏,子代理由后端驱动) -->
-        <ChatComposer v-if="!subAgentId" />
-
-        <!-- main-content 底栏:命令会话便签(可折叠,实时展示 AI 的 shell_session_* 工作状态;
-             折叠按钮位于 composer-meta,此处为受控组件) -->
-        <ShellSessionBar
-          v-if="!subAgentId"
-          :conversation-id="activeId"
-          :expanded="shellBarExpanded"
-          @update:expanded="(v) => (shellBarExpanded = v)"
-          @running-count="(n) => (shellActiveCount = n)"
-        />
+        <!-- 底部悬浮层:命令会话便签栏(输入栏上方) + Kimi 风格输入栏 -->
+        <div class="chat-bottom">
+          <ShellSessionBar
+            v-if="!subAgentId"
+            :conversation-id="activeId"
+            :expanded="shellBarExpanded"
+            @update:expanded="(v) => (shellBarExpanded = v)"
+            @running-count="(n) => (shellActiveCount = n)"
+          />
+          <!-- Kimi 风格底部输入栏(子代理视图下隐藏,子代理由后端驱动) -->
+          <ChatComposer v-if="!subAgentId" />
+        </div>
       </section>
 
       <ChatContextPanel
