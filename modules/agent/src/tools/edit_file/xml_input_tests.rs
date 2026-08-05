@@ -54,7 +54,7 @@ fn xml_arguments_round_trip_to_typed_args() {
     /// 新格式 `<!_KEY_>`（推荐）：provider 链路同样可用。
     #[test]
     fn xml_new_style_round_trip_to_typed_args() {
-        let wire = r#"{"name":"edit_file","arguments":"<!_PATH_>src/main.rs</!_PATH_><!_EDITS_><!_ITEM_><!_START_LINE_>3</!_START_LINE_><!_TEXT_>fn main() {}</!_TEXT_></!_ITEM_></!_EDITS_>"}#;
+        let wire = r#"{"name":"edit_file","arguments":"<!_PATH_>src/main.rs</!_PATH_><!_EDITS_><!_ITEM_><!_START_LINE_>3</!_START_LINE_><!_TEXT_>fn main() {}</!_TEXT_></!_ITEM_></!_EDITS_>"}"#;
         let function: Function = serde_json::from_str(wire).unwrap();
         assert_eq!(function.name, "edit_file");
         assert_eq!(
@@ -68,4 +68,3 @@ fn xml_arguments_round_trip_to_typed_args() {
         assert_eq!(args.path, "src/main.rs");
         assert_eq!(args.edits[0].start_line, Some(3));
     }
-}
