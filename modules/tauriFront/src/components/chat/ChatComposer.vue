@@ -427,7 +427,7 @@ async function onModelSelect(item: MenuItemOption) {
 }
 
 [data-theme='light'] .composer-container {
-  background: #f8f9fa;
+  background: var(--card-2);
 }
 
 .composer.focused .composer-container {
