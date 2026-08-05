@@ -4,8 +4,9 @@
  *
  * 定位：替代旧版「中央品牌 logo」的纯装饰空态，改为「功能性引导」：
  *  1. 问候 + 已连接模型徽标（顶栏已去掉品牌，这里也不再堆 EffiBuddy 大字）
- *  2. 示例提示卡：点击一键发送（走 useChatSend.sendPrompt，与输入栏共用发送编排）
- *  3. 功能导航卡：点击直达 待办 / 插件 / 技能 / ClawHub / 自动化 / 语音转写 / 设置
+ *  2. 初始项目与分支选择：选工作区目录（常用工作区快捷切换），实时展示当前分支
+ *  3. 示例提示卡：点击一键发送（走 useChatSend.sendPrompt，与输入栏共用发送编排）
+ *  4. 功能导航卡：点击直达 待办 / 插件 / 技能 / ClawHub / 自动化 / 语音转写 / 设置
  *
  * 动作解耦：功能导航经 appActions 全局动作中枢（App.vue 注册），
  * 空态卡片不需要知道面板开关的内部实现。
@@ -17,7 +18,8 @@
  *  - 卡片网格 minmax(min(x,100%)) 保证窄容器不横向溢出；
  *  - 矮窗口 / 窄窗口各有一组紧凑媒体查询。
  */
-import { inject } from 'vue'
+import { inject, ref, onMounted, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '../basic'
 import { useAppActions } from '../../composables/appActions'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
@@ -25,7 +27,57 @@ import { CHAT_STORE_KEY } from '../../composables/chat/store'
 const store = inject(CHAT_STORE_KEY)!
 const { sendPrompt } = store.send
 const { activeModelInfo } = store.core
+const {
+  workingDir,
+  activeId,
+  pickWorkingDir,
+  favoriteWorkspaces,
+  loadFavoriteWorkspaces,
+  applyFavoriteWorkspace,
+} = store.core
 const { run: runAction } = useAppActions()
+
+// ---------- 初始项目与分支：选了工作区后展示该目录的 git 分支状态 ----------
+interface GitLiteInfo {
+  is_repo: boolean
+  branch: string | null
+  dirty: boolean
+}
+const gitInfo = ref<GitLiteInfo | null>(null)
+const gitLoading = ref(false)
+
+/** 拉取工作区 git 状态（需要真实会话 id，__new_chat__ 哨兵不可用） */
+async function refreshGitBranch() {
+  const id = activeId.value
+  if (!id || id.startsWith('__') || !workingDir.value) {
+    gitInfo.value = null
+    return
+  }
+  gitLoading.value = true
+  try {
+    const s = await invoke<GitLiteInfo>('git_context_status', {
+      scope: 'workspace',
+      conversationId: id,
+    })
+    gitInfo.value = { is_repo: s.is_repo, branch: s.branch, dirty: s.dirty }
+  } catch {
+    gitInfo.value = null
+  } finally {
+    gitLoading.value = false
+  }
+}
+
+watch([workingDir, activeId], () => void refreshGitBranch())
+onMounted(() => {
+  void loadFavoriteWorkspaces()
+  void refreshGitBranch()
+})
+
+/** 路径末段作为常用工作区快捷按钮的短名 */
+function dirShortName(path: string): string {
+  const seg = path.split(/[\\/]/).filter(Boolean).pop()
+  return seg || path
+}
 
 /** 示例提示：点击即一键发送 */
 const prompts = [
@@ -80,6 +132,66 @@ const features = [
         <div v-if="activeModelInfo?.name" class="home-model" :title="activeModelInfo.name">
           <span class="home-model-dot"></span>
           <span class="home-model-name">{{ activeModelInfo.name }}</span>
+        </div>
+      </div>
+
+      <!-- 初始项目与分支选择：项目目录 + 常用工作区快捷切换 + 当前分支展示 -->
+      <div class="home-section">
+        <div class="home-section-label">初始项目与分支</div>
+        <div class="project-card">
+          <button
+            type="button"
+            class="project-row"
+            :title="workingDir ?? '选择项目目录'"
+            @click="pickWorkingDir()"
+          >
+            <span class="project-row-icon"><Icon name="folder" :size="16" /></span>
+            <span class="project-row-body">
+              <span class="project-row-title">
+                {{ workingDir ?? '选择项目目录' }}
+              </span>
+              <span class="project-row-desc">
+                {{ workingDir ? '点击更换项目' : '未选择，使用默认工作区' }}
+              </span>
+            </span>
+            <span class="project-row-branch">
+              <template v-if="!workingDir">
+                <span class="branch-hint">选项目后可查看分支</span>
+              </template>
+              <template v-else-if="gitLoading">
+                <Icon name="loader" :size="13" class="branch-spin" />
+              </template>
+              <template v-else-if="gitInfo?.is_repo">
+                <Icon name="branch" :size="13" />
+                <span class="branch-name">{{ gitInfo.branch ?? 'HEAD' }}</span>
+                <span
+                  v-if="gitInfo.dirty"
+                  class="branch-dirty"
+                  title="有未提交改动"
+                ></span>
+              </template>
+              <template v-else>
+                <span class="branch-hint">非 git 仓库</span>
+              </template>
+            </span>
+            <span class="project-row-action"><Icon name="chevron-right" :size="14" /></span>
+          </button>
+
+          <!-- 常用工作区快捷切换 -->
+          <div v-if="favoriteWorkspaces.length" class="project-favs">
+            <button
+              v-for="w in favoriteWorkspaces"
+              :key="w.id"
+              type="button"
+              class="project-fav"
+              :class="{ 'project-fav--active': workingDir === w.path }"
+              :title="w.path"
+              @click="applyFavoriteWorkspace(w.path)"
+            >
+              <Icon name="folder" :size="11" />
+              <span class="project-fav-name">{{ dirShortName(w.path) }}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -270,12 +382,180 @@ const features = [
 .home-section:nth-of-type(3) {
   animation-delay: 0.1s;
 }
+.home-section:nth-of-type(4) {
+  animation-delay: 0.15s;
+}
 
 .home-section-label {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.5px;
   color: var(--muted);
+}
+
+/* ===== 初始项目与分支 ===== */
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.project-row:hover {
+  background: var(--card-2);
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+}
+
+.project-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.project-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.project-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row-desc {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 分支展示区：图标 + 分支名 + dirty 圆点 */
+.project-row-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 160px;
+  padding: 3px 9px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.branch-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-hint {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.branch-dirty {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.branch-spin :deep(svg),
+.branch-spin svg {
+  animation: branch-rotate 1s linear infinite;
+}
+
+@keyframes branch-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.project-row-action {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* 常用工作区快捷按钮行 */
+.project-favs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+
+.project-fav {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.project-fav:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+}
+
+.project-fav--active {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.project-fav-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===== 示例提示卡 ===== */

@@ -16,6 +16,7 @@
  * - 选中态背景：CSS background-color 过渡
  * - 自动归类中：loader 图标 CSS rotate 无限旋转
  */
+import { ref, computed, onUnmounted } from 'vue'
 import { Icon } from './basic'
 import { useAnimeTransition } from '../composables/useAnimeTransition'
 import type { ConversationMeta } from '../types'
@@ -73,6 +74,50 @@ function onItemClick() {
   }
 }
 
+// ---------- hover 悬浮提示卡（Teleport 到 body，避免被导航栏 overflow 裁切） ----------
+const tooltip = ref<{ x: number; y: number } | null>(null)
+let tooltipTimer: number | null = null
+
+function onItemMouseEnter(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement
+  if (!target) return
+  if (tooltipTimer) window.clearTimeout(tooltipTimer)
+  // 短暂延迟避免扫过列表时频繁闪现
+  tooltipTimer = window.setTimeout(() => {
+    const rect = target.getBoundingClientRect()
+    tooltip.value = {
+      x: rect.right + 10,
+      y: Math.max(8, Math.min(rect.top - 4, window.innerHeight - 120)),
+    }
+  }, 350)
+}
+
+function onItemMouseLeave() {
+  if (tooltipTimer) {
+    window.clearTimeout(tooltipTimer)
+    tooltipTimer = null
+  }
+  tooltip.value = null
+}
+
+onUnmounted(() => {
+  if (tooltipTimer) window.clearTimeout(tooltipTimer)
+})
+
+// ---------- 状态 icon：蓝色完成(当前会话) / 灰色已阅 / 绿色环状旋转(进行中) ----------
+const statusIcon = computed<{ name: string; cls: string }>(() => {
+  if (props.poolStatus === 'in_progress' || props.classifying) {
+    return { name: 'loader', cls: 'st-running' }
+  }
+  if (props.poolStatus === 'waiting') {
+    return { name: 'clock', cls: 'st-waiting' }
+  }
+  if (props.active) {
+    return { name: 'check', cls: 'st-done' }
+  }
+  return { name: 'chat', cls: 'st-read' }
+})
+
 function onMoreClick(ev: MouseEvent) {
   ev.stopPropagation()
   emit('more', ev)
@@ -109,6 +154,8 @@ function formatRelativeTime(ts: number): string {
       classifying: classifying,
     }"
     @click="onItemClick"
+    @mouseenter="onItemMouseEnter"
+    @mouseleave="onItemMouseLeave"
     @pointerdown="emit('pointerdown', $event)"
     @pointerup="emit('pointerup')"
     @pointerleave="emit('pointerleave')"
@@ -124,13 +171,18 @@ function formatRelativeTime(ts: number): string {
       </span>
     </Transition>
 
-    <!-- 置顶标记 -->
-    <span v-if="showPin" class="hr-item-pin"><Icon name="pin" :size="13" /></span>
+    <!-- 状态 icon：蓝色完成 / 灰色已阅 / 绿色环状旋转（进行中） -->
+    <span class="hr-item-status-icon" :class="statusIcon.cls">
+      <Icon :name="statusIcon.name" :size="14" />
+    </span>
+
+    <!-- 置顶标记：固定项用 pin -->
+    <span v-if="showPin" class="hr-item-pin"><Icon name="pin" :size="12" /></span>
 
       <div class="hr-item-main">
         <div class="hr-item-title">{{ displayTitle }}</div>
         <div class="hr-item-meta">
-          {{ conv.message_count }} 条 · {{ formatRelativeTime(conv.updated_at) }}
+          {{ formatRelativeTime(conv.updated_at) }}
           <span
             v-if="poolStatus"
             class="hr-item-status"
@@ -166,6 +218,26 @@ function formatRelativeTime(ts: number): string {
         <Icon name="more" :size="14" />
       </button>
     </div>
+
+    <!-- hover 悬浮提示卡：完整标题 + 项目路径 + 元信息（Teleport 到 body 避免裁切） -->
+    <Teleport to="body">
+      <div
+        v-if="tooltip"
+        class="hr-item-tooltip"
+        :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }"
+      >
+        <div class="hr-item-tooltip-title">{{ conv.title?.trim() || '新对话' }}</div>
+        <div v-if="conv.working_dir" class="hr-item-tooltip-path">
+          <Icon name="folder" :size="12" />
+          <span>{{ conv.working_dir }}</span>
+        </div>
+        <div class="hr-item-tooltip-meta">
+          {{ conv.message_count }} 条消息 · {{ formatRelativeTime(conv.updated_at) }}
+          <template v-if="poolStatus === 'in_progress'"> · 进行中</template>
+          <template v-else-if="poolStatus === 'waiting'"> · 等待中</template>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -173,8 +245,10 @@ function formatRelativeTime(ts: number): string {
 .hr-item {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 9px 10px;
+  gap: 7px;
+  /* 轻量化布局：行高适中，上下留白有呼吸感 */
+  padding: 7px 10px;
+  margin: 1px 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
@@ -192,6 +266,7 @@ function formatRelativeTime(ts: number): string {
 
 .hr-item.active .hr-item-title {
   color: var(--primary);
+  font-size: 11px;
 }
 
 /* 多选模式下的选中态 */
@@ -251,15 +326,119 @@ function formatRelativeTime(ts: number): string {
   flex-shrink: 0;
 }
 
-/* 主体 */
-.hr-item-main {
-  flex: 1;
+/* 状态 icon：蓝色完成 / 灰色已阅 / 绿色环状旋转 */
+.hr-item-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* 蓝色完成（当前会话） */
+.hr-item-status-icon.st-done {
+  color: #4a7eff;
+}
+
+/* 灰色已阅（默认） */
+.hr-item-status-icon.st-read {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+/* 等待中 */
+.hr-item-status-icon.st-waiting {
+  color: var(--warn);
+}
+
+/* 正在进行：绿色环状箭头圆形旋转 */
+.hr-item-status-icon.st-running {
+  color: var(--success);
+}
+
+.hr-item-status-icon.st-running :deep(svg) {
+  animation: hr-item-status-spin 1s linear infinite;
+}
+
+@keyframes hr-item-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* hover 悬浮提示卡：浅灰背景 / 轻圆角 / 无明显边框 */
+.hr-item-tooltip {
+  position: fixed;
+  z-index: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 320px;
+  padding: 10px 12px;
+  background: #f5f5f5;
+  color: #1d1d1f;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+  animation: hr-item-tooltip-in 0.16s var(--ease-standard) both;
+}
+
+@keyframes hr-item-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hr-item-tooltip-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.hr-item-tooltip-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #6e6e73;
   min-width: 0;
 }
 
+.hr-item-tooltip-path span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hr-item-tooltip-meta {
+  font-size: 11px;
+  color: #8e8e93;
+}
+
+/* 主体：标题 + 元信息横向排布，两端对齐 */
+.hr-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .hr-item-title {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 500;
+  line-height: 1.4;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -269,7 +448,13 @@ function formatRelativeTime(ts: number): string {
 .hr-item-meta {
   font-size: 11px;
   color: var(--muted);
-  margin-top: 2px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 操作按钮显示时隐藏 meta，标题撑满整行（操作按钮占据原 meta 区域） */
+.hr-item:hover .hr-item-meta {
+  display: none;
 }
 
 /* 交流池运行状态 badge */
@@ -278,7 +463,7 @@ function formatRelativeTime(ts: number): string {
   align-items: center;
   gap: 4px;
   margin-left: 6px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -348,8 +533,8 @@ function formatRelativeTime(ts: number): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);

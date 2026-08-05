@@ -499,11 +499,11 @@ onBeforeUnmount(() => {
 
 .tab-track {
   display: inline-flex;
-  align-items: stretch;
+  align-items: center;
   height: 100%;
 }
 
-/* ---------- 单个 tab ---------- */
+/* ---------- 单个 tab：紧凑高度 + margin-top/bottom，胶囊式背景区分 ---------- */
 .tab-item {
   position: relative;
   display: inline-flex;
@@ -512,15 +512,17 @@ onBeforeUnmount(() => {
   max-width: 200px;
   min-width: 0;
   padding: 0 10px;
-  height: 100%;
+  height: 30px;
+  margin: 7px 3px;
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font-family: inherit;
   font-size: var(--fs-base);
   line-height: 1;
   white-space: nowrap;
+  text-decoration: none;
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
@@ -529,15 +531,15 @@ onBeforeUnmount(() => {
 }
 
 .tab-item:hover {
-  background: var(--card);
+  background: var(--card-2);
   color: var(--text);
 }
 
-/* 激活页签：背景与主内容区同色，视觉上“融入”内容层，
-   与暗色页签栏形成明确的层级落差 */
+/* 激活页签：用 background-color 明确区分激活状态（取消底部 underline 设计） */
 .tab-item.active {
-  background: var(--bg);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
   color: var(--text);
+  font-weight: 500;
 }
 
 .tab-item.error {
@@ -622,19 +624,9 @@ onBeforeUnmount(() => {
   padding-right: 12px;
 }
 
-/* ---------- 底部高亮指示器：压住页签栏底部分割线 ---------- */
+/* ---------- 底部高亮指示器：已取消 underline 设计，改用激活态背景色区分 ---------- */
 .tab-indicator {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  height: 2px;
-  width: 0;
-  background: var(--primary);
-  border-radius: 1px 1px 0 0;
-  pointer-events: none;
-  transition: opacity var(--duration-fast) var(--ease-standard);
-  z-index: 2;
-  will-change: transform, width, left;
+  display: none;
 }
 
 /* ---------- 重命名输入框 ---------- */

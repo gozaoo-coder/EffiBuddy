@@ -38,6 +38,9 @@ pub struct ConversationMeta {
     pub updated_at: u64,
     pub message_count: usize,
     pub pinned: bool,
+    /// 会话级工作区路径（hover 提示卡展示项目路径用），旧数据无此字段时为 None
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// 搜索命中结果
@@ -173,6 +176,7 @@ impl ConversationStore {
                 created_at: conv.created_at,
                 updated_at: conv.updated_at,
                 message_count: conv.messages.len(),
+                working_dir: conv.working_dir.clone(),
             });
         }
         // 排序：置顶在前 → 组内按 pinned_at/created_at 降序 → 未置顶按 updated_at 降序

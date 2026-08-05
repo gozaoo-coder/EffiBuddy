@@ -129,9 +129,10 @@ const titleText = computed(() => {
 </template>
 
 <style scoped>
-/* 无卡片外观：以文档流形式融入 assistant 回复 */
+/* 无卡片外观：以文档流形式融入 assistant 回复；
+   左侧缩进与正文形成明确的层级区分 */
 .process-section {
-  margin: 0 0 6px;
+  padding-left: 2px;
   font-size: 13px;
   color: var(--muted, #888);
 }
@@ -140,9 +141,9 @@ const titleText = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  padding: 0 6px;
-  margin-left: -6px;
+  height: 28px;
+  padding: 0 8px;
+  margin-left: -8px;
   border-radius: var(--radius-sm, 8px);
   cursor: pointer;
   user-select: none;
@@ -203,14 +204,14 @@ const titleText = computed(() => {
   color: var(--muted, #888);
 }
 
-/* 展开内容：左侧细线标识层级，缩进紧凑 */
+/* 展开内容：左侧细线标识层级，缩进与上下 margin 加大，与标题行/正文明确区分 */
 .process-body {
-  margin: 2px 0 2px 6px;
-  padding-left: 10px;
+  margin: 8px 0 6px 8px;
+  padding: 2px 0 2px 12px;
   border-left: 2px solid var(--border, rgba(0, 0, 0, 0.08));
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .process-reasoning {

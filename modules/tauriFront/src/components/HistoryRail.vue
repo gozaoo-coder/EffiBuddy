@@ -557,7 +557,7 @@ function onSelectAllToggle() {
 // ---------- 工具函数 ----------
 function displayTitle(conv: ConversationMeta): string {
   const t = conv.title?.trim()
-  if (t) return t.length > 22 ? t.slice(0, 22) + '…' : t
+  if (t) return t.length > 18 ? t.slice(0, 18) + '…' : t
   return '新对话'
 }
 
@@ -912,17 +912,17 @@ defineExpose({ refresh })
 .history-rail {
   display: flex;
   flex-direction: column;
-  width: 248px;
+  width: 220px;
   flex-shrink: 0;
-  background: var(--bg-2);
-  border-right: 1px solid var(--border);
+  background: var(--bg-rail-2);
+  border-right: 1px solid var(--border-strong);
   overflow: hidden;
   user-select: none;
 }
 
-/* 顶部新建聊天 */
+/* 顶部新建聊天：大边界留白，视觉轻松 */
 .hr-top {
-  padding: 12px 12px 8px;
+  padding: 14px 12px 8px;
   flex-shrink: 0;
 }
 
@@ -930,10 +930,10 @@ defineExpose({ refresh })
 .hr-search {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 0 12px 8px;
+  gap: 6px;
+  margin: 0 12px 10px;
   padding: 0 10px;
-  height: 32px;
+  height: 30px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
@@ -958,7 +958,7 @@ defineExpose({ refresh })
   background: transparent;
   outline: none;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text);
 }
 
@@ -975,23 +975,22 @@ defineExpose({ refresh })
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
-/* 顶部固定区与滚动主体之间的分割线（位于 .hr-body 之外，左右对齐搜索框 12px） */
+/* 顶部固定区与滚动主体之间的分割线（位于 .hr-body 外，左右对齐搜索框 12px） */
 .hr-divider--top {
   margin: 0 12px;
 }
 
-/* 主体内部分割线（位于 .hr-body 内，body 已有 8px 横向 padding，故 4px 即可对齐 12px）
-   上方 4px + 前置 item padding-bottom(7~9px) ≈ 11~13px，与下方标题栏 padding-top(10~12px) 对称 */
+/* 主体内部分割线（位于 .hr-body 内，body 已有 10px 横向 padding，故 2px 即可对齐 12px） */
 .hr-body > .hr-divider {
-  margin: 4px 4px 0;
+  margin: 6px 2px 4px;
 }
 
-/* 主体滚动区 */
+/* 主体滚动区：大边界布局——外边距宽松，内部元素紧凑排列 */
 .hr-body {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding: 4px 8px 12px;
+  padding: 8px 10px 14px;
   /* 多选栏出现时底部留出空间 */
   transition: padding-bottom var(--duration-fast) var(--ease-standard);
 }
@@ -1024,13 +1023,13 @@ defineExpose({ refresh })
 }
 
 .hr-section-count {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 400;
   color: var(--muted);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  padding: 0 6px;
+  padding: 0 5px;
   margin-left: 4px;
 }
 
@@ -1045,15 +1044,15 @@ defineExpose({ refresh })
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 8px 6px;
+  padding: 10px 8px 6px;
 }
 
 .hr-folder-add {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -1072,8 +1071,9 @@ defineExpose({ refresh })
 .hr-folder-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: 7px;
+  padding: 6px 10px;
+  margin: 1px 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
@@ -1113,13 +1113,13 @@ defineExpose({ refresh })
 }
 
 .hr-folder-count {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   flex-shrink: 0;
 }
 
 .hr-folder-hint {
-  padding: 4px 10px 8px;
+  padding: 2px 8px 6px;
   font-size: 11px;
   color: var(--muted);
   line-height: 1.5;
@@ -1145,7 +1145,7 @@ defineExpose({ refresh })
 }
 
 .hr-list-count {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 400;
   color: var(--muted);
   background: var(--card);
@@ -1201,8 +1201,9 @@ defineExpose({ refresh })
 .hr-item--search {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 9px 10px;
+  gap: 7px;
+  padding: 7px 10px;
+  margin: 1px 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
@@ -1235,7 +1236,7 @@ defineExpose({ refresh })
 }
 
 .hr-item-snippet {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
   margin-top: 3px;
   overflow: hidden;
@@ -1246,7 +1247,7 @@ defineExpose({ refresh })
 }
 
 .hr-empty {
-  padding: 24px 12px;
+  padding: 16px 8px;
   text-align: center;
   font-size: 12px;
   color: var(--muted);

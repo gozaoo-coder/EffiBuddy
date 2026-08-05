@@ -145,6 +145,8 @@ export interface ConversationMeta {
   created_at: number
   updated_at: number
     message_count: number
+  /** 会话级工作区路径（hover 提示卡展示项目路径用） */
+  working_dir?: string | null
 }
 
 // =========================================================

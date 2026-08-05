@@ -30,15 +30,16 @@ withDefaults(
 
 const { modes, toggleRail1Mode, toggleRail2Mode } = useLayoutModes()
 
-// 左栏一模态选项：icon = 纯图标窄栏；icon-text = 图标+文字宽栏
+// 左栏一模态选项：icon = 纯图标窄栏；icon-text = 图标+文字宽栏；hidden = 隐藏
 const rail1Options = [
   { value: 'icon', label: '图标' },
   { value: 'icon-text', label: '图标+文字' },
+  { value: 'hidden', label: '隐藏' },
 ] as const
-// 左栏二模态选项：expanded = 展开完整列表；collapsed = 收起窄条
+// 左栏二模态选项：expanded = 展开完整列表；hidden = 隐藏
 const rail2Options = [
   { value: 'expanded', label: '展开' },
-  { value: 'collapsed', label: '收起' },
+  { value: 'hidden', label: '隐藏' },
 ] as const
 
 // 当前模态文案（按钮 title 提示用）
@@ -304,14 +305,15 @@ async function close() {
   font-weight: 600;
 }
 
-/* 中间拖拽区 */
+/* 中间拖拽区：页签左对齐（紧贴左侧按钮组，剩余空间可拖拽） */
 .titlebar-center {
   flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   min-width: 0;
   height: 100%;
+  padding-left: 8px;
 }
 
 /* 右上角窗口控件 */
