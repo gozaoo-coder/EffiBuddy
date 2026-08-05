@@ -218,7 +218,7 @@ function argSummary(args: string): string {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: rgba(240, 192, 74, 0.14);
   color: var(--warn, #f0c04a);
   flex-shrink: 0;
@@ -349,7 +349,7 @@ function argSummary(args: string): string {
   line-height: 1.6;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -368,7 +368,7 @@ function argSummary(args: string): string {
   gap: 8px;
   font-size: 12px;
   padding: 5px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-2);
   border: 1px solid var(--border);
 }
@@ -421,7 +421,7 @@ function argSummary(args: string): string {
   width: 140px;
   height: 140px;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
 }
 
@@ -440,7 +440,7 @@ function argSummary(args: string): string {
   align-items: flex-start;
   gap: 6px;
   padding: 10px 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--danger) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   color: var(--danger);
@@ -455,7 +455,7 @@ function argSummary(args: string): string {
   align-items: flex-start;
   gap: 8px;
   padding: 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--success) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
 }
@@ -485,7 +485,7 @@ function argSummary(args: string): string {
   flex-shrink: 0;
   font-size: 12px;
   padding: 3px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);

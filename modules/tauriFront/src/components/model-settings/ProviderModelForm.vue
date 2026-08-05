@@ -823,7 +823,7 @@ function cancel() {
   color: var(--text);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
   box-sizing: border-box;
@@ -870,7 +870,7 @@ function cancel() {
   font-size: var(--fs-xs);
   color: var(--warn);
   background: rgba(240, 192, 74, 0.12);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 
 .pmf-api-badge {
@@ -882,7 +882,7 @@ function cancel() {
   font-weight: 600;
   color: #fff;
   background: linear-gradient(135deg, #4a7eff, #6c5ce7);
-  border-radius: 4px;
+  border-radius: 3px;
   letter-spacing: 0.5px;
 }
 
@@ -907,7 +907,7 @@ function cancel() {
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   cursor: pointer;
   text-align: left;
@@ -933,7 +933,7 @@ function cancel() {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: #fff;
   flex-shrink: 0;
 }
@@ -1012,7 +1012,7 @@ function cancel() {
   gap: 6px;
   padding: 0 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   cursor: pointer;
@@ -1057,7 +1057,7 @@ function cancel() {
   height: var(--h-control-md);
   padding: 0 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-2);
   color: var(--text);
   font-family: inherit;
@@ -1084,7 +1084,7 @@ function cancel() {
   padding: 10px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
 .pmf-row-text {
@@ -1107,7 +1107,7 @@ function cancel() {
   padding: 14px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .pmf-save-row {

@@ -223,7 +223,7 @@ const revertDialogText = computed(() => {
   padding: 8px 10px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 /* ---------- 撤回对话框 ---------- */

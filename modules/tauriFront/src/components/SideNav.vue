@@ -439,7 +439,7 @@ defineExpose({ refresh })
   padding: 10px 4px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   color: var(--text);
   transition: background var(--duration-fast) var(--ease-standard);
@@ -527,7 +527,7 @@ defineExpose({ refresh })
 /* 会话项 */
 .conv-item {
   padding: 10px 12px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
   user-select: none;
@@ -599,7 +599,7 @@ defineExpose({ refresh })
   color: var(--text);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
   margin: 4px 0;

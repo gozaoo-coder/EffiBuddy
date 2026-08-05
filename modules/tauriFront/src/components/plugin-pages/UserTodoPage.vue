@@ -283,7 +283,7 @@ onMounted(() => {
   padding: 8px 14px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .stat-num {
@@ -312,7 +312,7 @@ onMounted(() => {
   color: var(--text);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   outline: none;
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
@@ -333,7 +333,7 @@ onMounted(() => {
   height: 44px;
   padding: 0 20px;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--primary);
   color: #fff;
   font-size: var(--fs-base);
@@ -438,7 +438,7 @@ onMounted(() => {
   padding: 12px 14px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   transition: border-color var(--duration-fast), background var(--duration-fast),
     opacity var(--duration-fast);
 }
@@ -493,7 +493,7 @@ onMounted(() => {
   width: 26px;
   height: 26px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;

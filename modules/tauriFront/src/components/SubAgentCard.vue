@@ -220,7 +220,7 @@ function argSummary(args: string): string {
 .sub-agent-card {
   margin: 6px 0;
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
-  border-radius: 12px;
+  border-radius: 7px;
   background: var(--bg-subtle, rgba(128, 128, 128, 0.06));
   overflow: hidden;
   font-size: 13px;
@@ -248,14 +248,14 @@ function argSummary(args: string): string {
   color: var(--text-secondary, rgba(128, 128, 128, 0.9));
   font-size: 12px;
   padding: 1px 6px;
-  border-radius: 6px;
+  border-radius: 5px;
   background: rgba(128, 128, 128, 0.12);
 }
 
 .sa-depth {
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: 6px;
+  border-radius: 5px;
   background: rgba(128, 128, 128, 0.12);
   color: var(--text-secondary, rgba(128, 128, 128, 0.9));
 }
@@ -422,7 +422,7 @@ function argSummary(args: string): string {
   width: 120px;
   height: 120px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: 7px;
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
 }
 
@@ -448,7 +448,7 @@ function argSummary(args: string): string {
   gap: 6px;
   margin: 0 12px 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(255, 77, 79, 0.1);
   color: #ff4d4f;
   font-size: 12px;
@@ -462,7 +462,7 @@ function argSummary(args: string): string {
   gap: 8px;
   margin: 0 12px 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(46, 204, 113, 0.08);
   border: 1px solid rgba(46, 204, 113, 0.2);
 }
@@ -489,7 +489,7 @@ function argSummary(args: string): string {
   flex-shrink: 0;
   font-size: 12px;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: 5px;
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
   background: transparent;
   color: var(--text-secondary, rgba(128, 128, 128, 0.9));

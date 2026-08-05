@@ -264,7 +264,7 @@ function onQuestionLeave(el: Element, done: () => void) {
   padding: 12px 14px;
   background: var(--card);
   border: 1.5px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   text-align: left;
   font-family: inherit;

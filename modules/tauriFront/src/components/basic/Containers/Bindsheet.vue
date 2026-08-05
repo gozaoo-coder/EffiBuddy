@@ -653,7 +653,7 @@ onUnmounted(() => unlockBodyScroll())
   left: 0;
   right: 0;
   bottom: 0;
-  border-radius: 16px 16px 0 0;
+  border-radius: 7px 7px 0 0;
   will-change: height;
 }
 
@@ -664,7 +664,7 @@ onUnmounted(() => unlockBodyScroll())
   transform: translateX(-50%);
   width: 480px;
   max-width: 100vw;
-  border-radius: 16px 16px 0 0;
+  border-radius: 7px 7px 0 0;
 }
 
 .bindsheet-panel--bottom.bindsheet-panel--nonmodal {
@@ -680,7 +680,7 @@ onUnmounted(() => unlockBodyScroll())
   max-width: calc(100vw - 32px);
   min-height: 320px;
   max-height: 90vh;
-  border-radius: 16px;
+  border-radius: 7px;
 }
 
 /* ── Popup (desktop) ────────────────────────────────── */
@@ -692,7 +692,7 @@ onUnmounted(() => unlockBodyScroll())
   max-width: calc(100vw - 48px);
   min-height: 200px;
   max-height: 90vh;
-  border-radius: 16px;
+  border-radius: 7px;
 }
 
 /* ── Drag handle ────────────────────────────────────── */
@@ -785,7 +785,7 @@ onUnmounted(() => unlockBodyScroll())
   height: 32px;
   padding: 0;
   border: none;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text, #e4e6eb);
   cursor: pointer;
@@ -843,7 +843,7 @@ onUnmounted(() => unlockBodyScroll())
     transform: translateX(-50%);
     width: 480px;
     max-width: 100vw;
-    border-radius: 16px 16px 0 0;
+    border-radius: 7px 7px 0 0;
   }
 }
 

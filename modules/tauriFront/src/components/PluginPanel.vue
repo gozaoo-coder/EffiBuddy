@@ -203,7 +203,7 @@ function onClose() {
   justify-content: center;
   width: 44px;
   height: 44px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card-2);
   font-size: 22px;
   flex-shrink: 0;
@@ -268,7 +268,7 @@ function onClose() {
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   transition: border-color var(--duration-fast) var(--ease-standard),
     background var(--duration-fast) var(--ease-standard);
@@ -293,7 +293,7 @@ function onClose() {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: #a855f7;
   color: #fff;
   font-size: 18px;
@@ -349,7 +349,7 @@ function onClose() {
 .meta-tag {
   padding: 1px 6px;
   background: var(--card-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
 .meta-owner {
@@ -376,7 +376,7 @@ function onClose() {
   gap: 8px;
   padding: 36px 20px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   text-align: center;
 }

@@ -366,8 +366,8 @@ onMounted(() => {
   flex-direction: column;
   width: 248px;
   flex-shrink: 0;
-  background: var(--bg-2);
-  border-right: 1px solid var(--border);
+  background: var(--bg-rail-2);
+  border-right: 1px solid var(--border-strong);
   overflow: hidden;
   user-select: none;
 }
@@ -413,7 +413,7 @@ onMounted(() => {
   height: 24px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -487,7 +487,7 @@ onMounted(() => {
   justify-content: center;
   padding: 5px 8px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -694,7 +694,7 @@ onMounted(() => {
 .ap-at-item {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   transition: border-color var(--duration-fast) var(--ease-standard);
 }

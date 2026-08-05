@@ -125,7 +125,7 @@ function update(partial: Partial<CompressionSettings>) {
   padding: 12px 14px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .csp-head {

@@ -93,7 +93,7 @@ function fmt(n: number): string {
   padding: 12px 14px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .cls-head {
@@ -106,7 +106,7 @@ function fmt(n: number): string {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: 11px;
   font-weight: 700;
   color: var(--primary);
@@ -136,7 +136,7 @@ function fmt(n: number): string {
   align-items: center;
   gap: 2px;
   padding: 10px 6px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--muted) 8%, transparent);
   min-width: 0;
 }

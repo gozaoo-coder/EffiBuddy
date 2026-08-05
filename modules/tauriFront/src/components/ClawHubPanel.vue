@@ -611,7 +611,7 @@ async function loadMore() {
   padding: 12px 14px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   margin-bottom: 8px;
   transition: border-color var(--duration-fast) var(--ease-standard);
 }
@@ -680,7 +680,7 @@ async function loadMore() {
 .meta-topic {
   padding: 0 6px;
   background: var(--card-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
 .meta-time {

@@ -83,14 +83,14 @@ const segments = computed(() => {
   padding: 12px 14px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 /* 堆叠占比条 */
 .csb-bar {
   display: flex;
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   overflow: hidden;
   background: color-mix(in srgb, var(--muted) 18%, transparent);
 }

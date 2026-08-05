@@ -279,7 +279,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 5px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: 11px;
   background: var(--card-2, #f3f4f6);
   color: var(--muted, #6b7280);
@@ -333,7 +333,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border, #e5e7eb);
-  border-radius: var(--radius-md, 12px);
+  border-radius: var(--radius-lg);
   background: var(--card, #fff);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
   overflow: hidden;
@@ -373,7 +373,7 @@ onUnmounted(() => {
 
 .ss-note-shell {
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: 3px;
   font-size: 10px;
   background: var(--card-2, #f3f4f6);
   color: var(--muted, #6b7280);
@@ -398,7 +398,7 @@ onUnmounted(() => {
   width: 24px;
   height: 24px;
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--muted, #6b7280);
   cursor: pointer;

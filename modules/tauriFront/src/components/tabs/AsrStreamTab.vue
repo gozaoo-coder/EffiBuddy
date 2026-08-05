@@ -733,7 +733,7 @@ defineExpose({ init, destroy })
   gap: 6px;
   padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   font-size: var(--fs-sm);

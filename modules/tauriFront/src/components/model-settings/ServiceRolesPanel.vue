@@ -431,7 +431,7 @@ const roleAccent: Record<ServiceModelRole, string> = {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: #fff;
   flex-shrink: 0;
 }
@@ -470,7 +470,7 @@ const roleAccent: Record<ServiceModelRole, string> = {
   gap: 14px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   transition: border-color var(--duration-fast) var(--ease-standard),
     background var(--duration-fast) var(--ease-standard);
@@ -499,7 +499,7 @@ const roleAccent: Record<ServiceModelRole, string> = {
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: #fff;
   flex-shrink: 0;
 }
@@ -526,7 +526,7 @@ const roleAccent: Record<ServiceModelRole, string> = {
   padding: 0 6px;
   font-size: 10px;
   font-weight: 500;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   letter-spacing: 0.3px;
 }
 
@@ -562,7 +562,7 @@ const roleAccent: Record<ServiceModelRole, string> = {
 .srp-foot {
   padding: 10px 14px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
 }
 

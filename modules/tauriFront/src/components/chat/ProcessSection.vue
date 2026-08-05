@@ -144,7 +144,7 @@ const titleText = computed(() => {
   height: 28px;
   padding: 0 8px;
   margin-left: -8px;
-  border-radius: var(--radius-sm, 8px);
+  border-radius: var(--radius-md);
   cursor: pointer;
   user-select: none;
   transition: background var(--duration-fast, 120ms) var(--ease-standard, ease);
@@ -230,7 +230,7 @@ const titleText = computed(() => {
 }
 
 .process-reasoning::-webkit-scrollbar-thumb {
-  background: var(--border, rgba(0, 0, 0, 0.15));
+  background: var(--border, rgba(0, 0, 0, 0.152));
   border-radius: 3px;
 }
 </style>

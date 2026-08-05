@@ -350,7 +350,7 @@ if (compressionSettings.value == null) void loadCompressionSettings()
   padding: 10px 12px;
   background: color-mix(in srgb, var(--danger) 8%, var(--bg-2));
   border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 .ccp-error-title {
   display: flex;
@@ -373,7 +373,7 @@ if (compressionSettings.value == null) void loadCompressionSettings()
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--success) 8%, var(--bg-2));
   border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border));
   transition: all 0.3s ease;
@@ -446,7 +446,7 @@ if (compressionSettings.value == null) void loadCompressionSettings()
   padding: 8px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -467,7 +467,7 @@ if (compressionSettings.value == null) void loadCompressionSettings()
   flex-direction: column;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .ccp-output.is-streaming {

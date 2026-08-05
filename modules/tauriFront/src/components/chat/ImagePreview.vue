@@ -109,7 +109,7 @@ onUnmounted(() => {
   max-width: 88vw;
   max-height: 82vh;
   object-fit: contain;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   cursor: grab;
   touch-action: none;

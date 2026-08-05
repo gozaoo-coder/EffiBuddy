@@ -546,7 +546,7 @@ onUnmounted(() => {
   gap: 5px;
   padding: 7px 10px 9px;
   border: none;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: transparent;
   color: var(--muted);
   font-size: var(--fs-sm);
@@ -596,7 +596,7 @@ onUnmounted(() => {
 }
 .ctx-body::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: 3px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
@@ -611,7 +611,7 @@ onUnmounted(() => {
 .ctx-card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
   flex-shrink: 0;
   transition: border-color 0.15s ease;
@@ -666,7 +666,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 3px 2px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 .todo-row:hover {
   background: var(--hover);
@@ -762,7 +762,7 @@ onUnmounted(() => {
   padding: 0 8px;
   font-size: var(--fs-sm);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   outline: none;
@@ -778,7 +778,7 @@ onUnmounted(() => {
   width: 22px;
   height: 22px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
   color: var(--muted);
@@ -856,7 +856,7 @@ onUnmounted(() => {
   gap: 2px;
   padding: 6px 8px;
   background: var(--bg);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 .usage-cell--wide {
   grid-column: 1 / -1;
@@ -881,7 +881,7 @@ onUnmounted(() => {
 .source-bar {
   display: flex;
   height: 18px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   overflow: hidden;
   font-size: var(--fs-xs);
   color: #fff;
@@ -911,7 +911,7 @@ onUnmounted(() => {
 .source-card {
   padding: 6px 8px;
   background: var(--bg);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 .source-card-head {
   font-size: var(--fs-xs);

@@ -531,7 +531,7 @@ async function copyFullPrompt() {
   gap: 8px;
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card-2);
   font-size: var(--fs-sm);
   color: var(--muted);
@@ -594,7 +594,7 @@ async function copyFullPrompt() {
   padding: 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .card-head {
@@ -645,7 +645,7 @@ async function copyFullPrompt() {
   color: var(--text);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   resize: vertical;
   line-height: 1.5;
@@ -688,7 +688,7 @@ async function copyFullPrompt() {
   padding: 14px 16px;
   background: linear-gradient(135deg, rgba(74, 126, 255, 0.08), rgba(74, 126, 255, 0.02));
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .hint-mark {
@@ -697,7 +697,7 @@ async function copyFullPrompt() {
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card-2);
   color: var(--primary);
   flex-shrink: 0;
@@ -732,7 +732,7 @@ async function copyFullPrompt() {
   gap: 12px;
   padding: 40px 20px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   color: var(--muted);
 }
@@ -790,7 +790,7 @@ async function copyFullPrompt() {
   padding: 12px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   text-align: center;
 }
 
@@ -824,7 +824,7 @@ async function copyFullPrompt() {
   padding: 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .stack-head {
@@ -858,7 +858,7 @@ async function copyFullPrompt() {
   gap: 12px;
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-2);
   font-size: var(--fs-sm);
 }
@@ -898,7 +898,7 @@ async function copyFullPrompt() {
   padding: 14px 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .section-card--full {
@@ -949,7 +949,7 @@ async function copyFullPrompt() {
   color: var(--text);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 280px;
@@ -968,7 +968,7 @@ async function copyFullPrompt() {
   color: var(--muted);
   background: var(--bg-2);
   border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   line-height: 1.5;
 }
 

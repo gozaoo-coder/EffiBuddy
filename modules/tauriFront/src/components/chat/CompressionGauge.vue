@@ -98,7 +98,7 @@ const fmt = (n: number) => Math.round(n).toLocaleString('zh-CN')
   padding: 12px 14px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .cg-head {
@@ -130,14 +130,14 @@ const fmt = (n: number) => Math.round(n).toLocaleString('zh-CN')
 .cg-track {
   position: relative;
   height: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted) 22%, transparent);
   overflow: visible;
 }
 
 .cg-fill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   transition: width 0.4s ease;
 }
 

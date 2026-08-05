@@ -84,7 +84,7 @@ function statusClass(s: PoolWindowStatus): string {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--bg-2);
   border: 1px solid var(--border);
   cursor: pointer;
@@ -117,7 +117,7 @@ function statusClass(s: PoolWindowStatus): string {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--card-2);
   color: var(--muted);
   flex-shrink: 0;
@@ -160,7 +160,7 @@ function statusClass(s: PoolWindowStatus): string {
   min-width: 16px;
   height: 14px;
   padding: 0 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   font-size: 9px;
   font-weight: 600;
   line-height: 1;

@@ -95,7 +95,7 @@ watch(workingDirSheetOpen, (open) => {
   padding: 12px 14px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .wd-current-label {
@@ -146,7 +146,7 @@ watch(workingDirSheetOpen, (open) => {
   padding: 6px 8px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .wd-fav-item.active {
@@ -182,7 +182,7 @@ watch(workingDirSheetOpen, (open) => {
   color: var(--muted);
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   cursor: pointer;
 }
 

@@ -274,7 +274,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
 <style scoped>
 .tool-group {
   margin: 6px 0 8px;
-  border-radius: var(--radius-md, 12px);
+  border-radius: var(--radius-lg);
   background: var(--card-2, rgba(0, 0, 0, 0.04));
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   overflow: hidden;
@@ -302,7 +302,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   max-height: 34px;
   padding: 0 10px;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-lg);
   background: var(--card-2, rgba(0, 0, 0, 0.03));
   transition: border-color var(--duration-fast, 120ms) var(--ease-standard, ease),
     background var(--duration-fast, 120ms) var(--ease-standard, ease);
@@ -376,7 +376,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   color: var(--muted, #888);
   padding: 2px 6px;
   background: var(--card, rgba(0, 0, 0, 0.08));
-  border-radius: 8px;
+  border-radius: 7px;
 }
 
 .group-arrow {
@@ -451,7 +451,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   gap: 4px;
   font-size: 11px;
   padding: 1px 7px;
-  border-radius: 8px;
+  border-radius: 7px;
   flex-shrink: 0;
   font-weight: 500;
 }
@@ -513,7 +513,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
 .result-status {
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: 8px;
+  border-radius: 7px;
   font-weight: 400;
 }
 
@@ -540,7 +540,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   background: var(--card-2, rgba(0, 0, 0, 0.04));
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  border-radius: 8px;
+  border-radius: 7px;
   color: var(--text, #333);
   overflow-x: auto;
   white-space: pre-wrap;
@@ -560,6 +560,6 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   color: var(--muted, #888);
   text-align: center;
   background: var(--card-2, rgba(0, 0, 0, 0.04));
-  border-radius: 8px;
+  border-radius: 7px;
 }
 </style>

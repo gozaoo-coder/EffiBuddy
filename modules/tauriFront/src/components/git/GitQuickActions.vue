@@ -120,7 +120,7 @@ function onBranch() {
 .ga-card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
 }
 
@@ -175,7 +175,7 @@ function onBranch() {
   padding: 0 8px;
   font-size: var(--fs-sm);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   outline: none;

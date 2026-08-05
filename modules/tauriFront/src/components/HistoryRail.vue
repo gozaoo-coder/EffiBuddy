@@ -1055,7 +1055,7 @@ defineExpose({ refresh })
   height: 20px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -1064,7 +1064,7 @@ defineExpose({ refresh })
 }
 
 .hr-folder-add:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
   color: var(--primary);
 }
 
@@ -1074,17 +1074,17 @@ defineExpose({ refresh })
   gap: 7px;
   padding: 6px 10px;
   margin: 1px 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
 }
 
 .hr-folder-item:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
 }
 
 .hr-folder-item.active {
-  background: rgba(74, 126, 255, 0.12);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .hr-folder-item.active .hr-folder-name {
@@ -1172,7 +1172,7 @@ defineExpose({ refresh })
 }
 
 .hr-list-clear:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
   color: var(--text);
 }
 
@@ -1193,7 +1193,7 @@ defineExpose({ refresh })
 }
 
 .hr-list-select-btn:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
   color: var(--primary);
 }
 
@@ -1204,17 +1204,17 @@ defineExpose({ refresh })
   gap: 7px;
   padding: 7px 10px;
   margin: 1px 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
 }
 
 .hr-item--search:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
 }
 
 .hr-item--search.active {
-  background: rgba(74, 126, 255, 0.12);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .hr-item--search.active .hr-item-title {
@@ -1227,7 +1227,7 @@ defineExpose({ refresh })
 }
 
 .hr-item-title {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text);
   overflow: hidden;
@@ -1263,7 +1263,7 @@ defineExpose({ refresh })
   color: var(--text);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
   margin: 4px 0;

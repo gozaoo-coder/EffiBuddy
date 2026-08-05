@@ -170,7 +170,7 @@ function kindLabel(kind: string): string {
   padding: 10px 14px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .ver-head-label {
@@ -198,7 +198,7 @@ function kindLabel(kind: string): string {
   width: 26px;
   height: 26px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -235,7 +235,7 @@ function kindLabel(kind: string): string {
   gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--card);
 }
 
@@ -313,7 +313,7 @@ function kindLabel(kind: string): string {
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--border));
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
@@ -349,7 +349,7 @@ function kindLabel(kind: string): string {
   gap: 10px;
   position: relative;
   padding: 6px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
 .ver-commit:hover {
@@ -421,6 +421,6 @@ function kindLabel(kind: string): string {
   padding: 14px;
   text-align: center;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 </style>

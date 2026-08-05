@@ -216,7 +216,7 @@ function removeItem(id: string) {
   align-items: center;
   gap: 6px;
   padding: 3px 2px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 .ttn-row:hover {
   background: var(--hover);
@@ -302,7 +302,7 @@ function removeItem(id: string) {
   padding: 0 8px;
   font-size: var(--fs-sm);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
   outline: none;
@@ -318,7 +318,7 @@ function removeItem(id: string) {
   width: 22px;
   height: 22px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
   color: var(--muted);

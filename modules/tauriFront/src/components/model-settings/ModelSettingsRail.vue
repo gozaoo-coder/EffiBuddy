@@ -91,8 +91,8 @@ function select(view: ModelSettingsView) {
   flex-direction: column;
   width: 240px;
   flex-shrink: 0;
-  background: var(--bg-2);
-  border-right: 1px solid var(--border);
+  background: var(--bg-rail-2);
+  border-right: 1px solid var(--border-strong);
   user-select: none;
   overflow: hidden;
 }
@@ -129,7 +129,7 @@ function select(view: ModelSettingsView) {
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -159,7 +159,7 @@ function select(view: ModelSettingsView) {
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card-2);
   color: var(--muted);
   flex-shrink: 0;

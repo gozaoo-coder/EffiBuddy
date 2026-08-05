@@ -127,7 +127,16 @@ watch(
 </script>
 
 <template>
-  <nav class="icon-rail" :class="modes.rail1 === 'icon-text' ? 'rail--icon-text' : 'rail--icon'">
+  <nav
+    class="icon-rail"
+    :class="
+      modes.rail1 === 'icon-text'
+        ? 'rail--icon-text'
+        : modes.rail1 === 'hidden'
+          ? 'rail--hidden rail--icon'
+          : 'rail--icon'
+    "
+  >
     <!-- 主区 -->
     <div class="rail-group">
       <button
@@ -145,7 +154,7 @@ watch(
               : onPluginClick(item)
         "
       >
-        <Icon :name="iconFor(item.key)" :size="21" />
+        <Icon :name="iconFor(item.key)" :size="18" />
         <span v-if="showText" class="rail-text">{{ item.label }}</span>
         <span v-else class="rail-tip">{{ item.label }}</span>
         <!-- 交流池活跃条目角标（仅 pool 项；>0 时显示） -->
@@ -169,7 +178,7 @@ watch(
           :title="showText ? undefined : item.label"
           @click="emit('open-p2p')"
         >
-          <Icon :name="iconFor(item.key)" :size="21" />
+          <Icon :name="iconFor(item.key)" :size="18" />
           <span v-if="showText" class="rail-text">{{ item.label }}</span>
           <span v-else class="rail-tip">{{ item.label }}</span>
           <span
@@ -190,7 +199,7 @@ watch(
           :title="showText ? undefined : item.label"
           @click="moreMenuVisible = true"
         >
-          <Icon :name="iconFor(item.key)" :size="21" />
+          <Icon :name="iconFor(item.key)" :size="18" />
           <span v-if="showText" class="rail-text">{{ item.label }}</span>
           <span v-else class="rail-tip">{{ item.label }}</span>
         </button>
@@ -207,13 +216,16 @@ watch(
       @select="onAsrSelect"
     />
 
-    <!-- 更多菜单 -->
+    <!-- 更多菜单：rail 底部按钮向上弹出（right-end = 底边对齐，等价 translateY(-100%)），
+         left 偏移 4px 使菜单左缘与 56px 侧栏右缘对齐；未选中项不渲染 ✓ 占位 -->
     <Menu
       v-model:visible="moreMenuVisible"
       :items="moreItems"
       :trigger-ref="moreBtnRef"
-      placement="right-start"
+      placement="right-end"
       :min-width="176"
+      :position-offset="{ x: 4 }"
+      hide-check-when-unselected
       @select="onMoreSelect"
     />
 
@@ -223,14 +235,14 @@ watch(
 </template>
 
 <style scoped>
-/* 纯图标模式：窄栏 */
+/* 纯图标模式：窄栏（紧凑） */
 .rail--icon {
-  width: 56px;
+  width: 48px;
 }
 
-/* 图标+文字模式：宽栏 */
+/* 图标+文字模式：宽栏（紧凑） */
 .rail--icon-text {
-  width: 178px;
+  width: 150px;
 }
 
 .icon-rail {
@@ -238,22 +250,39 @@ watch(
   flex-direction: column;
   justify-content: space-between;
   flex-shrink: 0;
-  background: var(--bg-2);
-  border-right: 1px solid var(--border);
-  padding: 10px 8px;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--border-strong);
+  padding: 6px 5px;
   user-select: none;
-  transition: width var(--duration-base) var(--ease-emphasized);
+  /* 隐藏动画：仅过渡 transform/opacity（合成器属性，不触发 layout 重排）；
+     width/padding/border 变化在隐藏时延迟到滑出动画结束后瞬时折叠（见 .rail--hidden） */
+  transition: transform var(--duration-base) var(--ease-emphasized),
+    opacity var(--duration-base) var(--ease-emphasized);
+}
+
+/* 隐藏模式：先 transform 滑出（合成器动画），再折叠宽度释放空间 */
+.rail--hidden {
+  transform: translateX(-100%);
+  opacity: 0;
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+  border-right-color: transparent;
+  transition: transform var(--duration-base) var(--ease-emphasized),
+    opacity var(--duration-base) var(--ease-emphasized),
+    width 0s var(--duration-base), padding 0s var(--duration-base),
+    border-right-color 0s var(--duration-base);
 }
 
 .rail-group {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 4px;
 }
 
 .rail-group--bottom {
-  gap: 4px;
+  gap: 3px;
 }
 
 /* 图标按钮 */
@@ -262,12 +291,13 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  height: 40px;
-  padding: 0;
+  height: 32px;
+  /* 左右留白：与激活态 padding 一致，避免 hover/激活时布局跳动 */
+  padding: 0 10px;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -277,13 +307,16 @@ watch(
 }
 
 .rail-btn:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
   color: var(--text);
 }
 
 .rail-btn.active {
-  background: rgba(74, 126, 255, 0.14);
+  background: rgba(0, 0, 0, 0.08);
   color: var(--primary);
+  /* 激活态内边距：内容左对齐并留出左右留白，高亮块更饱满、不贴边 */
+  padding: 0 10px;
+  justify-content: flex-start;
 }
 
 .rail-btn:active {
@@ -294,7 +327,7 @@ watch(
 .rail-text {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   text-align: left;
   white-space: nowrap;
@@ -311,12 +344,12 @@ watch(
   padding: 5px 11px;
   background: var(--card-2);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow);
   opacity: 0;
   visibility: hidden;
@@ -362,7 +395,7 @@ watch(
   font-weight: 600;
   line-height: 16px;
   text-align: center;
-  border: 2px solid var(--bg-2);
+  border: 2px solid var(--bg-rail);
   animation: badge-pop 300ms var(--ease-decelerated);
   pointer-events: none;
 }
@@ -382,7 +415,7 @@ watch(
   font-weight: 600;
   line-height: 16px;
   text-align: center;
-  border: 2px solid var(--bg-2);
+  border: 2px solid var(--bg-rail);
   animation: badge-pop 300ms var(--ease-decelerated);
   pointer-events: none;
 }

@@ -434,7 +434,7 @@ function onClose() {
   justify-content: center;
   width: 44px;
   height: 44px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card-2);
   font-size: 22px;
   flex-shrink: 0;
@@ -499,7 +499,7 @@ function onClose() {
   gap: 12px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   transition: border-color var(--duration-fast) var(--ease-standard),
     opacity var(--duration-fast) var(--ease-standard);
@@ -594,7 +594,7 @@ function onClose() {
   gap: 8px;
   padding: 36px 20px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   text-align: center;
 }
@@ -661,7 +661,7 @@ function onClose() {
   color: var(--text);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
 }

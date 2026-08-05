@@ -497,7 +497,7 @@ function onMenuSelect(item: MenuItemOption) {
   gap: 10px;
   padding: 9px 10px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -529,7 +529,7 @@ function onMenuSelect(item: MenuItemOption) {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: #fff;
   flex-shrink: 0;
 }
@@ -636,7 +636,7 @@ function onMenuSelect(item: MenuItemOption) {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   color: #fff;
   flex-shrink: 0;
 }
@@ -676,7 +676,7 @@ function onMenuSelect(item: MenuItemOption) {
   gap: 8px;
   padding: 60px 20px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   text-align: center;
 }
@@ -724,7 +724,7 @@ function onMenuSelect(item: MenuItemOption) {
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   transition: border-color var(--duration-fast) var(--ease-standard),
     background var(--duration-fast) var(--ease-standard),
@@ -756,7 +756,7 @@ function onMenuSelect(item: MenuItemOption) {
   justify-content: center;
   width: 34px;
   height: 34px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: #fff;
   flex-shrink: 0;
 }

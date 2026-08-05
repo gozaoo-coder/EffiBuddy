@@ -180,7 +180,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
 .msg-attachment-img {
   max-width: 260px;
   max-height: 200px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   object-fit: cover;
   cursor: zoom-in;
   background: var(--bg-2);
@@ -202,7 +202,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   font-size: 13px;
   background: var(--bg-2);
   border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .msg-attachment-meta {
@@ -252,7 +252,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   padding: 10px 12px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   opacity: 0;
   pointer-events: none;
@@ -286,7 +286,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   border: none;
   cursor: pointer;
   padding: 2px 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 
 .msg-usage-tip .tip-toggle:hover {
@@ -322,7 +322,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   padding: 3px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   opacity: 0;
   pointer-events: none;
@@ -344,7 +344,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   width: 26px;
   height: 26px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -372,7 +372,7 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   text-align: center;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   opacity: 0;
   pointer-events: none;

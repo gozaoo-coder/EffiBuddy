@@ -244,34 +244,33 @@ function formatRelativeTime(ts: number): string {
 <style scoped>
 .hr-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 7px;
   /* 轻量化布局：行高适中，上下留白有呼吸感 */
   padding: 7px 10px;
   margin: 1px 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-standard);
   position: relative;
 }
 
 .hr-item:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
 }
 
-/* 非多选模式下的 active 高亮 */
+/* 非多选模式下的 active 高亮（黑 alpha 低对比度） */
 .hr-item.active {
-  background: rgba(74, 126, 255, 0.12);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .hr-item.active .hr-item-title {
   color: var(--primary);
-  font-size: 11px;
 }
 
 /* 多选模式下的选中态 */
 .hr-item.selected {
-  background: rgba(74, 126, 255, 0.08);
+  background: rgba(0, 0, 0, 0.056);
 }
 
 .hr-item.selected .hr-item-title {
@@ -280,11 +279,11 @@ function formatRelativeTime(ts: number): string {
 
 /* 多选模式下取消 hover 高亮（避免与选中态冲突） */
 .hr-item.select-mode:hover {
-  background: var(--card);
+  background: var(--hover, var(--card));
 }
 
 .hr-item.select-mode.selected:hover {
-  background: rgba(74, 126, 255, 0.12);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 /* checkbox */
@@ -292,7 +291,6 @@ function formatRelativeTime(ts: number): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 1px;
   flex-shrink: 0;
   width: 16px;
   height: 16px;
@@ -321,7 +319,6 @@ function formatRelativeTime(ts: number): string {
 /* 置顶标记 */
 .hr-item-pin {
   display: inline-flex;
-  margin-top: 2px;
   color: var(--warn);
   flex-shrink: 0;
 }
@@ -331,7 +328,6 @@ function formatRelativeTime(ts: number): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 1px;
   flex-shrink: 0;
   color: var(--muted);
 }
@@ -376,10 +372,10 @@ function formatRelativeTime(ts: number): string {
   gap: 4px;
   max-width: 320px;
   padding: 10px 12px;
-  background: #f5f5f5;
-  color: #1d1d1f;
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.04);
+  color: rgba(0, 0, 0, 0.88);
+  border-radius: 7px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.184);
   pointer-events: none;
   animation: hr-item-tooltip-in 0.16s var(--ease-standard) both;
 }
@@ -407,7 +403,7 @@ function formatRelativeTime(ts: number): string {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: #6e6e73;
+  color: rgba(0, 0, 0, 0.56);
   min-width: 0;
 }
 
@@ -419,24 +415,25 @@ function formatRelativeTime(ts: number): string {
 
 .hr-item-tooltip-meta {
   font-size: 11px;
-  color: #8e8e93;
+  color: rgba(0, 0, 0, 0.44);
 }
 
-/* 主体：标题 + 元信息横向排布，两端对齐 */
+/* 主体：标题 + 元信息横向排布，两端对齐，占满容器 */
 .hr-item-main {
   flex: 1;
   min-width: 0;
+  width: 100%;
   display: flex;
   flex-direction: row;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
 }
 
 .hr-item-title {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.4;
   color: var(--text);
@@ -537,7 +534,7 @@ function formatRelativeTime(ts: number): string {
   height: 22px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -548,7 +545,7 @@ function formatRelativeTime(ts: number): string {
 }
 
 .hr-item-action:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.064);
   color: var(--text);
 }
 

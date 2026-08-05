@@ -112,7 +112,7 @@ const { compressing, triggerCompress, compressionSheetOpen, compressBadgeInfo, c
   padding: 8px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .ctx-stat-row {
@@ -137,7 +137,7 @@ const { compressing, triggerCompress, compressionSheetOpen, compressBadgeInfo, c
   padding: 10px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: border-color 0.2s ease;
 }
@@ -153,7 +153,7 @@ const { compressing, triggerCompress, compressionSheetOpen, compressBadgeInfo, c
   min-width: 30px;
   height: 22px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--success);
   color: #fff;
   font-size: 12px;
@@ -210,7 +210,7 @@ const { compressing, triggerCompress, compressionSheetOpen, compressBadgeInfo, c
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -225,7 +225,7 @@ const { compressing, triggerCompress, compressionSheetOpen, compressBadgeInfo, c
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--primary) 10%, var(--card));
   color: var(--primary);
   flex-shrink: 0;

@@ -25,6 +25,7 @@ const { toast } = useToast()
 const rail1Options = [
   { value: 'icon', label: '纯图标' },
   { value: 'icon-text', label: '图标+文字' },
+  { value: 'hidden', label: '隐藏' },
 ]
 
 /** 当前展开图标选择器的项 key */
@@ -87,9 +88,9 @@ function onOverlayClick() {
                 :model-value="modes.rail1"
                 :options="rail1Options"
                 block
-                @update:model-value="modes.rail1 = $event as 'icon' | 'icon-text'"
+                @update:model-value="modes.rail1 = $event as 'icon' | 'icon-text' | 'hidden'"
               />
-              <p class="rs-hint">图标模式：紧凑竖排，hover 显示提示；图标+文字：常驻文字更直观</p>
+              <p class="rs-hint">图标模式：紧凑竖排，hover 显示提示；图标+文字：常驻文字更直观；隐藏：收起整栏</p>
             </section>
 
             <!-- 显隐与图标 -->
@@ -211,7 +212,7 @@ function onOverlayClick() {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   transition: background var(--duration-fast), color var(--duration-fast);
@@ -258,7 +259,7 @@ function onOverlayClick() {
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   transition: background var(--duration-fast);
 }
 
@@ -272,7 +273,7 @@ function onOverlayClick() {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   flex-shrink: 0;
@@ -303,7 +304,7 @@ function onOverlayClick() {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   flex-shrink: 0;
@@ -321,7 +322,7 @@ function onOverlayClick() {
   padding: 12px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .rs-picker-grid {
@@ -335,7 +336,7 @@ function onOverlayClick() {
   align-items: center;
   justify-content: center;
   aspect-ratio: 1;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   transition: background var(--duration-fast), color var(--duration-fast);
@@ -374,7 +375,7 @@ function onOverlayClick() {
 
 .rs-btn {
   padding: 7px 16px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: var(--fs-base);
   cursor: pointer;
   transition: background var(--duration-fast), color var(--duration-fast),

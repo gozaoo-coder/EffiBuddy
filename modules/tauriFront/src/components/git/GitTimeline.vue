@@ -207,7 +207,7 @@ function shortHash(h: string): string {
   gap: 2px;
   padding: 18px 12px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   text-align: center;
 }
 
@@ -254,7 +254,7 @@ function shortHash(h: string): string {
   display: flex;
   gap: 10px;
   position: relative;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   transition: background var(--duration-fast) var(--ease-standard);
 }
 

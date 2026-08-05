@@ -452,7 +452,7 @@ async function confirmClearAll() {
   padding: 16px 18px;
   background: linear-gradient(135deg, rgba(74, 126, 255, 0.12), rgba(74, 126, 255, 0.02));
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .hero-mark {
@@ -461,7 +461,7 @@ async function confirmClearAll() {
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card-2);
   color: var(--primary);
   flex-shrink: 0;
@@ -496,7 +496,7 @@ async function confirmClearAll() {
   font-family: 'JetBrains Mono', 'Consolas', monospace;
   font-size: 0.85em;
   background: var(--card-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--text);
 }
 
@@ -536,7 +536,7 @@ async function confirmClearAll() {
   justify-content: center;
   padding: 36px 20px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   color: var(--muted);
 }
@@ -583,7 +583,7 @@ async function confirmClearAll() {
   padding: 12px 14px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   transition: border-color var(--duration-fast) var(--ease-standard),
     background var(--duration-fast) var(--ease-standard);
 }
@@ -645,7 +645,7 @@ async function confirmClearAll() {
   padding: 14px 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .action-card--danger {
@@ -699,7 +699,7 @@ async function confirmClearAll() {
   color: var(--text);
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
   box-sizing: border-box;
@@ -743,7 +743,7 @@ async function confirmClearAll() {
 .dialog-delete-preview {
   padding: 10px 12px;
   background: var(--card-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   color: var(--text);
   white-space: pre-wrap;

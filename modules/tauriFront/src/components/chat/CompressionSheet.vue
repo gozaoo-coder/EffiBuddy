@@ -306,7 +306,7 @@ const actionSources = [
   padding: 12px 14px;
   background: color-mix(in srgb, var(--danger) 8%, var(--card));
   border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .compress-error-title {
@@ -339,7 +339,7 @@ const actionSources = [
   padding: 8px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
@@ -364,7 +364,7 @@ const actionSources = [
   padding: 10px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .compress-output.is-streaming {

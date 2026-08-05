@@ -224,7 +224,7 @@ const restoreDialogTitle = computed(() =>
   color: var(--muted);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: 6px 9px;
   line-height: 1.6;
 }

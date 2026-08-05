@@ -206,7 +206,7 @@ function filePath(line: string): string {
 .gs-card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: 10px 12px;
 }
 
@@ -353,7 +353,7 @@ function filePath(line: string): string {
   gap: 2px;
   padding: 6px 8px;
   background: var(--bg);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   min-width: 0;
 }
 
@@ -397,14 +397,14 @@ function filePath(line: string): string {
   color: var(--success);
   background: color-mix(in srgb, var(--success) 10%, var(--card));
   border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: 5px 9px;
 }
 
 /* 未保存改动横幅 */
 .gs-dirty {
   border: 1px solid color-mix(in srgb, var(--warn) 36%, var(--border));
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: color-mix(in srgb, var(--warn) 7%, var(--card));
 }
@@ -468,7 +468,7 @@ function filePath(line: string): string {
   font-weight: 700;
   width: 16px;
   height: 16px;
-  border-radius: 4px;
+  border-radius: 3px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

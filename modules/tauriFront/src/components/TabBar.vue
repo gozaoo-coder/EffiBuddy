@@ -515,7 +515,7 @@ onBeforeUnmount(() => {
   height: 30px;
   margin: 7px 3px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font-family: inherit;
@@ -639,7 +639,7 @@ onBeforeUnmount(() => {
   color: var(--text);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
   margin: 4px 0;

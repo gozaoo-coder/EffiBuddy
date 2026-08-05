@@ -127,7 +127,7 @@ async function onToolClick(label: string) {
   padding: 16px 8px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
@@ -158,7 +158,7 @@ async function onToolClick(label: string) {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -177,7 +177,7 @@ async function onToolClick(label: string) {
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--primary) 10%, var(--card));
   color: var(--primary);
   flex-shrink: 0;

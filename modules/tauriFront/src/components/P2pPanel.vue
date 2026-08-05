@@ -382,7 +382,7 @@ onMounted(() => {
   padding: 12px 14px;
   background: var(--card-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 .status-row {
   display: flex;
@@ -490,7 +490,7 @@ onMounted(() => {
   color: var(--text);
   background: var(--card-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-standard);
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
@@ -520,13 +520,13 @@ onMounted(() => {
   color: var(--muted);
   background: var(--card-2);
   border: 1px dashed var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 .device-item {
   padding: 12px 14px;
   background: var(--card-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   gap: 8px;

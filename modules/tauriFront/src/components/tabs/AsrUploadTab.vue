@@ -472,7 +472,7 @@ defineExpose({ init, destroy })
   justify-content: center;
   width: 48px;
   height: 48px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card-2);
   color: var(--primary);
   flex-shrink: 0;
@@ -579,7 +579,7 @@ defineExpose({ init, destroy })
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: rgba(255, 92, 92, 0.08);
   border: 1px solid rgba(255, 92, 92, 0.3);
   color: var(--danger);
@@ -593,7 +593,7 @@ defineExpose({ init, destroy })
 .result-section {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: var(--space-4) var(--space-5);
 }
 

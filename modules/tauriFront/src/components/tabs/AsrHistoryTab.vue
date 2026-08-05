@@ -722,7 +722,7 @@ defineExpose({ init, destroy })
   width: 100%;
   padding: 7px 32px 7px 32px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   font-family: inherit;
@@ -850,7 +850,7 @@ defineExpose({ init, destroy })
   width: 100%;
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--card);
   cursor: pointer;
   text-align: left;
@@ -1000,7 +1000,7 @@ defineExpose({ init, destroy })
   width: 32px;
   height: 32px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   cursor: pointer;
@@ -1031,7 +1031,7 @@ defineExpose({ init, destroy })
   width: 100%;
   padding: 6px 10px;
   border: 1px solid var(--primary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   font-family: inherit;
@@ -1088,7 +1088,7 @@ defineExpose({ init, destroy })
   width: 100%;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   font-family: inherit;
@@ -1138,7 +1138,7 @@ defineExpose({ init, destroy })
   word-break: break-word;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: var(--space-4) var(--space-5);
   max-height: 320px;
   overflow-y: auto;
@@ -1149,7 +1149,7 @@ defineExpose({ init, destroy })
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: rgba(255, 92, 92, 0.08);
   border: 1px solid rgba(255, 92, 92, 0.3);
   color: var(--danger);

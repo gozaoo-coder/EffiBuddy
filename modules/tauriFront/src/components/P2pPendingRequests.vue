@@ -210,7 +210,7 @@ function onLeave(el: Element, done: () => void) {
   padding: 12px 14px;
   background: var(--card-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   gap: 8px;

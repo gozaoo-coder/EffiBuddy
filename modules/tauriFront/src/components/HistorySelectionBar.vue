@@ -196,7 +196,7 @@ const canBatch = computed(
   gap: 6px;
   padding: 4px 8px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
   color: var(--text);
@@ -264,7 +264,7 @@ const canBatch = computed(
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
 }
 
@@ -285,7 +285,7 @@ const canBatch = computed(
   height: 28px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   cursor: pointer;

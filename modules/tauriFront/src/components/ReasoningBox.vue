@@ -192,7 +192,7 @@ onUnmounted(() => {
 <style scoped>
 .reasoning-box {
   margin: 6px 0 8px;
-  border-radius: var(--radius-md, 12px);
+  border-radius: var(--radius-lg);
   background: var(--card-2, rgba(0, 0, 0, 0.04));
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   overflow: hidden;

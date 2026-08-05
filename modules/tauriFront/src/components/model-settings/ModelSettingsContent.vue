@@ -130,7 +130,7 @@ function onChildSaved() {
   max-width: 480px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   text-align: center;
 }
@@ -179,7 +179,7 @@ function onChildSaved() {
   padding: 10px 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   color: var(--text);
   line-height: 1.5;

@@ -62,7 +62,7 @@ function taskTitle(): string {
   text-align: left;
   background: var(--bg-subtle, rgba(128, 128, 128, 0.06));
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.28));
-  border-radius: 10px;
+  border-radius: 7px;
   cursor: pointer;
   user-select: none;
   transition: border-color 0.15s, background 0.15s, transform 0.15s;
@@ -81,7 +81,7 @@ function taskTitle(): string {
   flex-shrink: 0;
   width: 26px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: 7px;
   color: var(--accent, #4f7cff);
   background: color-mix(in srgb, var(--accent, #4f7cff) 12%, transparent);
 }

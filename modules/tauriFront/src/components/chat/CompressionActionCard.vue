@@ -86,7 +86,7 @@ const methodLabel = (m: CompressionAction['method']) =>
   background: var(--card);
   border: 1px solid var(--border);
   border-left-width: 3px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .compress-action-item.method-keep { border-left-color: var(--success, #10a37f); }
@@ -105,7 +105,7 @@ const methodLabel = (m: CompressionAction['method']) =>
 /* 可点击的头部:cursor + hover 反馈 */
 .compress-action-head.is-button {
   cursor: pointer;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 
 .compress-action-head.is-button:hover {
@@ -167,7 +167,7 @@ const methodLabel = (m: CompressionAction['method']) =>
   color: var(--text);
   background: var(--bg-2);
   border: 1px dashed var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -178,7 +178,7 @@ const methodLabel = (m: CompressionAction['method']) =>
   margin-top: 4px;
   padding: 8px 10px;
   background: var(--card);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   border: 1px dashed var(--border);
   display: flex;
   flex-direction: column;

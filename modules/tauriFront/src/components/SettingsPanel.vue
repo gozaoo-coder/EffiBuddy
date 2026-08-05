@@ -376,7 +376,7 @@ function onClose() {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font-family: inherit;
@@ -458,7 +458,7 @@ function onClose() {
   padding: 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .card-head {
@@ -497,7 +497,7 @@ function onClose() {
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--bg-2);
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--ease-standard),
@@ -543,7 +543,7 @@ function onClose() {
   padding: 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   transition: border-color var(--duration-fast) var(--ease-standard);
 }
 
@@ -590,7 +590,7 @@ function onClose() {
   justify-content: center;
   width: 56px;
   height: 56px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--primary);
   color: #fff;
   font-size: 22px;
@@ -651,7 +651,7 @@ function onClose() {
   width: 100%;
   padding: 10px 12px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font-family: inherit;

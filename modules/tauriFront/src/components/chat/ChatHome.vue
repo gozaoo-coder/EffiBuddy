@@ -301,7 +301,7 @@ const features = [
   justify-content: center;
   width: 64px;
   height: 64px;
-  border-radius: 22px;
+  border-radius: 7px;
   color: #fff;
   background: linear-gradient(
     135deg,
@@ -414,7 +414,7 @@ const features = [
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
@@ -431,7 +431,7 @@ const features = [
   flex-shrink: 0;
   width: 34px;
   height: 34px;
-  border-radius: 10px;
+  border-radius: 7px;
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
@@ -596,7 +596,7 @@ const features = [
   flex-shrink: 0;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 7px;
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
@@ -683,7 +683,7 @@ const features = [
   width: 34px;
   height: 34px;
   margin-bottom: 4px;
-  border-radius: 10px;
+  border-radius: 7px;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
@@ -730,7 +730,7 @@ const features = [
   .home-orb {
     width: 50px;
     height: 50px;
-    border-radius: 17px;
+    border-radius: 7px;
   }
   .home-title {
     font-size: 23px;
@@ -765,7 +765,7 @@ const features = [
   .prompt-icon {
     width: 32px;
     height: 32px;
-    border-radius: 9px;
+    border-radius: 7px;
   }
   .feature-icon {
     width: 30px;

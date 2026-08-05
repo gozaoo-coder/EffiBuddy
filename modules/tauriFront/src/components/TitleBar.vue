@@ -228,7 +228,7 @@ async function close() {
   padding: 0;
   background: transparent;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: pointer;
   flex-shrink: 0;
@@ -266,8 +266,8 @@ async function close() {
   padding: 6px;
   background: var(--card);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.352);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -294,7 +294,7 @@ async function close() {
   font-size: var(--fs-sm);
   color: var(--text);
   padding: 3px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   text-align: left;
   white-space: nowrap;
 }

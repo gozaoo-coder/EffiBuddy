@@ -249,7 +249,7 @@ function truncate(s: string, max: number): string {
   display: flex;
   flex-direction: column;
   padding: 9px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
@@ -291,7 +291,7 @@ function truncate(s: string, max: number): string {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--card-2);
   color: var(--muted);
   flex-shrink: 0;
@@ -492,7 +492,7 @@ function truncate(s: string, max: number): string {
   line-height: 1.5;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -505,7 +505,7 @@ function truncate(s: string, max: number): string {
   line-height: 1.5;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   margin: 0;
   white-space: pre-wrap;
@@ -522,7 +522,7 @@ function truncate(s: string, max: number): string {
 .ap-item-at-msg {
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
 }
 
