@@ -132,23 +132,21 @@ function cancelEdit() {
       </template>
     </div>
 
-    <!-- 右侧：收起面板 + 上下文 ring（hover 浮出文字） -->
+    <!-- 右侧：收起面板 + 上下文 ring（hover 弹出气泡提示） -->
     <div class="topbar-right">
       <button
         v-if="showPanel"
         type="button"
         class="topbar-btn"
         :class="{ 'topbar-btn--on': panelOpen }"
-        :title="panelOpen ? '收起上下文面板' : '展开上下文面板（todoTree / 用量 / 压缩）'"
+        :data-tooltip="panelOpen ? '收起上下文面板' : '展开上下文面板'"
         @click="emit('toggle-panel')"
       >
         <Icon name="discover" :size="14" />
-        <span class="topbar-hover-text">{{ panelOpen ? '收起面板' : '展开面板' }}</span>
       </button>
 
-      <div v-if="showRing && max > 0" class="topbar-ring" :title="ringText">
+      <div v-if="showRing && max > 0" class="topbar-ring" :data-tooltip="ringText">
         <ContextRing :used="used" :max="max" :size="18" />
-        <span class="topbar-hover-text topbar-ring-text">{{ ringText }}</span>
       </div>
     </div>
   </div>
@@ -180,9 +178,20 @@ function cancelEdit() {
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   pointer-events: auto;
   min-width: 0;
+}
+
+/* ---- 统一顶栏子元素基线：等高 28px / 圆角 7px / 字号 12px ---- */
+.topbar-crumb,
+.topbar-btn,
+.topbar-ring,
+.topbar-edit {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12px;
 }
 
 /* ---- 标题 / 面包屑 ---- */
@@ -191,13 +200,10 @@ function cancelEdit() {
   align-items: center;
   gap: 5px;
   max-width: 340px;
-  padding: 2px 8px;
-  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   background: color-mix(in srgb, var(--bg) 78%, transparent);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   cursor: default;
   user-select: none;
 }
@@ -236,20 +242,17 @@ function cancelEdit() {
 
 .topbar-sep {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 /* ---- 内联编辑输入 ---- */
 .topbar-edit {
   width: 300px;
   max-width: 60vw;
-  padding: 3px 8px;
-  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   background: var(--bg-2);
   border: 1px solid var(--primary);
-  border-radius: var(--radius-md);
   outline: none;
 }
 
@@ -257,58 +260,89 @@ function cancelEdit() {
 .topbar-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 3px 8px;
-  font-size: 12px;
   color: var(--muted);
   background: color-mix(in srgb, var(--bg) 78%, transparent);
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
 .topbar-btn:hover {
   color: var(--primary);
   border-color: var(--border);
+  background: color-mix(in srgb, var(--primary) 8%, var(--bg));
 }
 
 .topbar-btn--on {
   color: var(--primary);
 }
 
+/* 上下文用量 ring：信息展示而非按钮——保持低调，hover 仅加深背景以暗示 tooltip */
 .topbar-ring {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 3px 8px;
   color: var(--muted);
   background: color-mix(in srgb, var(--bg) 78%, transparent);
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  transition: border-color 0.15s;
+  cursor: default;
+  transition: background 0.15s;
 }
 
 .topbar-ring:hover {
-  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
 }
 
-/* hover 浮出文字：默认隐藏，悬浮显示 */
-.topbar-hover-text {
-  max-width: 0;
+/* ---- tippy 风格悬浮提示：hover 弹出气泡（::after + attr(data-tooltip)） ---- */
+.topbar-btn,
+.topbar-ring {
+  position: relative;
+}
+
+.topbar-btn::after,
+.topbar-ring::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  max-width: 240px;
+  padding: 4px 9px;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  white-space: normal;
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: var(--shadow);
   opacity: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  transition: max-width 0.22s ease, opacity 0.22s ease;
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  z-index: 60;
 }
 
-.topbar-btn:hover .topbar-hover-text,
-.topbar-ring:hover .topbar-hover-text {
-  max-width: 260px;
+.topbar-btn:hover::after,
+.topbar-ring:hover::after {
   opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
-.topbar-ring-text {
-  font-size: 12px;
+/* 右侧控件：tooltip 右对齐锚定，避免长文案（如上下文用量）超出视口右缘被截断 */
+.topbar-right .topbar-btn::after,
+.topbar-right .topbar-ring::after {
+  left: auto;
+  right: 0;
+  transform: translateY(-4px);
+  text-align: left;
+}
+
+.topbar-right .topbar-btn:hover::after,
+.topbar-right .topbar-ring:hover::after {
+  transform: translateY(0);
 }
 </style>
