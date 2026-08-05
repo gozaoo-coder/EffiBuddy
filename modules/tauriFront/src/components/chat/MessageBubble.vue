@@ -39,8 +39,46 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   @pointercancel="menu.onMsgPointerUp"
   @contextmenu="menu.onMsgContextMenu($event, message)"
 >
-  <!-- 会话版本操作 hover 操作栏:复制 / 开启分支 / 保存临时版本 / 回溯版本 / 撤回至此消息前 -->
+  <!-- 会话版本操作 hover 操作栏:用量标签 / 复制 / 开启分支 / 保存临时版本 / 回溯版本 / 撤回至此消息前 -->
   <div v-if="!isStreaming" class="msg-hover-bar" @pointerdown.stop>
+    <!-- 计费/用量标签:回答结束后显示本次消费,悬浮查看明细 -->
+    <div v-if="meta?.billing && billingTotal(meta.billing) > 0" class="msg-usage-wrap">
+      <div class="msg-usage" :class="{ priced: meta.billing.priced }">
+        <span v-if="billingUnitOf(message.id) === 'price'">
+          {{ fmtYuan(meta.billing.total_cost) }}元
+        </span>
+        <span v-else>{{ billingTotal(meta.billing) }} tokens</span>
+      </div>
+      <div class="msg-usage-tip">
+        <div class="tip-head">
+          <span class="tip-title">用量</span>
+          <button
+            v-if="meta.billing.priced"
+            type="button"
+            class="tip-toggle"
+            @click.stop="toggleBillingUnit(message.id)"
+          >
+            切换单位为{{ billingUnitOf(message.id) === 'price' ? 'token' : '元' }}
+          </button>
+        </div>
+        <div class="tip-row">
+          <span class="tip-label">处理轮数</span>
+          <span class="tip-val">{{ meta.billing.rounds }}</span>
+        </div>
+        <div class="tip-row">
+          <span class="tip-label">缓存计费</span>
+          <span class="tip-val">{{ billingRowValue(message.id, meta.billing, 'hit') }}</span>
+        </div>
+        <div class="tip-row">
+          <span class="tip-label">未缓存计费</span>
+          <span class="tip-val">{{ billingRowValue(message.id, meta.billing, 'miss') }}</span>
+        </div>
+        <div class="tip-row">
+          <span class="tip-label">输出计费</span>
+          <span class="tip-val">{{ billingRowValue(message.id, meta.billing, 'output') }}</span>
+        </div>
+      </div>
+    </div>
     <button
       type="button"
       class="msg-hover-btn"
@@ -117,44 +155,6 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
           <div class="msg-attachment-meta">{{ att.name }}</div>
         </div>
       </div>
-      <!-- 计费统计:回答结束后显示本次询问的消费价格,悬浮查看明细 -->
-      <div v-if="meta?.billing && billingTotal(meta.billing) > 0" class="msg-usage-wrap">
-        <div class="msg-usage" :class="{ priced: meta.billing.priced }">
-          <span v-if="billingUnitOf(message.id) === 'price'">
-            {{ fmtYuan(meta.billing.total_cost) }}元
-          </span>
-          <span v-else>{{ billingTotal(meta.billing) }} tokens</span>
-        </div>
-        <div class="msg-usage-tip">
-          <div class="tip-head">
-            <span class="tip-title">用量</span>
-            <button
-              v-if="meta.billing.priced"
-              type="button"
-              class="tip-toggle"
-              @click.stop="toggleBillingUnit(message.id)"
-            >
-              切换单位为{{ billingUnitOf(message.id) === 'price' ? 'token' : '元' }}
-            </button>
-          </div>
-          <div class="tip-row">
-            <span class="tip-label">处理轮数</span>
-            <span class="tip-val">{{ meta.billing.rounds }}</span>
-          </div>
-          <div class="tip-row">
-            <span class="tip-label">缓存计费</span>
-            <span class="tip-val">{{ billingRowValue(message.id, meta.billing, 'hit') }}</span>
-          </div>
-          <div class="tip-row">
-            <span class="tip-label">未缓存计费</span>
-            <span class="tip-val">{{ billingRowValue(message.id, meta.billing, 'miss') }}</span>
-          </div>
-          <div class="tip-row">
-            <span class="tip-label">输出计费</span>
-            <span class="tip-val">{{ billingRowValue(message.id, meta.billing, 'output') }}</span>
-          </div>
-        </div>
-      </div>
     </template>
     <template v-else>{{ message.content }}</template>
   </div>
@@ -213,12 +213,13 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   white-space: nowrap;
 }
 
-/* 计费统计:assistant 气泡底部小标签(回答结束后显示本次询问消费价格)
-   悬浮时展开明细浮层,与右栏 meta pill 风格一致 */
+/* 计费/用量标签:嵌入 hover 操作栏左侧(回答结束后显示本次消费),
+   悬浮时展开明细浮层 */
 .msg-usage-wrap {
   position: relative;
   display: inline-flex;
-  margin-top: 8px;
+  align-items: center;
+  margin-right: 4px;
   cursor: default;
 }
 
@@ -226,13 +227,14 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
-  padding: 3px 10px;
+  padding: 2px 8px;
   border-radius: var(--radius-full);
   background: var(--bg-2);
   border: 1px solid var(--border);
   color: var(--muted);
+  white-space: nowrap;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
 
@@ -240,10 +242,10 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
   color: var(--success);
 }
 
-/* 悬浮明细浮层:回答结束后的用量/计费分项 */
+/* 悬浮明细浮层:操作栏位于消息顶部,明细向下展开避免被遮挡 */
 .msg-usage-tip {
   position: absolute;
-  bottom: calc(100% + 8px);
+  top: calc(100% + 8px);
   left: 0;
   z-index: 30;
   min-width: 240px;

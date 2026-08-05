@@ -143,11 +143,33 @@ function toolIcon(name: string): string {
   return map[name] || 'tool'
 }
 
-// 参数摘要：取前 40 字符
+// 参数摘要：优先提取关键字段(文件路径/URL/命令等)，取前 48 字符
+const ARG_KEY_PRIORITY = [
+  'file_path',
+  'path',
+  'url',
+  'command',
+  'query',
+  'pattern',
+  'description',
+]
+
 function argsSummary(args: string): string {
   if (!args || args === 'null' || args === '{}') return '无参数'
-  const trimmed = args.length > 40 ? args.slice(0, 40) + '…' : args
-  return trimmed
+  try {
+    const obj = JSON.parse(args)
+    if (obj && typeof obj === 'object') {
+      for (const k of ARG_KEY_PRIORITY) {
+        const v = (obj as Record<string, unknown>)[k]
+        if (typeof v === 'string' && v) {
+          return v.length > 48 ? v.slice(0, 48) + '…' : v
+        }
+      }
+    }
+  } catch {
+    /* 非 JSON 时回退原始文本 */
+  }
+  return args.length > 40 ? args.slice(0, 40) + '…' : args
 }
 
 // 美化 JSON 用于详情显示
@@ -198,11 +220,14 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
             <span
               class="tool-status"
               :class="{ pending: c.pending, error: c.is_error && !c.pending, ok: !c.pending && !c.is_error }"
-            >{{ statusText(c) }}</span>
+            >
+              <span v-if="c.pending" class="status-dot"></span>
+              {{ statusText(c) }}
+            </span>
           </div>
           <div class="tool-args">{{ argsSummary(c.arguments) }}</div>
         </div>
-        <span class="tool-arrow"><Icon name="chevron-right" :size="16" /></span>
+        <span v-if="!embedded" class="tool-arrow"><Icon name="chevron-right" :size="16" /></span>
       </div>
     </div>
 
@@ -256,7 +281,7 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   font-size: 13px;
 }
 
-/* 嵌入模式：无卡片外观，融入文档流（ProcessSection 内使用） */
+/* 嵌入模式：无外层卡片，每条工具调用为独立圆角卡片行（可视化风格） */
 .tool-group.embedded {
   margin: 0;
   background: transparent;
@@ -267,14 +292,50 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
 
 .tool-group.embedded .group-body {
   border-top: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .tool-group.embedded .tool-item {
-  height: 30px;
-  max-height: 30px;
-  padding: 0 6px;
-  border-bottom: none;
-  border-radius: var(--radius-sm, 8px);
+  height: 34px;
+  max-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius-md, 10px);
+  background: var(--card-2, rgba(0, 0, 0, 0.03));
+  transition: border-color var(--duration-fast, 120ms) var(--ease-standard, ease),
+    background var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.tool-group.embedded .tool-item:hover {
+  background: var(--card, rgba(0, 0, 0, 0.05));
+  border-color: color-mix(in srgb, var(--primary, #4f7cff) 35%, var(--border, rgba(0, 0, 0, 0.08)));
+}
+
+.tool-group.embedded .tool-icon {
+  width: 20px;
+  font-size: 16px;
+  color: var(--primary, #4f7cff);
+}
+
+/* 执行中的状态小圆点：呼吸动画 */
+.status-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: status-pulse 1s infinite ease-in-out;
+}
+
+@keyframes status-pulse {
+  0%, 100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* 组标题：38px */
@@ -385,10 +446,14 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
 }
 
 .tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: 8px;
   flex-shrink: 0;
+  font-weight: 500;
 }
 
 .tool-status.pending {
@@ -397,13 +462,13 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
 }
 
 .tool-status.error {
-  color: #fff;
-  background: #e53935;
+  color: #c62828;
+  background: color-mix(in srgb, #e53935 14%, transparent);
 }
 
 .tool-status.ok {
-  color: #fff;
-  background: #43a047;
+  color: #2e7d32;
+  background: color-mix(in srgb, #43a047 14%, transparent);
 }
 
 .tool-args {
