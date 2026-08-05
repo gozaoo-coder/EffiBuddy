@@ -74,6 +74,10 @@ const props = withDefaults(
     triggerRef?: HTMLElement | null
     /** 上下文菜单坐标（来自 contextmenu 事件）；优先于 triggerRef */
     position?: { x: number; y: number } | null
+    /** 定位偏移量（px）：在自动定位结果上叠加（如贴齐侧栏边缘） */
+    positionOffset?: { x?: number; y?: number }
+    /** 未选中项隐藏 ✓ 占位：仅选中项渲染 menu-item-check */
+    hideCheckWhenUnselected?: boolean
   }>(),
   {
     visible: undefined,
@@ -84,6 +88,8 @@ const props = withDefaults(
     minWidth: 160,
     triggerRef: null,
     position: null,
+    positionOffset: undefined,
+    hideCheckWhenUnselected: true,
   },
 )
 
@@ -249,9 +255,11 @@ async function updatePosition() {
   realPlacement.value = `${side}-${align === 'center' ? '' : align}`.replace('-$', '') as MenuPlacement
   if (align === 'center') realPlacement.value = side as MenuPlacement
 
+  const offsetX = props.positionOffset?.x ?? 0
+  const offsetY = props.positionOffset?.y ?? 0
   panelStyle.value = {
-    top: `${top + window.scrollY}px`,
-    left: `${left + window.scrollX}px`,
+    top: `${top + window.scrollY + offsetY}px`,
+    left: `${left + window.scrollX + offsetX}px`,
     minWidth: `${props.minWidth}px`,
   }
   arrowStyle.value = arrow
@@ -473,7 +481,7 @@ export function useContextMenu(): {
               @mouseleave="onItemLeave"
             >
               <!-- 选中状态占位（左侧 ✓） -->
-              <span class="menu-item-check"><Icon v-if="item.selected" name="check-builtin" :size="16" /></span>
+              <span v-if="item.selected || !hideCheckWhenUnselected" class="menu-item-check"><Icon v-if="item.selected" name="check-builtin" :size="16" /></span>
               <!-- 图标 -->
               <span v-if="item.icon" class="menu-item-icon"><Icon :name="item.icon" :size="18" /></span>
               <!-- 文本 -->
@@ -502,7 +510,7 @@ export function useContextMenu(): {
                 :disabled="child.disabled"
                 @click="onItemClick(child)"
               >
-                <span class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
+                <span v-if="child.selected || !hideCheckWhenUnselected" class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
                 <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="18" /></span>
                 <span class="menu-item-label">{{ child.label }}</span>
               </button>
@@ -535,7 +543,7 @@ export function useContextMenu(): {
                   :disabled="child.disabled"
                   @click="onItemClick(child)"
                 >
-                  <span class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
+                  <span v-if="child.selected || !hideCheckWhenUnselected" class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
                   <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="18" /></span>
                   <span class="menu-item-label">{{ child.label }}</span>
                 </button>

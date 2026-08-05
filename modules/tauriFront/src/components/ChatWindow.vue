@@ -16,7 +16,7 @@
  * 对外接口保持不变:props backend / conversationId,
  * emits update:conversation-id / conversation-changed(由 ChatTab 透传)。
  */
-import { provide, onUnmounted } from 'vue'
+import { provide, onMounted, onUnmounted } from 'vue'
 import ShellSessionBar from './ShellSessionBar.vue'
 import ChatContextPanel from './ChatContextPanel.vue'
 import { Menu, Dialog } from './basic'
@@ -35,6 +35,7 @@ import VersionSheet from './chat/VersionSheet.vue'
 import ImagePreview from './chat/ImagePreview.vue'
 import AskUserDialog from './chat/AskUserDialog.vue'
 import { CHAT_STORE_KEY } from '../composables/chat/store'
+import { consumePendingPrompt } from '../composables/chat/pendingPrompt'
 import { useAutoScroll } from '../composables/chat/useAutoScroll'
 import { useChatCore } from '../composables/chat/useChatCore'
 import { useChatStreaming } from '../composables/chat/useChatStreaming'
@@ -110,6 +111,15 @@ void compression.loadCompressionSettings()
     send,
   })
 
+// ---------- 空态聊天框待发送提示词 ----------
+// TabEmpty 空态输入发送 → openTab 新建页签 → 本实例挂载后消费并自动发送。
+// 仅限无会话的新页签（history 打开的会话不消费）。
+onMounted(() => {
+  if (props.conversationId) return
+  const prompt = consumePendingPrompt()
+  if (prompt) void send.sendPrompt(prompt)
+})
+
 // ---------- 卸载清理 ----------
 onUnmounted(() => {
   autoscroll.dispose()
@@ -146,9 +156,9 @@ const { confirmState: versionConfirmState, closeConfirm } = versioning
         <GradualBlur
           v-if="!subAgentId"
           position="top"
-          height="96px"
+          height="70px"
           :strength="2.5"
-          :div-count="5"
+          :div-count="7"
           :z-index="20"
           curve="bezier"
         />

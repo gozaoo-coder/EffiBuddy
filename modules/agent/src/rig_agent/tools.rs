@@ -37,7 +37,7 @@ use crate::tools::{
     UninstallSkillTool, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 
-use super::RigAgent;
+use super::{ReasoningConfig, RigAgent};
 
 impl RigAgent {
     /// 构建一个带工具的 agent（每次调用重新构建，零成本）

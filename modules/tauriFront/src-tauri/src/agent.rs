@@ -147,7 +147,6 @@ pub(crate) fn build_agent_from_state(
             Arc::clone(&state.pending_user_messages),
             Arc::clone(&state.reasoning_config),
           )
-        )
     }
 
 

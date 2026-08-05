@@ -110,8 +110,8 @@ export function useChatCore(
 
   /** 上下文管理 Sheet(含消息压缩按钮) */
   const contextSheetOpen = ref(false)
-  /** 右栏上下文面板:默认开启,可从底栏 meta 区域切换 */
-  const ctxPanelOpen = ref(true)
+  /** 右栏上下文面板:默认关闭,可由顶栏「面板」按钮切换 */
+  const ctxPanelOpen = ref(false)
 
   const activeModelInfo = ref<ActiveModelInfo | null>(null)
   async function loadActiveModelInfo() {

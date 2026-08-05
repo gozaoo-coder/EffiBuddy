@@ -30,6 +30,7 @@ pub(crate) fn forward_event(handle: &tauri::AppHandle, event: &BusEvent) {
         BusEvent::AsrRecordUpdated { .. } => ("asr-record-updated", event),
         BusEvent::TodoTreeUpdated { .. } => ("todo-tree-updated", event),
         BusEvent::AgentPoolUpdated { .. } => ("agent-pool-updated", event),
+        BusEvent::ToolConfirm { .. } => ("tool-confirm", event),
     };
     let _ = handle.emit(name, payload);
 }

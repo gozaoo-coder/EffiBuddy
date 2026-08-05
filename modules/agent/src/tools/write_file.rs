@@ -112,7 +112,7 @@ impl Tool for WriteFileTool {
              不推荐直接传裸文本：需要 JSON 转义（双引号、反斜杠、换行），容易写错。\n\n\
                **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
                每个参数一个标签，形如 <!_PATH_>test.txt</!_PATH_>、\n\
-               <!_CONTENT_>代码内容，无需 JSON 转义</!_CONTENT_>。\n\n{cwd_hint}
+               <!_CONTENT_>代码内容，无需 JSON 转义</!_CONTENT_>。\n\n{cwd_hint}"
         )
     }
 

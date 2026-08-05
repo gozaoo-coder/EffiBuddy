@@ -131,7 +131,8 @@ const modelItems = computed<MenuItemOption[]>(() =>
   chatModels.value.map((m) => ({
     key: m.id,
     label: m.label,
-    selected: activeModelInfo.value?.id === m.id,
+    // 防御：provider 缺失 activeModelInfo 时（如空态适配 store 中间态）不崩溃
+    selected: activeModelInfo?.value?.id === m.id,
   })),
 )
 
@@ -148,7 +149,7 @@ async function toggleModelMenu() {
 }
 
 async function onModelSelect(item: MenuItemOption) {
-  if (activeModelInfo.value?.id === item.key) return
+  if (activeModelInfo?.value?.id === item.key) return
   try {
     await invoke('set_active_model', { id: item.key })
     await loadActiveModelInfo()

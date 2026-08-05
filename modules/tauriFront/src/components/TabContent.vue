@@ -46,9 +46,9 @@
  *   若用 id 作 :key，迁移瞬间组件重新挂载，流式传输中的 ChatWindow 实例被销毁、
  *   Tauri 事件监听丢失，首条消息流式中断。instanceKey 与 id 解耦，迁移 id 时实例不变。
  */
-import { computed, defineComponent, h, type Component } from 'vue'
+import { computed, type Component } from 'vue'
 import { animate } from 'animejs'
-import Icon from './Icon.vue'
+import TabEmpty from './TabEmpty.vue'
 import ChatTab from './tabs/ChatTab.vue'
 import AsrStreamTab from './tabs/AsrStreamTab.vue'
 import AsrUploadTab from './tabs/AsrUploadTab.vue'
@@ -71,26 +71,6 @@ const emit = defineEmits<{
 
 const { getActive, updateTab } = useTabs()
 const activeTab = getActive()
-
-// ============= 组件映射 =============
-// 空状态组件：无页签时展示。定义为局部组件（不单独建文件），通过 h() 渲染。
-// 声明 emits 以消费父级透传的监听器，避免落到根 div 成为无效事件属性。
-const TabEmpty: Component = defineComponent({
-  name: 'TabEmpty',
-  emits: ['update:conversation-id', 'conversation-changed', 'update:status'],
-  setup() {
-    return () =>
-      h('div', { class: 'tab-empty' }, [
-        h('div', { class: 'tab-empty-badge' }, [h(Icon, { name: 'chat', size: 44 })]),
-        h('h2', { class: 'tab-empty-title' }, '开始新的对话'),
-        h(
-          'p',
-          { class: 'tab-empty-desc' },
-          '从左侧历史记录选择会话，或点击「新建聊天」开启新页签',
-        ),
-      ])
-  },
-})
 
   const activeComponent = computed<Component>(() => {
     const t = activeTab.value
@@ -247,50 +227,4 @@ function onStatusUpdate(status: TabItem['status']) {
   height: 100%;
 }
 
-/* ---------- 空状态 ---------- */
-.tab-content :deep(.tab-empty) {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 0;
-  padding: var(--space-8);
-  text-align: center;
-  background: var(--bg);
-}
-
-.tab-content :deep(.tab-empty-badge) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 88px;
-  height: 88px;
-  border-radius: var(--radius-full);
-  /* 主题感知的 primary 淡彩底：暗色下蓝灰、亮色下浅灰，避免硬编码 rgba 与主题脱节 */
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--primary) 16%, var(--card)),
-    color-mix(in srgb, var(--primary) 6%, var(--card))
-  );
-  color: var(--primary);
-  margin-bottom: var(--space-5);
-  box-shadow: var(--shadow-sm);
-}
-
-.tab-content :deep(.tab-empty-title) {
-  margin: 0 0 var(--space-2);
-  font-size: var(--fs-xl);
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.3px;
-}
-
-.tab-content :deep(.tab-empty-desc) {
-  margin: 0;
-  max-width: 360px;
-  font-size: var(--fs-base);
-  line-height: 1.6;
-  color: var(--muted);
-}
 </style>

@@ -101,13 +101,10 @@ pub struct AppState {
     pub agent_cancel: Arc<effisuite_agent::AgentCancelRegistry>,
     /// 自动压缩进行中会话集合：上下文达到阈值触发自动压缩时登记，压缩完成移除。
     /// 防止同一会话并发触发多次自动压缩（跨流、跨轮次去重）。
-    /// 自动压缩进行中会话集合：上下文达到阈值触发自动压缩时登记，压缩完成移除。
-    /// 防止同一会话并发触发多次自动压缩（跨流、跨轮次去重）。
     pub auto_compress_inflight: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// 推理设置句柄（thinking 开关 + reasoning_effort 等级），与 agent 共享同一份 Arc。
     /// send_message / send_message_stream 命令在发送前写入，agent 每回合读取注入请求体。
     pub reasoning_config: Arc<RwLock<Option<effisuite_agent::ReasoningConfig>>>,
-  }
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。
