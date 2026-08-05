@@ -9,26 +9,29 @@
  * 各层之间保持明显灰度差，配合 --border-strong 硬分割线清晰界定区块。
  */
 :root {
-  /* 灰阶统一为 rgba(0,0,0,α) 黑色系，α 按 0.008 递进取整（深色文字保持浅色以保证可读性） */
-  --bg: rgba(0, 0, 0, 0.936);
-  --bg-chrome: rgba(0, 0, 0, 0.96);
-  --bg-rail: rgba(0, 0, 0, 0.912);
-  --bg-rail-2: rgba(0, 0, 0, 0.896);
-  --bg-2: rgba(0, 0, 0, 0.904);
-  --card: rgba(0, 0, 0, 0.88);
-  --card-2: rgba(0, 0, 0, 0.848);
-  --border: rgba(0, 0, 0, 0.84);
-  --border-strong: rgba(0, 0, 0, 0.76);
-  --menu-bg: rgb(30, 30, 30);
-  --hover: rgba(255, 255, 255, 0.08);
-  --primary: #4a7eff;
-  --primary-dim: #3a64cc;
-  --text: #e4e6eb;
-  --muted: #8b909c;
-  --danger: #ff5c5c;
-  --success: #3ecf8e;
-  --warn: #f0c04a;
-  --info: #4a9eff;
+  /* 灰阶统一为亮灰阶（色彩更亮）：背景从近黑提升为深灰，边框转为浅色半透明以便结构清晰可见 */
+  --bg: rgb(30, 30, 34);
+  --bg-chrome: rgb(24, 24, 28);
+  --bg-rail: rgb(28, 28, 32);
+  --bg-rail-2: rgb(34, 34, 38);
+  --bg-2: rgb(32, 32, 36);
+  --card: rgb(40, 40, 45);
+  --card-2: rgb(46, 46, 51);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --menu-bg: rgb(46, 46, 51);
+  --hover: rgba(255, 255, 255, 0.1);
+  /* 强调色：更亮更饱和，提升整体色彩明度 */
+  --primary: #5b8cff;
+  --primary-dim: #4a74e0;
+  --text: #e9ebf1;
+  --muted: #9ba2b2;
+  --danger: #ff6b6b;
+  --success: #4ade80;
+  --warn: #f5c95c;
+  --info: #60a5fa;
+  /* 进度圆环轨道（ContextRing） */
+  --ring-track: rgba(255, 255, 255, 0.15);
 
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
@@ -59,6 +62,8 @@
   --success: #059669;
   --warn: #d97706;
   --info: #2563eb;
+  /* 进度圆环轨道（ContextRing）：亮色主题用浅灰 */
+  --ring-track: rgba(0, 0, 0, 0.12);
 
   color-scheme: light;
 }
