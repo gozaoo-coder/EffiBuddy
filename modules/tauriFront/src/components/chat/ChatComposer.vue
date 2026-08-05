@@ -2,15 +2,16 @@
 /**
  * ChatComposer —— 图一风格底部输入栏(卡片式复合输入框)
  *
- * 布局:圆角容器内上方为全宽 textarea,下方依次为
- * 「添加图片和文件」胶囊按钮(支持 Ctrl+U 快捷键)与底部操作栏
+ * 布局:圆角容器内上方为全宽 textarea,下方为底部操作栏
  * (+ 按钮 / meta pills / 右侧圆角方形发送按钮)。
  * 发送编排在 useChatSend(引用拼接 → 建会话 → 流式调用)实现,本组件只渲染 UI。
  */
-import { ref, computed, inject, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, inject, watch } from 'vue'
 import { animate } from 'animejs'
+import { invoke } from '@tauri-apps/api/core'
 import { Button, IconButton, Icon, Menu, type MenuItemOption } from '../basic'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
+import type { AgentConfig, AvailableModel } from '../../types'
 
 const store = inject(CHAT_STORE_KEY)!
 
@@ -27,6 +28,9 @@ const {
     shellBarExpanded,
     shellActiveCount,
     toggleShellBar,
+    activeModelInfo,
+    loadActiveModelInfo,
+    toast,
   } = store.core
 const { quoteChips, scrollToMessage, removeQuote } = store.menu
   const { compressBadgeInfo, compressSavedInfo, compressionSheetOpen } = store.compression
@@ -34,7 +38,6 @@ const { quoteChips, scrollToMessage, removeQuote } = store.menu
   // 输入栏只保留 UI:渲染按钮状态 + 触发发送/停止。
   const { send, stopGenerating } = store.send
 
-const composerFocused = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // 发送后 input 被清空:回弹 textarea 高度到单行(useChatSend 不再关心 UI)
@@ -119,21 +122,47 @@ function onReasoningSelect(item: MenuItemOption) {
   reasoningEffort.value = item.key as 'low' | 'high' | 'max'
 }
 
-// ---------- Ctrl+U 全局快捷键:打开「添加图片和文件」工具 Sheet ----------
-function onGlobalKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'u' || e.key === 'U')) {
-    e.preventDefault()
-    toolSheetOpen.value = true
+// ---------- 当前对话模型选择菜单 ----------
+const modelMenuVisible = ref(false)
+const modelBtnRef = ref<HTMLElement | null>(null)
+const chatModels = ref<AvailableModel[]>([])
+
+const modelItems = computed<MenuItemOption[]>(() =>
+  chatModels.value.map((m) => ({
+    key: m.id,
+    label: m.label,
+    selected: activeModelInfo.value?.id === m.id,
+  })),
+)
+
+/** 打开菜单时按需拉取对话模型列表（get_config 过滤 kind=chat） */
+async function toggleModelMenu() {
+  modelMenuVisible.value = !modelMenuVisible.value
+  if (!modelMenuVisible.value) return
+  try {
+    const cfg = await invoke<AgentConfig>('get_config')
+    chatModels.value = cfg.models.filter((m) => (m.kind ?? 'chat') === 'chat')
+  } catch (e) {
+    console.warn('load models failed', e)
   }
 }
-onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
+
+async function onModelSelect(item: MenuItemOption) {
+  if (activeModelInfo.value?.id === item.key) return
+  try {
+    await invoke('set_active_model', { id: item.key })
+    await loadActiveModelInfo()
+    toast({ content: `已切换模型：${item.label}`, type: 'success' })
+  } catch (e) {
+    toast({ content: `切换模型失败：${e}`, type: 'error' })
+  }
+}
 
 </script>
 
 <template>
   <!-- 图一风格底部输入栏:卡片式复合输入框 -->
-  <div class="composer" :class="{ focused: composerFocused }">
+  <div class="composer">
     <!-- 引用块区 -->
     <div v-if="quoteChips.length" class="quote-chips">
       <div
@@ -155,7 +184,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
       </div>
     </div>
 
-    <!-- composer-container 包裹层:上方输入区 + 中部附件胶囊 + 底部操作栏 -->
+    <!-- composer-container 包裹层:上方输入区 + 底部操作栏 -->
     <div class="composer-container">
       <textarea
         ref="textareaRef"
@@ -166,28 +195,12 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
             ? queuedCount > 0
               ? `生成中…可继续输入（已排队 ${queuedCount} 条，将插入下一轮）`
               : '生成中…可继续输入（将插入下一轮）'
-            : '随便问点什么，Ctrl+U 可添加图片和文件…'
+            : '随便问点什么…'
         "
         rows="2"
         @keydown="onKeydown"
-        @focus="composerFocused = true"
-        @blur="composerFocused = false"
         @input="autoResize"
       ></textarea>
-
-      <!-- 「添加图片和文件」胶囊按钮(图一风格,Ctrl+U 快捷键) -->
-      <div class="composer-attach-row">
-        <button
-          type="button"
-          class="attach-pill"
-          title="添加图片和文件（Ctrl+U）"
-          @click="toolSheetOpen = true"
-        >
-          <Icon name="attachment" :size="12" />
-          <span>添加图片和文件</span>
-          <kbd class="attach-pill-kbd">Ctrl U</kbd>
-        </button>
-      </div>
 
       <!-- 底部操作栏:+ 按钮 + meta pills + 右侧发送按钮 -->
       <div class="composer-actions">
@@ -206,6 +219,20 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           <Icon name="thinking" :size="12" />
           <span class="meta-pill-text">{{ reasoningLabel }}</span>
           <Icon :name="reasoningMenuVisible ? 'chevron-down' : 'chevron-up'" :size="11" />
+        </button>
+        <!-- 当前对话模型选择:显示激活模型名,点击弹出 Menu 切换(set_active_model 热替换 agent) -->
+        <button
+          ref="modelBtnRef"
+          type="button"
+          class="meta-pill meta-pill--model"
+          :title="activeModelInfo ? `当前对话模型：${activeModelInfo.name}（点击切换）` : '选择对话模型'"
+          @click="toggleModelMenu"
+        >
+          <Icon name="robot" :size="12" />
+          <span class="meta-pill-text meta-pill-text--ellipsis">
+            {{ activeModelInfo?.name ?? '未设置模型' }}
+          </span>
+          <Icon :name="modelMenuVisible ? 'chevron-down' : 'chevron-up'" :size="11" />
         </button>
         <button
           type="button"
@@ -283,6 +310,17 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
           </Button>
         </div>
     </div>
+
+    <!-- 对话模型选择菜单:位于输入栏上方弹出 -->
+    <Menu
+      v-model:visible="modelMenuVisible"
+      :items="modelItems"
+      :trigger-ref="modelBtnRef"
+      title="对话模型"
+      placement="top-start"
+      :min-width="180"
+      @select="onModelSelect"
+    />
 
     <!-- 推理设置菜单:位于输入栏上方弹出 -->
     <Menu
@@ -376,15 +414,6 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 }
 
 /* ---------- composer 升级 ---------- */
-/* focus 上抬:用 transform 避免 layout reflow,配合 transition 平滑 */
-.composer {
-  transition: transform 0.18s ease;
-}
-
-.composer.focused {
-  transform: translateY(-2px);
-}
-
 /* composer-container 包裹层:亮色浅灰,暗色用 --card-2;紧凑排版 */
 .composer-container {
   display: flex;
@@ -404,44 +433,6 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 .composer.focused .composer-container {
   border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
-}
-
-/* ---------- 「添加图片和文件」胶囊按钮 ---------- */
-.composer-attach-row {
-  display: flex;
-  align-items: center;
-  padding: 0 2px;
-}
-
-.attach-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
-}
-
-.attach-pill:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
-  background: color-mix(in srgb, var(--primary) 6%, var(--card));
-}
-
-.attach-pill-kbd {
-  padding: 1px 5px;
-  font-size: 9px;
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
 }
 
 /* ---------- 底部操作栏:+ 按钮 / meta pills / 右侧发送按钮 ---------- */
@@ -466,6 +457,18 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 /* 推理设置 pill:开启思考时用 primary 收敛色高亮 */
 .meta-pill--reasoning-on {
   color: var(--primary);
+}
+
+/* 模型选择 pill:主角色收敛色,突出当前模型 */
+.meta-pill--model {
+  color: var(--primary);
+  max-width: 220px;
+}
+
+.meta-pill--model:hover {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
 .meta-pill--reasoning-on:hover,
