@@ -12,10 +12,9 @@
  *
  * 非 Tauri 环境（纯浏览器预览）自动降级：控件空操作、不报错。
  */
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
-import { SegmentedButton } from './basic'
 import { useLayoutModes } from '../composables/useLayoutModes'
 
 const { modes, toggleRail1Mode, toggleRail2Mode } = useLayoutModes()
@@ -24,12 +23,20 @@ const { modes, toggleRail1Mode, toggleRail2Mode } = useLayoutModes()
 const rail1Options = [
   { value: 'icon', label: '图标' },
   { value: 'icon-text', label: '图标+文字' },
-]
+] as const
 // 左栏二模态选项：expanded = 展开完整列表；collapsed = 收起窄条
 const rail2Options = [
   { value: 'expanded', label: '展开' },
   { value: 'collapsed', label: '收起' },
-]
+] as const
+
+// 当前模态文案（按钮 title 提示用）
+const rail1Label = computed(
+  () => rail1Options.find((o) => o.value === modes.value.rail1)?.label ?? '',
+)
+const rail2Label = computed(
+  () => rail2Options.find((o) => o.value === modes.value.rail2)?.label ?? '',
+)
 
 // 是否运行在 Tauri 环境（浏览器 dev 预览时 __TAURI_INTERNALS__ 不存在）
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -86,33 +93,45 @@ async function close() {
 
 <template>
   <header class="titlebar">
-    <!-- 左侧：左栏一 / 左栏二 模态切换（可拖拽区域，按钮本身不响应拖拽） -->
+    <!-- 左侧：左栏一 / 左栏二 模态切换（单按钮：hover 浮出选项，click 直接切换） -->
     <div class="titlebar-left" data-tauri-drag-region>
-      <div class="mode-group" title="左栏一模态：纯图标 / 图标+文字">
-        <span class="mode-label">
-          <Icon name="menu" :size="13" />
+      <button
+        type="button"
+        class="mode-btn"
+        :title="`左栏一：${rail1Label}（点击切换）`"
+        @click="toggleRail1Mode"
+      >
+        <Icon name="menu" :size="14" />
+        <span class="mode-tip" aria-hidden="true">
+          <span class="tip-title">左栏一</span>
+          <span
+            v-for="opt in rail1Options"
+            :key="opt.value"
+            class="tip-opt"
+            :class="{ active: modes.rail1 === opt.value }"
+          >{{ opt.label }}</span>
         </span>
-        <SegmentedButton
-          :model-value="modes.rail1"
-          :options="rail1Options"
-          size="sm"
-          @update:model-value="toggleRail1Mode"
-        />
-      </div>
+      </button>
 
       <div class="mode-sep" />
 
-      <div class="mode-group" title="左栏二模态：展开 / 收起">
-        <span class="mode-label">
-          <Icon name="folder" :size="13" />
+      <button
+        type="button"
+        class="mode-btn"
+        :title="`左栏二：${rail2Label}（点击切换）`"
+        @click="toggleRail2Mode"
+      >
+        <Icon name="folder" :size="14" />
+        <span class="mode-tip" aria-hidden="true">
+          <span class="tip-title">左栏二</span>
+          <span
+            v-for="opt in rail2Options"
+            :key="opt.value"
+            class="tip-opt"
+            :class="{ active: modes.rail2 === opt.value }"
+          >{{ opt.label }}</span>
         </span>
-        <SegmentedButton
-          :model-value="modes.rail2"
-          :options="rail2Options"
-          size="sm"
-          @update:model-value="toggleRail2Mode"
-        />
-      </div>
+      </button>
     </div>
 
     <!-- 中间拖拽区 -->
@@ -169,55 +188,106 @@ async function close() {
   align-items: center;
   height: 44px;
   flex-shrink: 0;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border-strong);
   user-select: none;
 }
 
-/* 左侧：模态切换按钮组 */
+/* 左侧：模态切换按钮组（紧凑布局：小 padding / 窄 gap） */
 .titlebar-left {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 10px;
+  gap: 4px;
+  padding: 0 6px 0 8px;
   min-width: 0;
   height: 100%;
 }
 
-.mode-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.mode-label {
+/* 模态切换按钮：与顶栏融为一体的幽灵按钮 */
+.mode-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
   color: var(--muted);
+  cursor: pointer;
   flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.mode-btn:hover {
+  background: var(--card-2);
+  color: var(--text);
+}
+
+.mode-btn:active {
+  background: var(--border);
 }
 
 .mode-sep {
   width: 1px;
-  height: 18px;
-  background: var(--border);
+  height: 16px;
+  background: var(--border-strong);
   flex-shrink: 0;
+  margin: 0 2px;
 }
 
-/* 让分段按钮在深色顶栏上保持紧凑观感 */
-.titlebar-left :deep(.segmented) {
+/* hover 浮出的模态选项提示面板 */
+.mode-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 88px;
+  padding: 6px;
   background: var(--card);
-  border-color: var(--border);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 100;
+  transition: opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard),
+    visibility var(--duration-fast);
 }
 
-.titlebar-left :deep(.segmented-item) {
+.mode-btn:hover .mode-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.tip-title {
+  font-size: var(--fs-xs);
   color: var(--muted);
+  padding: 2px 6px;
+  white-space: nowrap;
 }
 
-.titlebar-left :deep(.segmented-item.is-selected) {
-  background: var(--primary);
-  color: #fff;
+.tip-opt {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tip-opt.active {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 /* 中间拖拽区 */
