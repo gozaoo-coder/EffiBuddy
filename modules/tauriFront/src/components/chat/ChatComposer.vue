@@ -1,18 +1,18 @@
 <script setup lang="ts">
 /**
- * ChatComposer —— Kimi 风格底部输入栏
+ * ChatComposer —— 图一风格底部输入栏(卡片式复合输入框)
  *
- * 内聚:引用块 chips、textarea(Enter 发送 / Shift+Enter 换行 / 高度动画)、
- * 发送/语音按钮、meta pills(工作区 / 压缩徽章 / 右栏面板开关)。
+ * 布局:圆角容器内上方为全宽 textarea,下方依次为
+ * 「添加图片和文件」胶囊按钮(支持 Ctrl+U 快捷键)与底部操作栏
+ * (+ 按钮 / meta pills / 右侧圆角方形发送按钮)。
  * 发送编排在 useChatSend(引用拼接 → 建会话 → 流式调用)实现,本组件只渲染 UI。
  */
-import { ref, computed, inject, watch } from 'vue'
+import { ref, computed, inject, watch, onMounted, onUnmounted } from 'vue'
 import { animate } from 'animejs'
-import { Button, IconButton, Icon, Menu, useToast, type MenuItemOption } from '../basic'
+import { Button, IconButton, Icon, Menu, type MenuItemOption } from '../basic'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
 
 const store = inject(CHAT_STORE_KEY)!
-const { toast } = useToast()
 
 // 解构 ref:模板自动解包,script 中 .value 读写
 const {
@@ -24,8 +24,6 @@ const {
     reasoningEffort,
     workingDirSheetOpen,
     toolSheetOpen,
-    ctxPanelOpen,
-    toggleCtxPanel,
     shellBarExpanded,
     shellActiveCount,
     toggleShellBar,
@@ -51,14 +49,14 @@ watch(input, (val, old) => {
     ta.style.height = target + 'px'
     void ta.offsetHeight
     animate(ta, {
-      height: '40px',
+      height: '56px',
       duration: 200,
       ease: 'out(3)',
     })
   }
 })
 
-// composer-inner 高度动画(关键:禁止 height: fit-content,用 animejs 动画)
+// textarea 高度动画(关键:禁止 height: fit-content,用 animejs 动画)
 function autoResize() {
   const ta = textareaRef.value
   if (!ta) return
@@ -69,8 +67,8 @@ function autoResize() {
   const naturalHeight = ta.scrollHeight
   // 立即恢复当前高度,避免视觉跳变
   ta.style.height = currentHeight + 'px'
-  // 目标高度:不超过 120px
-  const targetHeight = Math.min(naturalHeight, 120)
+  // 目标高度:不低于 56px(两行),不超过 120px
+  const targetHeight = Math.min(Math.max(naturalHeight, 56), 120)
   // 强制 reflow,确保 animejs 起点正确
   void ta.offsetHeight
   animate(ta, {
@@ -123,10 +121,20 @@ function onReasoningSelect(item: MenuItemOption) {
   reasoningEffort.value = item.key as 'low' | 'high' | 'max'
 }
 
+// ---------- Ctrl+U 全局快捷键:打开「添加图片和文件」工具 Sheet ----------
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'u' || e.key === 'U')) {
+    e.preventDefault()
+    toolSheetOpen.value = true
+  }
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
+
 </script>
 
 <template>
-  <!-- Kimi 风格底部输入栏 -->
+  <!-- 图一风格底部输入栏:卡片式复合输入框 -->
   <div class="composer-kimi" :class="{ focused: composerFocused }">
     <!-- 引用块区 -->
     <div v-if="quoteChips.length" class="quote-chips">
@@ -149,67 +157,45 @@ function onReasoningSelect(item: MenuItemOption) {
       </div>
     </div>
 
-    <!-- composer-container 包裹层 -->
+    <!-- composer-container 包裹层:上方输入区 + 中部附件胶囊 + 底部操作栏 -->
     <div class="composer-container">
-      <div class="composer-inner">
+      <textarea
+        ref="textareaRef"
+        v-model="input"
+        class="composer-input"
+        :placeholder="
+          sending
+            ? queuedCount > 0
+              ? `生成中…可继续输入（已排队 ${queuedCount} 条，将插入下一轮）`
+              : '生成中…可继续输入（将插入下一轮）'
+            : '随便问点什么，Ctrl+U 可添加图片和文件…'
+        "
+        rows="2"
+        @keydown="onKeydown"
+        @focus="composerFocused = true"
+        @blur="composerFocused = false"
+        @input="autoResize"
+      ></textarea>
+
+      <!-- 「添加图片和文件」胶囊按钮(图一风格,Ctrl+U 快捷键) -->
+      <div class="composer-attach-row">
+        <button
+          type="button"
+          class="attach-pill"
+          title="添加图片和文件（Ctrl+U）"
+          @click="toolSheetOpen = true"
+        >
+          <Icon name="attachment" :size="14" />
+          <span>添加图片和文件</span>
+          <kbd class="attach-pill-kbd">Ctrl U</kbd>
+        </button>
+      </div>
+
+      <!-- 底部操作栏:+ 按钮 + meta pills + 右侧发送按钮 -->
+      <div class="composer-actions">
         <IconButton size="md" container title="附件" @click="toolSheetOpen = true">
-          <Icon name="plus" :size="22" />
+          <Icon name="plus" :size="20" />
         </IconButton>
-          <textarea
-            ref="textareaRef"
-            v-model="input"
-            class="composer-input"
-            :placeholder="
-              sending
-                ? queuedCount > 0
-                  ? `生成中…可继续输入（已排队 ${queuedCount} 条，将插入下一轮）`
-                  : '生成中…可继续输入（将插入下一轮）'
-                : '尽管问，带图也行'
-            "
-            rows="1"
-            @keydown="onKeydown"
-            @focus="composerFocused = true"
-            @blur="composerFocused = false"
-            @input="autoResize"
-          ></textarea>
-          <!-- AI 生成中:右侧按钮变为红色「停止生成」(点击取消当前流) -->
-          <Button
-            v-if="sending"
-            icon-only
-            shape="circle"
-            size="md"
-            variant="danger"
-            title="停止生成"
-            @click="stopGenerating"
-          >
-            <template #icon><Icon name="stop" :size="20" /></template>
-          </Button>
-          <Button
-            v-else-if="!input.trim()"
-            icon-only
-            shape="circle"
-            size="md"
-            variant="normal"
-            title="语音输入"
-            @click="toast({ content: '语音输入即将上线', type: 'info' })"
-          >
-            <template #icon><Icon name="mic" :size="22" /></template>
-          </Button>
-          <Button
-            v-else
-            icon-only
-            shape="circle"
-            size="md"
-            variant="primary"
-            :disabled="!input.trim()"
-            title="发送"
-            @click="send"
-          >
-            <template #icon><Icon name="arrow-up" :size="22" /></template>
-          </Button>
-        </div>
-      <!-- 工作区 + 压缩 + 面板开关(输出栏圆环+token 显示已移除)-->
-      <div class="composer-meta">
         <!-- 推理设置:点击弹出 Menu 选择思考开关与 reasoning_effort 等级 -->
         <button
           ref="reasoningBtnRef"
@@ -280,17 +266,34 @@ function onReasoningSelect(item: MenuItemOption) {
             <Icon name="history" :size="14" />
               <span class="meta-pill-text">版本</span>
           </button>
-          <!-- 右栏上下文面板开关 -->
-          <button
-            type="button"
-            class="meta-pill meta-pill--ctx"
-            :class="{ 'meta-pill--ctx-on': ctxPanelOpen }"
-            :title="ctxPanelOpen ? '收起上下文面板' : '展开上下文面板（todoTree / 用量 / 压缩）'"
-            @click="toggleCtxPanel()"
+
+          <!-- 右侧占位:把发送/停止按钮推到操作栏最右 -->
+          <div class="composer-actions-spacer" />
+
+          <!-- AI 生成中:右侧按钮变为红色「停止生成」(点击取消当前流) -->
+          <Button
+            v-if="sending"
+            icon-only
+            size="md"
+            variant="danger"
+            class="composer-send"
+            title="停止生成"
+            @click="stopGenerating"
           >
-            <Icon name="discover" :size="14" />
-            <span class="meta-pill-text">{{ ctxPanelOpen ? '收起面板' : '展开面板' }}</span>
-          </button>
+            <template #icon><Icon name="stop" :size="18" /></template>
+          </Button>
+          <Button
+            v-else
+            icon-only
+            size="md"
+            :variant="input.trim() ? 'primary' : 'normal'"
+            :disabled="!input.trim()"
+            class="composer-send"
+            title="发送（Enter）"
+            @click="send"
+          >
+            <template #icon><Icon name="arrow-up" :size="18" /></template>
+          </Button>
         </div>
     </div>
 
@@ -309,13 +312,14 @@ function onReasoningSelect(item: MenuItemOption) {
 
 <style scoped>
 .composer-input {
-  flex: 1;
+  width: 100%;
   resize: none;
-  min-height: 40px;
+  min-height: 56px;
   max-height: 120px;
-  padding: 10px 12px;
+  padding: 6px 8px 4px;
   font-family: inherit;
   font-size: 15px;
+  line-height: 1.5;
   color: var(--text);
   background: transparent;
   border: none;
@@ -394,12 +398,12 @@ function onReasoningSelect(item: MenuItemOption) {
   transform: translateY(-2px);
 }
 
-/* composer-container 包裹层:亮色 #CFCFCF,暗色用 --card-2 */
+/* composer-container 包裹层:亮色浅灰,暗色用 --card-2 */
 .composer-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: 6px;
+  padding: 10px 12px 8px;
   background: var(--card-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -407,7 +411,7 @@ function onReasoningSelect(item: MenuItemOption) {
 }
 
 [data-theme='light'] .composer-container {
-  background: #eeeeee;
+  background: #f8f9fa;
 }
 
 .composer-kimi.focused .composer-container {
@@ -415,11 +419,61 @@ function onReasoningSelect(item: MenuItemOption) {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
-/* composer-inner 高度跟随 textarea;overflow hidden 防止超出时溢出 */
-.composer-inner {
+/* ---------- 「添加图片和文件」胶囊按钮 ---------- */
+.composer-attach-row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  padding: 0 2px;
+}
+
+.attach-pill {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.attach-pill:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+
+.attach-pill-kbd {
+  padding: 1px 6px;
+  font-size: 10px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* ---------- 底部操作栏:+ 按钮 / meta pills / 右侧发送按钮 ---------- */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.composer-actions-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+/* 右侧发送/停止按钮:圆角方形,与操作栏高度对齐 */
+.composer-send {
+  flex-shrink: 0;
 }
 
 /* 推理设置 pill:开启思考时用 primary 收敛色高亮 */
@@ -432,15 +486,6 @@ function onReasoningSelect(item: MenuItemOption) {
   color: var(--primary);
   border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
   background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
-
-/* 上下文 ring + 工作区 meta 行 */
-.composer-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px;
-  flex-wrap: wrap;
 }
 
 .meta-pill {
@@ -524,32 +569,12 @@ function onReasoningSelect(item: MenuItemOption) {
   background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
-.meta-pill--ctx {
-  margin-left: auto;
-}
-
-  .meta-pill--ctx:hover {
-    color: var(--primary);
-    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
-    background: color-mix(in srgb, var(--primary) 8%, transparent);
-  }
-
   /* 会话版本管理入口:primary 收敛色,与面板开关同风格 */
   .meta-pill--ver:hover {
     color: var(--primary);
     border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
     background: color-mix(in srgb, var(--primary) 8%, transparent);
   }
-
-.meta-pill--ctx-on {
-  color: var(--primary);
-}
-
-.meta-pill--ctx-on:hover {
-  color: var(--primary);
-  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
 
 .meta-pill-text {
   overflow: hidden;
