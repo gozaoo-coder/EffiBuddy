@@ -64,7 +64,7 @@ where
 /// Parse tool arguments from a streamed string payload.
 /// Some providers emit an empty string for parameterless tool calls; normalize that to `{}`.
 ///
-/// EffiSuite vendored patch: JSON 解析失败时回退到 XML 形式（`<_KEY_>value</_KEY_>`），
+/// EffiSuite vendored patch: JSON 解析失败时回退到 XML 形式（`<!_KEY_>value</!_KEY_>`），
 /// 让工具同时支持 JSON 与 XML 两种输入，缓解 JSON 转义问题。XML 由
 /// [`crate::xml_tool_args::parse_xml_tool_arguments`] 转换；两种都失败才返回 JSON 错误。
 pub fn parse_tool_arguments(arguments: &str) -> serde_json::Result<serde_json::Value> {

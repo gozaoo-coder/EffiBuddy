@@ -21,10 +21,18 @@ import { invoke } from '@tauri-apps/api/core'
 import { Icon } from './basic'
 import { useSubAgentStore } from '../composables/useSubAgentStore'
 
-const props = defineProps<{
-  /** 子 agent 会话 id（来自 sub-agent-event 的 session_id） */
-  sessionId: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    /** 子 agent 会话 id（来自 sub-agent-event 的 session_id） */
+    sessionId: string
+    /** 内嵌模式（主会话 chat-main 内查看）：隐藏名称头部，改用紧凑 meta 条
+     *  （模型/深度/状态），名称由顶栏面包屑承载 */
+    embedded?: boolean
+  }>(),
+  {
+    embedded: false,
+  },
+)
 
 const { getRecord } = useSubAgentStore()
 
@@ -80,26 +88,39 @@ function argSummary(args: string): string {
 </script>
 
 <template>
-  <div class="sub-window" :class="`st-${rec?.status ?? 'running'}`">
-    <!-- 头部：名称 / 模型 / 深度 / 状态 -->
-    <header class="sw-header">
-      <span class="sw-avatar"><Icon name="robot" :size="16" /></span>
-      <div class="sw-title">
-        <span class="sw-name">{{ rec?.name || '子 agent' }}</span>
-        <span class="sw-model">{{ rec?.model || '…' }}</span>
-        <span v-if="(rec?.depth ?? 1) > 1" class="sw-depth">深度 {{ rec?.depth }}</span>
-      </div>
-      <span class="sw-status" :class="statusClass">
-        <span class="sw-status-dot" />
-        {{ statusText }}
-      </span>
-    </header>
+    <div class="sub-window" :class="[`st-${rec?.status ?? 'running'}`, { 'sub-window--embedded': embedded }]">
+      <!-- 头部（独立页签全窗视图）：名称 / 模型 / 深度 / 状态 -->
+      <header v-if="!embedded" class="sw-header">
+        <span class="sw-avatar"><Icon name="robot" :size="16" /></span>
+        <div class="sw-title">
+          <span class="sw-name">{{ rec?.name || '子 agent' }}</span>
+          <span class="sw-model">{{ rec?.model || '…' }}</span>
+          <span v-if="(rec?.depth ?? 1) > 1" class="sw-depth">深度 {{ rec?.depth }}</span>
+        </div>
+        <span class="sw-status" :class="statusClass">
+          <span class="sw-status-dot" />
+          {{ statusText }}
+        </span>
+      </header>
 
-    <!-- 未开始占位 -->
-    <div v-if="!rec" class="sw-empty">
-      <Icon name="sparkles" :size="32" />
-      <p>等待子 agent 开始…</p>
-    </div>
+      <!-- 内嵌模式精简头部：模型 / 深度 / 状态（名称在顶栏面包屑） -->
+      <header v-else-if="rec" class="sw-header sw-header--embed">
+        <span class="sw-avatar"><Icon name="robot" :size="15" /></span>
+        <div class="sw-title">
+          <span v-if="(rec?.depth ?? 1) > 1" class="sw-depth">深度 {{ rec?.depth }}</span>
+        </div>
+        <span class="sw-model">{{ rec?.model || '…' }}</span>
+        <span class="sw-status" :class="statusClass">
+          <span class="sw-status-dot" />
+          {{ statusText }}
+        </span>
+      </header>
+
+      <!-- 未开始占位 -->
+      <div v-if="!rec" class="sw-empty">
+        <Icon name="sparkles" :size="32" />
+        <p>等待子 agent 开始…</p>
+      </div>
 
     <!-- 主体 -->
     <div v-else class="sw-body">
@@ -476,5 +497,15 @@ function argSummary(args: string): string {
 .sw-copy:hover {
   background: var(--card);
   color: var(--text);
+}
+
+/* ---- 内嵌模式（主会话 chat-main 内查看） ---- */
+.sw-header--embed {
+  padding: 8px 14px;
+  background: transparent;
+}
+
+.sub-window--embedded .sw-body {
+  padding-top: 10px;
 }
 </style>

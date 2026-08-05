@@ -84,6 +84,15 @@ pub enum BusEvent {
     AgentPoolUpdated {
         conversation_id: String,
     },
+    /// 危险工具调用需用户确认（阻塞等待 respond_tool_confirm 命令回传结果）
+    /// args 为工具参数摘要（截断），前端展示确认弹窗；用户选择后经 Tauri 命令回传。
+    /// 仅在工具准许程度为「默认」且工具为危险类时发布。
+    ToolConfirm {
+        request_id: u64,
+        conversation_id: String,
+        tool_name: String,
+        args: String,
+    },
 }
 
 /// 事件总线句柄，可被廉价 clone（broadcast 内部已是 Arc 共享）

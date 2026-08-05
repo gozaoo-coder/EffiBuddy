@@ -79,10 +79,15 @@ export function useChatSend(
     core.sending.value = true
     // 新一轮用户输入：重置「是否任务回合」标记（新内容不再合并进旧长程任务气泡）
     taskMode.beginNewTurn()
+    // 推理设置（thinking 开关 + reasoning_effort）：关闭时传 null（后端不注入参数）
+    const reasoning = core.thinking.value
+      ? { thinking: true, effort: core.reasoningEffort.value }
+      : null
     try {
       await invoke('send_message_stream', {
         conversationId: id,
         content: finalContent,
+        reasoning,
       })
     } catch (e) {
       core.sending.value = false

@@ -51,12 +51,18 @@ impl RigAgent {
     pub(super) fn build_agent(
         &self,
         cwd: Option<PathBuf>,
+        reasoning: Option<ReasoningConfig>,
     ) -> rig_core::agent::Agent<<openai::CompletionsClient as CompletionClient>::CompletionModel>
     {
-        let builder = self
+        let mut builder = self
             .client
             .agent(&self.model_name)
             .preamble(&self.preamble);
+        // 推理设置（思考开关 + reasoning_effort）：启用时把 `thinking` / `reasoning_effort`
+        // 注入为请求体 additional_params（rig 会 flatten 进 Chat Completions 请求体）。
+        if let Some(extra) = reasoning.and_then(|r| r.additional_params()) {
+            builder = builder.additional_params(extra);
+        }
 
         if self.enable_tools {
             // 工具过滤：白名单（None=全部）+ 排除列表（子 agent 默认排除 set_title 等）

@@ -13,10 +13,9 @@ import { ref, computed, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useTheme } from '../useTheme'
 import { useToast } from '../../components/basic'
-import { NEW_CHAT_TAB_ID } from '../useTabs'
-import type { Conversation, Message, PickedFile } from '../../types'
+  import { useTabs, NEW_CHAT_TAB_ID } from '../useTabs'
 import type { useAutoScroll } from './useAutoScroll'
-
+  import type { Conversation, Message } from '../../types'
 
 /** 模块级消息 id 计数器（与后端 gen_message_id() 同布局：高 42 位毫秒时间戳 + 低 22 位递增计数器）。
  *  前端仅在流式/本地气泡期间临时使用（落盘后以后端持久化 id 为准），统一为短数字字符串。 */
@@ -52,6 +51,14 @@ export interface ChatCoreEmits {
   (e: 'conversation-changed'): void
 }
 
+
+/** 常用工作区项（对应后端 FavoriteWorkspace：id / path / created_at） */
+export interface FavoriteWorkspace {
+  id: string
+  path: string
+  created_at: number
+}
+
 /** 上下文使用统计:粗略 4 字符 = 1 token */
 const fallbackContextTokens = 128000
 
@@ -75,7 +82,21 @@ export function useChatCore(
     /** 生成期间排队待插入的用户消息条数（AI 生成中仍可发送，在下一 completion 前插入） */
     const queuedCount = ref(0)
     /** 会话级工作区路径:None 表示未设置(回退到技能级或进程默认) */
-    const workingDir = ref<string | null>(null)
+      /** 会话级工作区路径:None 表示未设置(回退到技能级或进程默认) */
+      const workingDir = ref<string | null>(null)
+      /** 推理设置:思考开关（thinking enable/disable） */
+      const thinking = ref(false)
+      /** 推理设置:reasoning_effort 等级（low / high / max），默认 high */
+      const reasoningEffort = ref<'low' | 'high' | 'max'>('high')
+    /** 常用工作区列表（后端 favorite_workspaces.json 持久化） */
+    const favoriteWorkspaces = ref<FavoriteWorkspace[]>([])
+    async function loadFavoriteWorkspaces() {
+      try {
+        favoriteWorkspaces.value = await invoke<FavoriteWorkspace[]>('list_favorite_workspaces')
+      } catch (e) {
+        console.warn('load favorite workspaces failed', e)
+      }
+    }
   const workingDirSheetOpen = ref(false)
   /** 底部工具/附件 Sheet(由 composer 打开,ToolSheet 渲染) */
   const toolSheetOpen = ref(false)
@@ -120,18 +141,55 @@ export function useChatCore(
       return sum + chars
     }, 0),
   )
-  const contextUsedTokens = computed(() =>
-    realContextUsedTokens.value ?? Math.ceil(contextUsedChars.value / 4),
-  )
+    // 真实 token 占用优先；无真实数据时以字符估算兜底（4 字符 ≈ 1 token）
+    const contextUsedTokens = computed(() => {
+      if (realContextUsedTokens.value != null) return realContextUsedTokens.value
+      return Math.round(contextUsedChars.value / 4)
+    })
 
-  /** 用真实 token 占用更新上下文使用仪表盘（agent-usage 事件 / 历史恢复共用） */
-  function setContextUsedTokens(tokens: number | null) {
-    realContextUsedTokens.value = tokens
-  }
+    // ---------- 子代理内嵌视图 ----------
+    // 点击子代理卡片 → 在主会话 chat-main 内查看该子代理全流程（顶栏显示面包屑）。
+    /** 当前主会话中查看的子代理会话 id（null = 正常父会话视图） */
+    const subAgentId = ref<string | null>(null)
+    /** 当前查看的子代理名称（用于顶栏 `[ 父标题 ] / [ 子代理标题 ]` 面包屑） */
+    const subAgentName = ref<string | null>(null)
+    function enterSubAgentView(id: string, name: string) {
+      subAgentId.value = id
+      subAgentName.value = name
+    }
+    function backToParent() {
+      subAgentId.value = null
+      subAgentName.value = null
+    }
 
-  function toggleCtxPanel() {
-    ctxPanelOpen.value = !ctxPanelOpen.value
-  }
+    /** 用真实 token 占用更新上下文使用仪表盘（agent-usage 事件 / 历史恢复共用） */
+    function setContextUsedTokens(tokens: number | null) {
+      realContextUsedTokens.value = tokens
+    }
+
+    function toggleCtxPanel() {
+      ctxPanelOpen.value = !ctxPanelOpen.value
+    }
+
+    // ---------- 会话标题 ----------
+    // 顶栏展示 / 编辑用的当前会话标题（编辑走 rename_conversation 并同步页签标题）
+    const title = ref('新对话')
+    async function editTitle(newTitle: string) {
+      const id = activeId.value
+      if (!id || id === NEW_CHAT_TAB_ID) return
+      const t = newTitle.trim()
+      if (!t) return
+      title.value = t
+      try {
+        await invoke('rename_conversation', { id, title: t })
+      } catch (e) {
+        toast({ content: `修改标题失败：${e}`, type: 'error' })
+        return
+      }
+      const { findChatByConversationId, renameTab } = useTabs()
+      const tab = findChatByConversationId(id)
+      if (tab) renameTab(tab.id, t)
+    }
 
   // ---------- 会话加载 ----------
   let hooks: SessionHooks = { resetAll: () => {}, afterLoad: async () => {} }
@@ -145,6 +203,7 @@ export function useChatCore(
       messages.value = []
       workingDir.value = null
       realContextUsedTokens.value = null
+        title.value = '新对话'
       hooks.resetAll()
       return
     }
@@ -153,6 +212,7 @@ export function useChatCore(
       await loadActiveModelInfo()
       const conv = await invoke<Conversation | null>('get_conversation', { id })
       messages.value = conv?.messages ?? []
+        title.value = conv?.title || '新对话'
       workingDir.value = conv?.working_dir ?? null
       // 从历史消息恢复上下文真实占用：取最后一条带 usage 的 assistant 消息的
       // input_tokens（该消息生成时的 prompt_tokens 即当时的真实上下文占用）
@@ -181,6 +241,7 @@ export function useChatCore(
       messages.value = []
       workingDir.value = null
       realContextUsedTokens.value = null
+        title.value = '新对话'
       hooks.resetAll()
     }
   }
@@ -248,6 +309,44 @@ export function useChatCore(
     }
   }
 
+    /** 收藏当前/指定路径到常用工作区（相同路径幂等） */
+    async function addFavoriteWorkspace(path: string) {
+      try {
+        await invoke<string>('add_favorite_workspace', { path })
+        await loadFavoriteWorkspaces()
+        toast({ content: '已加入常用工作区', type: 'success' })
+      } catch (e) {
+        toast({ content: `收藏失败：${e}`, type: 'error' })
+      }
+    }
+
+    /** 删除指定 id 的常用工作区 */
+    async function deleteFavoriteWorkspace(id: string) {
+      try {
+        await invoke('delete_favorite_workspace', { id })
+        favoriteWorkspaces.value = favoriteWorkspaces.value.filter((w) => w.id !== id)
+        toast({ content: '已删除常用工作区', type: 'success' })
+      } catch (e) {
+        toast({ content: `删除失败：${e}`, type: 'error' })
+      }
+    }
+
+    /** 切换到某常用工作区（作为当前会话工作区；无会话则先建会话） */
+    async function applyFavoriteWorkspace(path: string) {
+      const id = await ensureConversation()
+      if (!id) return
+      try {
+        await invoke('set_conversation_working_dir', {
+          conversationId: id,
+          workingDir: path,
+        })
+        workingDir.value = path
+        toast({ content: `已切换工作区：${path}`, type: 'success' })
+      } catch (e) {
+        toast({ content: `切换工作区失败：${e}`, type: 'error' })
+      }
+    }
+
   // ---------- 通用工具 ----------
     function newId(): string {
       const now = BigInt(Date.now())
@@ -269,34 +368,48 @@ export function useChatCore(
     emit,
     isDark,
     toast,
-      activeId,
-      messages,
-      input,
-      sending,
-        queuedCount,
-      workingDir,
-      workingDirSheetOpen,
-      toolSheetOpen,
-    shellBarExpanded,
-    shellActiveCount,
-    toggleShellBar,
-    contextSheetOpen,
-    ctxPanelOpen,
-    activeModelInfo,
-    contextMaxTokens,
-    contextUsedChars,
-    contextUsedTokens,
-    setContextUsedTokens,
-    toggleCtxPanel,
-    setSessionHooks,
-    loadConversation,
-    loadActiveModelInfo,
-    setActiveId,
-    ensureConversation,
-    pickWorkingDir,
-    clearWorkingDir,
-    newId,
-      formatFileSize,
-      isEmptyHome,
+        activeId,
+        messages,
+        input,
+        sending,
+          queuedCount,
+          workingDir,
+          thinking,
+          reasoningEffort,
+
+        workingDirSheetOpen,
+        toolSheetOpen,
+      shellBarExpanded,
+      shellActiveCount,
+      toggleShellBar,
+      contextSheetOpen,
+      ctxPanelOpen,
+      activeModelInfo,
+      contextMaxTokens,
+      contextUsedChars,
+      contextUsedTokens,
+      setContextUsedTokens,
+      toggleCtxPanel,
+      setSessionHooks,
+      loadConversation,
+      loadActiveModelInfo,
+      setActiveId,
+      ensureConversation,
+        pickWorkingDir,
+        clearWorkingDir,
+      favoriteWorkspaces,
+      loadFavoriteWorkspaces,
+      addFavoriteWorkspace,
+      deleteFavoriteWorkspace,
+      applyFavoriteWorkspace,
+      newId,
+        formatFileSize,
+        subAgentId,
+        subAgentName,
+        enterSubAgentView,
+        backToParent,
+        title,
+        editTitle,
+        isEmptyHome,
     }
   }

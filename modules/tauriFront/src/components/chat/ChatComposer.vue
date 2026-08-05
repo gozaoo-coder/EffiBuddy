@@ -8,7 +8,7 @@
  */
 import { ref, inject, watch } from 'vue'
 import { animate } from 'animejs'
-import { Button, IconButton, Icon, useToast } from '../basic'
+import { Button, IconButton, Icon, Switch, SegmentedButton, useToast } from '../basic'
 import { CHAT_STORE_KEY } from '../../composables/chat/store'
 
 const store = inject(CHAT_STORE_KEY)!
@@ -16,18 +16,20 @@ const { toast } = useToast()
 
 // 解构 ref:模板自动解包,script 中 .value 读写
 const {
-  input,
-  sending,
-  queuedCount,
-  workingDir,
-  workingDirSheetOpen,
-  toolSheetOpen,
-  ctxPanelOpen,
-  toggleCtxPanel,
-  shellBarExpanded,
-  shellActiveCount,
-  toggleShellBar,
-} = store.core
+    input,
+    sending,
+    queuedCount,
+    workingDir,
+    thinking,
+    reasoningEffort,
+    workingDirSheetOpen,
+    toolSheetOpen,
+    ctxPanelOpen,
+    toggleCtxPanel,
+    shellBarExpanded,
+    shellActiveCount,
+    toggleShellBar,
+  } = store.core
 const { quoteChips, scrollToMessage, removeQuote } = store.menu
   const { compressBadgeInfo, compressSavedInfo, compressionSheetOpen } = store.compression
   const { versioning } = store
@@ -170,7 +172,22 @@ function onKeydown(e: KeyboardEvent) {
           >
             <template #icon><Icon name="arrow-up" :size="22" /></template>
           </Button>
-      </div>
+        </div>
+        <!-- 推理设置:思考开关 + reasoning_effort 等级（输入框下方） -->
+        <div class="composer-reasoning">
+          <span class="reasoning-label"><Icon name="thinking" :size="14" /> 思考</span>
+          <Switch v-model="thinking" size="sm" />
+          <SegmentedButton
+            v-if="thinking"
+            v-model="reasoningEffort"
+            :options="[
+              { label: '低', value: 'low' },
+              { label: '高', value: 'high' },
+              { label: '顶级', value: 'max' },
+            ]"
+            size="sm"
+          />
+        </div>
       <!-- 工作区 + 压缩 + 面板开关(输出栏圆环+token 显示已移除)-->
       <div class="composer-meta">
         <button
@@ -359,6 +376,24 @@ function onKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: flex-end;
   gap: 6px;
+}
+
+/* 推理设置行:思考开关 + reasoning_effort 等级（输入框下方） */
+.composer-reasoning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  min-height: 22px;
+}
+
+.reasoning-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
 }
 
 /* 上下文 ring + 工作区 meta 行 */

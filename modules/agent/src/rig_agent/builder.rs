@@ -99,6 +99,7 @@ impl RigAgent {
                 pool_sub_agent_id: None,
                 pool_sub_agent_name: None,
                 pending_user_messages: None,
+              reasoning_config: Arc::new(RwLock::new(None)),
 
           })
       }
@@ -309,6 +310,7 @@ impl RigAgent {
             pool_sub_agent_id: None,
             pool_sub_agent_name: None,
             pending_user_messages: None,
+              reasoning_config: Arc::new(RwLock::new(None)),
 
         })
     }
@@ -339,6 +341,23 @@ impl RigAgent {
     ) -> Self {
         self.pending_user_messages = pending;
         self
+    }
+
+    /// 注入推理设置共享句柄（thinking 开关 + reasoning_effort 等级）。
+    /// 由 Tauri 命令层在每次 send_message 前写入，build_agent 读取并注入请求体。
+    /// 不调用时默认关闭（不发送任何 thinking / reasoning_effort 参数）。
+    pub fn with_reasoning_config(
+        mut self,
+        config: Arc<RwLock<Option<super::ReasoningConfig>>>,
+    ) -> Self {
+        self.reasoning_config = config;
+        self
+    }
+
+    /// 共享推理设置句柄，供 Tauri 命令层在发送前写入当前对话的推理配置。
+    #[inline]
+    pub fn reasoning_config_handle(&self) -> Arc<RwLock<Option<super::ReasoningConfig>>> {
+        Arc::clone(&self.reasoning_config)
     }
 
 }

@@ -66,16 +66,18 @@ impl Tool for EditUndoTool {
     type Args = EditUndoArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "撤回指定 op_id 的编辑操作：把文件内容恢复到该操作前的状态。\
-         要求 op_id 是该文件的最新编辑操作（无更晚的编辑覆盖同文件）。\
-         若有更晚操作，请先 undo 后续操作。\n\n\
-         **参数**：\n\
-         - op_id：要撤回的操作 id（由 edit_file / edit_file_regex / edit_revise 返回）\n\
-         - dry_run=true：仅预览撤回后将恢复的内容，不写入磁盘\n\n\
-         撤回成功后该 op_id 从历史中删除，无法再次撤回。"
-            .to_string()
-    }
+      fn description(&self) -> String {
+          "撤回指定 op_id 的编辑操作：把文件内容恢复到该操作前的状态。\
+           要求 op_id 是该文件的最新编辑操作（无更晚的编辑覆盖同文件）。\
+           若有更晚操作，请先 undo 后续操作。\n\n\
+           **参数**：\n\
+           - op_id：要撤回的操作 id（由 edit_file / edit_file_regex / edit_revise 返回）\n\
+           - dry_run=true：仅预览撤回后将恢复的内容，不写入磁盘\n\n\
+           撤回成功后该 op_id 从历史中删除，无法再次撤回。\n\n\
+           **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
+           每个参数一个标签，形如 <!_OP_ID_>3</!_OP_ID_>、<!_DRY_RUN_>true</!_DRY_RUN_>。"
+              .to_string()
+      }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({

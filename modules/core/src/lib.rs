@@ -15,6 +15,7 @@
   pub mod error;
   pub mod events;
   pub mod memory;
+    pub mod favorite_workspace;
   pub mod models;
   pub mod paths;
   pub mod pinned_memory;
@@ -49,6 +50,7 @@ pub use models::{
     ToolCallRecord,
 };
   pub use pinned_memory::{PinnedMemory, PinnedMemorySource, PinnedMemoryStore};
+    pub use favorite_workspace::{FavoriteWorkspace, FavoriteWorkspaceStore};
   pub use plugin_config::PluginConfigStore;
   pub use plugin_manifest::{
       build_contribution_set, builtin_contributions, load_manifest, safe_plugin_path_segment,

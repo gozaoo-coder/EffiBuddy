@@ -21,6 +21,9 @@ import ShellSessionBar from './ShellSessionBar.vue'
 import ChatContextPanel from './ChatContextPanel.vue'
 import { Menu, Dialog } from './basic'
 import ChatHome from './chat/ChatHome.vue'
+import ChatTopBar from './chat/ChatTopBar.vue'
+import SubAgentWindow from './SubAgentWindow.vue'
+import { NEW_CHAT_TAB_ID } from '../composables/useTabs'
 import ChatMessageList from './chat/ChatMessageList.vue'
 import ChatComposer from './chat/ChatComposer.vue'
 import ChatContextSheet from './chat/ChatContextSheet.vue'
@@ -71,15 +74,16 @@ const compression = useChatCompression(core)
 // ---------- 会话级生命周期钩子 ----------
 // loadConversation 在会话切换/清空时调用 resetAll,加载成功后调用 afterLoad。
 core.setSessionHooks({
-  resetAll: () => {
-    streaming.resetAll()
-    taskMode.resetAll()
-    menu.resetAll()
-    askUser.resetAll()
-    core.queuedCount.value = 0
-    // 注:压缩浮窗状态按原行为不随会话切换重置,
-    // compressExistingState 由事件层 watch conversationId → loadExistingCompression 更新。
-  },
+    resetAll: () => {
+      streaming.resetAll()
+      taskMode.resetAll()
+      menu.resetAll()
+      askUser.resetAll()
+      core.backToParent() // 退出子代理内嵌视图
+      core.queuedCount.value = 0
+      // 注:压缩浮窗状态按原行为不随会话切换重置,
+      // compressExistingState 由事件层 watch conversationId → loadExistingCompression 更新。
+    },
   afterLoad: async () => {
     // 从历史消息恢复气泡元数据(计费重算依赖 activeModelInfo,已在 loadConversation 内加载)
     streaming.restoreBubbleMetaFromHistory()
@@ -117,19 +121,24 @@ onUnmounted(() => {
   autoscroll.dispose()
   menu.resetAll() // 清理消息长按 timer 与菜单状态
 })
-
 // ---------- 模板绑定(解构 ref,模板自动解包) ----------
-const {
-  activeId,
-  messages,
-  ctxPanelOpen,
-  isEmptyHome,
-  contextUsedTokens,
-  contextMaxTokens,
-  activeModelInfo,
-  shellBarExpanded,
-  shellActiveCount,
-} = core
+  const {
+    activeId,
+    messages,
+    ctxPanelOpen,
+    isEmptyHome,
+    contextUsedTokens,
+    contextMaxTokens,
+    activeModelInfo,
+    shellBarExpanded,
+    shellActiveCount,
+    title,
+    subAgentId,
+    subAgentName,
+    editTitle,
+    backToParent,
+    toggleCtxPanel,
+  } = core
 const { msgMenuVisible, msgMenuPosition, msgMenuItems, onMsgMenuSelect } = menu
 const { confirmState: versionConfirmState, closeConfirm } = versioning
 </script>
@@ -137,24 +146,46 @@ const { confirmState: versionConfirmState, closeConfirm } = versioning
 <template>
   <div class="chat-window">
     <!-- 聊天主区(侧栏已提升为 App 级 SideNav 抽屉) -->
-    <section class="chat-main">
-      <!-- 空状态首页:中央品牌区 + 快捷胶囊 -->
-      <ChatHome v-if="isEmptyHome" />
-      <!-- 消息列表(含长程任务气泡) -->
-      <ChatMessageList v-else />
+      <section class="chat-main">
+        <!-- 顶部悬浮顶栏：标题(默认态可点击修改；子代理态显示 `[ 父标题 ] / [ 子代理标题 ]` 面包屑)
+             + 收起面板 + 上下文用量 ring(hover 浮出文字) -->
+        <ChatTopBar
+          :title="title"
+          :sub-title="subAgentName"
+          :used="contextUsedTokens"
+          :max="contextMaxTokens"
+          :show-ring="true"
+          :show-panel="true"
+          :panel-open="ctxPanelOpen"
+          :editable="!!activeId && activeId !== NEW_CHAT_TAB_ID"
+          @edit-title="editTitle"
+          @back-to-parent="backToParent"
+          @toggle-panel="toggleCtxPanel"
+        />
 
-      <!-- Kimi 风格底部输入栏 -->
-      <ChatComposer />
+        <!-- 空状态首页:中央品牌区 + 快捷胶囊(子代理视图下隐藏) -->
+        <ChatHome v-if="isEmptyHome && !subAgentId" />
+        <!-- 消息列表(含长程任务气泡) -->
+        <ChatMessageList v-else-if="!subAgentId" />
+        <!-- 子代理内嵌视图:点击子代理卡片后主视图切换为该子代理全流程,
+             顶栏面包屑 `[ 父标题 ] / [ 子代理标题 ]` 提示当前位置,点击父标题可返回 -->
+        <div v-else class="sub-agent-embed">
+          <SubAgentWindow :session-id="subAgentId ?? ''" embedded />
+        </div>
 
-      <!-- main-content 底栏:命令会话便签(可折叠,实时展示 AI 的 shell_session_* 工作状态;
-           折叠按钮位于 composer-meta,此处为受控组件) -->
-      <ShellSessionBar
-        :conversation-id="activeId"
-        :expanded="shellBarExpanded"
-        @update:expanded="(v) => (shellBarExpanded = v)"
-        @running-count="(n) => (shellActiveCount = n)"
-      />
-    </section>
+        <!-- Kimi 风格底部输入栏(子代理视图下隐藏,子代理由后端驱动) -->
+        <ChatComposer v-if="!subAgentId" />
+
+        <!-- main-content 底栏:命令会话便签(可折叠,实时展示 AI 的 shell_session_* 工作状态;
+             折叠按钮位于 composer-meta,此处为受控组件) -->
+        <ShellSessionBar
+          v-if="!subAgentId"
+          :conversation-id="activeId"
+          :expanded="shellBarExpanded"
+          @update:expanded="(v) => (shellBarExpanded = v)"
+          @running-count="(n) => (shellActiveCount = n)"
+        />
+      </section>
 
       <ChatContextPanel
         v-if="ctxPanelOpen"

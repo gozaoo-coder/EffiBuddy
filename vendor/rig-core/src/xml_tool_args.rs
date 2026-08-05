@@ -3,40 +3,33 @@
 //! 让全部 AI 工具在 JSON 之外多支持一种 **XML 输入**，缓解 LLM 生成 JSON
 //! 工具参数时的转义问题（代码 / 正则 / 路径里的引号、反斜杠、换行容易写错）。
 //!
-//! ## 格式
-//!
-//! 参数用 `<_KEY_>value</_KEY_>` 形式的标签包裹，`_KEY_`（下划线包裹的名字）
-//! 是为了与常见的 HTML/XML 标签（如 `<content>`、`<path>`）区分开：
+//! 参数用 `<!_KEY_>value</!_KEY_>` 形式的标签包裹，`.KEY.` 前缀（`!` + 下划线包裹的名字）
+//! 是为了与常见的 HTML/XML 标签（如 `<content`、`<path>`）以及标准语法区分开，
+//! 避免模型在输出工具参数时与代码/正则里的 `<` 冲突：
 //!
 //! ```xml
-//! <_PATH_>src/main.rs</_PATH_>
-//! <_START_LINE_>3</_START_LINE_>
-//! <_TEXT_>替换为这行内容</_TEXT_>
+//! <!_PATH_>src/main.rs</!_PATH_>
+//! <!_START_LINE_>3</!_START_LINE_>
+//! <!_TEXT_>替换为这行内容</!_TEXT_>
 //! ```
+//!
+//! 为兼容既有调用，旧的 `<_KEY_>...</_KEY_>` 形式仍然可解析（双前缀兼容）。
+//! 新格式用 `!` 前缀：`<!_KEY_>`，闭合为 `</!_KEY_>`，自闭合为 `<!_KEY_/>`。
 //!
 //! 规则：
-//! - 标签名大小写不敏感：`_PATH_` 与 `_path_` 等价；键名统一转小写，
-//!   与工具参数（serde snake_case 字段名）对齐。
-//! - 纯文本值自动推断类型：`true`/`false` → 布尔；整数 → 数字；
-//!   浮点 → 数字；其余 → 字符串（首尾空白修剪）。
-//! - CDATA 内的内容**原样保留**（不修剪、不推断类型、不做实体解码），
-//!   适合存放 `123`、`true` 这类需要保持字符串形态的内容。
-//! - 嵌套元素 → 嵌套对象；同一层 ≥2 个同名包裹元素 → 数组（见下例）。
-//!
 //! 示例（edit_file 的 edits 数组）：
 //! ```xml
-//! <_PATH_>src/main.rs</_PATH_>
-//! <_EDITS_>
-//!   <_ITEM_>
-//!     <_START_LINE_>3</_START_LINE_>
-//!     <_TEXT_>第一处替换</_TEXT_>
-//!   </_ITEM_>
-//!   <_ITEM_>
-//!     <_END_LINE_>5</_END_LINE_>
-//!     <_TEXT_>第二处替换</_TEXT_>
-//!   </_ITEM_>
-//! </_EDITS_>
-//! ```
+//! <!_PATH_>src/main.rs</!_PATH_>
+//! <!_EDITS_>
+//!   <!_ITEM_>
+//!     <!_START_LINE_>3</!_START_LINE_>
+//!     <!_TEXT_>第一处替换</!_TEXT_>
+//!   </!_ITEM_>
+//!   <!_ITEM_>
+//!     <!_END_LINE_>5</!_END_LINE_>
+//!     <!_TEXT_>第二处替换</!_TEXT_>
+//!   </!_ITEM_>
+//! </!_EDITS_>
 //!
 //! 等价 JSON：`{"path":"src/main.rs","edits":[{"start_line":3,"text":"第一处替换"},
 //! {"end_line":5,"text":"第二处替换"}]}`。
@@ -48,7 +41,7 @@
 
 use serde_json::{Map, Value};
 
-/// 把 `<_KEY_>` 风格的 XML 工具参数解析为 JSON 对象。
+/// 把 `<!_KEY_>` / `<_KEY_>` 风格的 XML 工具参数解析为 JSON 对象。
 ///
 /// 失败（无有效元素 / 结构畸形）返回 `None`，调用方保留原有 JSON 错误。
 pub fn parse_xml_tool_arguments(input: &str) -> Option<Value> {
@@ -104,6 +97,11 @@ impl<'a> Parser<'a> {
         self.rest().starts_with(s)
     }
 
+    /// 是否命中元素开标签：新版 `<!_`（3 字符）或旧版 `<_`（2 字符）。
+    fn is_element_start(&self) -> bool {
+        self.starts_with("<!_") || self.starts_with("<_")
+    }
+
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.rest().chars().next() {
             if ch.is_whitespace() {
@@ -132,7 +130,7 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(children);
             }
-            if self.starts_with("<_") {
+            if self.is_element_start() {
                 children.push(self.parse_element()?);
                 continue;
             }
@@ -154,13 +152,14 @@ impl<'a> Parser<'a> {
             self.pos += next_lt;
         }
     }
-
-    /// 解析一个 `<_NAME_>...</_NAME_>` 或 `<_NAME_/>` 元素。
+    /// 解析一个元素：新版 `<!_NAME_>...</!_NAME_>`（或自闭合 `<!_NAME_/>`），
+    /// 兼容旧版 `<_NAME_>...</_NAME_>`。
     fn parse_element(&mut self) -> Result<RawChild, ()> {
-        // 当前在 "<_"；消费 "<_"
-        self.pos += 2;
+        // 判定前缀：`<!_`（3 字符，新版）或 `<_`（2 字符，旧版）
+        let new_style = self.starts_with("<!_");
+        self.pos += if new_style { 3 } else { 2 };
         let rest = self.rest();
-        // 名字是 `<_` 与 `_>`（或 `_/>`）之间的内容，名字里可含下划线
+        // 名字是前缀与 `_>`（或 `_/>`）之间的内容，名字里可含下划线
         // （如 `_START_LINE_`），所以扫描第一个 `_>` / `_/>` 分隔符。
         let self_close = rest.find("_/>");
         let normal_close = rest.find("_>");
@@ -187,7 +186,11 @@ impl<'a> Parser<'a> {
         }
         // 消费 "_>"
         self.pos += 2;
-        let close_tag = format!("</_{name}_>");
+        let close_tag = if new_style {
+            format!("</!_{name}_>")
+        } else {
+            format!("</_{name}_>")
+        };
         let frags = self.parse_content(&close_tag)?;
         Ok(RawChild {
             name: name.to_lowercase(),
@@ -234,7 +237,7 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
-            if self.starts_with("<_") {
+            if self.is_element_start() {
                 // 尝试作为嵌套元素解析；失败则把 `<` 当作文本字符（宽松）
                 let saved = self.pos;
                 match self.parse_element() {
@@ -596,5 +599,63 @@ mod tests {
             parse("<_PATH_>a.txt</_PATH_><_APPEND_>true</_APPEND_>"),
             json!({"path": "a.txt", "append": true})
         );
+    }
+
+    // ===== 新格式 `<!_KEY_>`（推荐，避免与 HTML/XML 标签冲突） =====
+
+    #[test]
+    fn new_style_flat_scalars() {
+        let input = r#"
+            <!_PATH_>src/main.rs</!_PATH_>
+            <!_START_LINE_>3</!_START_LINE_>
+            <!_TEXT_>替换内容</!_TEXT_>
+        "#;
+        assert_eq!(
+            parse(input),
+            json!({"path": "src/main.rs", "start_line": 3, "text": "替换内容"})
+        );
+    }
+
+    #[test]
+    fn new_style_nested_and_array() {
+        let input = r#"
+            <!_PATH_>src/main.rs</!_PATH_>
+            <!_EDITS_>
+                <!_ITEM_>
+                    <!_START_LINE_>3</!_START_LINE_>
+                    <!_TEXT_>第一处</!_TEXT_>
+                </!_ITEM_>
+                <!_ITEM_>
+                    <!_END_LINE_>5</!_END_LINE_>
+                    <!_TEXT_>第二处</!_TEXT_>
+                </!_ITEM_>
+            </!_EDITS_>
+        "#;
+        assert_eq!(
+            parse(input),
+            json!({
+                "path": "src/main.rs",
+                "edits": [
+                    {"start_line": 3, "text": "第一处"},
+                    {"end_line": 5, "text": "第二处"}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn new_style_self_closing_and_type_inference() {
+        assert_eq!(parse("<!_OPTIONAL_/>"), json!({"optional": null}));
+        assert_eq!(parse("<!_A_>42</!_A_>"), json!({"a": 42}));
+        assert_eq!(parse("<!_B_>true</!_B_>"), json!({"b": true}));
+    }
+
+    #[test]
+    fn new_and_old_style_mixed() {
+        let input = r#"
+            <!_PATH_>a.txt</!_PATH_>
+            <_APPEND_>true</_APPEND_>
+        "#;
+        assert_eq!(parse(input), json!({"path": "a.txt", "append": true}));
     }
 }

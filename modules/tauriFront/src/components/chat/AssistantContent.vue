@@ -8,7 +8,7 @@
 import MarkdownRender from 'markstream-vue'
 import ReasoningBox from '../ReasoningBox.vue'
 import ToolCallGroup from '../ToolCallGroup.vue'
-import SubAgentCard from '../SubAgentCard.vue'
+import SubAgentMiniCard from './SubAgentMiniCard.vue'
 import type { Message } from '../../types'
 import type { BubbleMeta } from '../../composables/chat/useChatStreaming'
 
@@ -32,14 +32,14 @@ defineProps<{
     v-if="meta?.toolCalls.length"
     :calls="meta.toolCalls"
   />
-  <!-- 子 agent 过程卡片:仅在存在子 agent 记录时渲染 -->
-  <div v-if="meta?.subAgents.length" class="msg-subagents">
-    <SubAgentCard
-      v-for="sa in meta.subAgents"
-      :key="sa.session_id"
-      :record="sa"
-    />
-  </div>
+    <!-- 子 agent 过程卡片：主视图不作大量片段展开，仅一张紧凑可点卡片，点击进入子代理视图 -->
+    <div v-if="meta?.subAgents.length" class="msg-subagents">
+      <SubAgentMiniCard
+        v-for="sa in meta.subAgents"
+        :key="sa.session_id"
+        :record="sa"
+      />
+    </div>
   <!-- 正文:仅在内容非空时渲染(思考/工具阶段内容可能为空) -->
   <MarkdownRender
     v-if="message.content"

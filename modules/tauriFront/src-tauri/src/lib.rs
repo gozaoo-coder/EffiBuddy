@@ -30,8 +30,8 @@ use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
   use effisuite_core::{
       AgentConfig, AsrStore, AsrSummaryIndex, CompressionStore, ConversationStore, EventBus,
-      MemoryIndex, PinnedMemoryStore, PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore,
-      SubAgentRecord,
+      FavoriteWorkspaceStore, MemoryIndex, PinnedMemoryStore, PluginConfigStore, PluginStore,
+      ScheduledTaskStore, SkillStore, SubAgentRecord,
   };
 use effisuite_p2p::P2pManager;
 use tauri::{Emitter, Manager};
@@ -94,6 +94,20 @@ pub fn run() {
         }
     };
 
+  // 初始化常用工作区存储（用户在「会话工作区」面板收藏的常用目录）
+  let favorite_workspaces: Arc<FavoriteWorkspaceStore> =
+      match FavoriteWorkspaceStore::new(favorite_workspaces_path()) {
+          Ok(s) => Arc::new(s),
+          Err(e) => {
+              tracing::error!(error = %e, "FavoriteWorkspaceStore 初始化失败，回退到临时目录");
+              Arc::new(
+                  FavoriteWorkspaceStore::new(
+                      std::env::temp_dir().join("effisuite-favorite-workspaces.json"),
+                  )
+                  .expect("临时目录 FavoriteWorkspaceStore 必须成功"),
+              )
+          }
+      };
     // 初始化会话存储：SetTitleTool 需要此句柄持久化标题，必须在 build_agent 之前完成
     let store = match ConversationStore::with_versions(conversations_dir()) {
         Ok(s) => Arc::new(s),
@@ -261,7 +275,12 @@ pub fn run() {
     let p2p = Arc::new(P2pManager::new(event_bus.clone()));
     // 用户中断注入队列：AI 生成期间用户排队消息（先写 store 再入队），
     // agent hook / send_message_stream 续接循环据此消费。
-    let pending_user_messages = Arc::new(effisuite_agent::PendingUserMessages::new());
+      let pending_user_messages = Arc::new(effisuite_agent::PendingUserMessages::new());
+      // 推理设置共享句柄：send_message / send_message_stream 命令在发送前写入，
+      // agent 每回合读取并注入请求体（thinking + reasoning_effort）。默认 None = 关闭。
+      let reasoning_config: Arc<
+          tokio::sync::RwLock<Option<effisuite_agent::ReasoningConfig>>,
+      > = Arc::new(tokio::sync::RwLock::new(None));
     // 构造 agent：注入 memory / pinned_memory / current_conversation_id / working_dir /
     // image_gen_config / store / skill_index / skill_store / clawhub / skills_dir /
     // plugin_store / compression_store / model_manager / sub_agents / asr_service /
@@ -290,8 +309,9 @@ pub fn run() {
             p2p.clone(),
             Arc::clone(&shell_sessions),
             agent_pool.clone(),
-            Arc::clone(&pending_user_messages),
-        );
+              Arc::clone(&pending_user_messages),
+              Arc::clone(&reasoning_config),
+          );
     let schedule_store = match ScheduledTaskStore::new(schedules_dir()) {
         Ok(s) => s,
         Err(e) => {
@@ -322,6 +342,7 @@ pub fn run() {
         event_bus,
         memory: Arc::clone(&memory),
         pinned_memory: Arc::clone(&pinned_memory),
+          favorite_workspaces: Arc::clone(&favorite_workspaces),
         current_conversation_id: Arc::clone(&current_conversation_id),
         working_dir: Arc::clone(&working_dir),
         image_gen_config: Arc::clone(&image_gen_config),
@@ -335,7 +356,9 @@ pub fn run() {
                 asr_service,
                 shell_sessions,
                 agent_pool,
-                pending_user_messages,
+                  pending_user_messages,
+                  reasoning_config,
+
                 agent_cancel: Arc::new(effisuite_agent::AgentCancelRegistry::new()),
                 auto_compress_inflight: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             };
@@ -552,6 +575,10 @@ pub fn run() {
             delete_skill,
             set_conversation_working_dir,
             get_conversation_working_dir,
+          // 常用工作区（会话工作区收藏）
+          list_favorite_workspaces,
+          add_favorite_workspace,
+          delete_favorite_workspace,
             // git 上下文版本管理（开分支/保存/撤回/回溯）
             git_context_status,
             git_context_init,

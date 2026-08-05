@@ -52,8 +52,10 @@ impl ChatAgent for RigAgent {
         self.sync_history(messages).await;
         // 读取当前工作区快照注入到文件/shell 工具
         let cwd = self.working_dir.read().await.clone();
+        // 读取推理设置（thinking 开关 + reasoning_effort），回合内注入请求体
+        let reasoning = self.reasoning_config.read().await.clone();
 
-        let agent = self.build_agent(cwd);
+        let agent = self.build_agent(cwd, reasoning);
         // 使用完整对话历史上下文，而非仅取最后一条用户消息
         let prompt = self.build_contextual_prompt(messages).await;
 
@@ -79,8 +81,10 @@ impl ChatAgent for RigAgent {
             self.sync_history(messages).await;
             // 读取当前工作区快照注入到文件/shell 工具
             let cwd = self.working_dir.read().await.clone();
+            // 读取推理设置（thinking 开关 + reasoning_effort），回合内注入请求体
+            let reasoning = self.reasoning_config.read().await.clone();
 
-            let agent = self.build_agent(cwd);
+            let agent = self.build_agent(cwd, reasoning);
             // 使用完整对话历史上下文，而非仅取最后一条用户消息
             let prompt = self.build_contextual_prompt(messages).await;
 

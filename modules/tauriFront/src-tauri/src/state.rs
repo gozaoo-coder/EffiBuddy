@@ -10,8 +10,8 @@ use effisuite_agent::{AsrService, ChatAgent, ImageGenConfig, ModelManagerHandle,
 use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
-    AgentConfig, CompressionStore, ConversationStore, EventBus, MemoryIndex, PinnedMemoryStore,
-    PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
+    AgentConfig, CompressionStore, ConversationStore, EventBus, FavoriteWorkspaceStore, MemoryIndex,
+    PinnedMemoryStore, PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
 };
 use effisuite_p2p::P2pManager;
 use tokio::sync::RwLock;
@@ -59,6 +59,8 @@ pub struct AppState {
     pub memory: Arc<MemoryIndex>,
     /// 永久记忆存储（用户主动要求"记住"的内容），与 agent 共享同一份 Arc
     pub pinned_memory: Arc<PinnedMemoryStore>,
+    /// 常用工作区存储（用户收藏的会话工作区路径），供「会话工作区」面板快速切换
+    pub favorite_workspaces: Arc<FavoriteWorkspaceStore>,
     /// 当前活跃会话 id，由 send_message 命令更新；agent 据此排除当前会话
     pub current_conversation_id: Arc<RwLock<Option<String>>>,
     /// 当前工作区路径，由 send_message 命令更新；agent 据此解析相对路径与设置 shell cwd。
@@ -99,7 +101,13 @@ pub struct AppState {
     pub agent_cancel: Arc<effisuite_agent::AgentCancelRegistry>,
     /// 自动压缩进行中会话集合：上下文达到阈值触发自动压缩时登记，压缩完成移除。
     /// 防止同一会话并发触发多次自动压缩（跨流、跨轮次去重）。
+    /// 自动压缩进行中会话集合：上下文达到阈值触发自动压缩时登记，压缩完成移除。
+    /// 防止同一会话并发触发多次自动压缩（跨流、跨轮次去重）。
     pub auto_compress_inflight: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// 推理设置句柄（thinking 开关 + reasoning_effort 等级），与 agent 共享同一份 Arc。
+    /// send_message / send_message_stream 命令在发送前写入，agent 每回合读取注入请求体。
+    pub reasoning_config: Arc<RwLock<Option<effisuite_agent::ReasoningConfig>>>,
+  }
 }
 
 /// 当前 Unix 毫秒时间戳；失败时回退为 0，避免在命令路径里 panic。

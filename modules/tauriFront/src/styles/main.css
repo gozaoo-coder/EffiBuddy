@@ -390,12 +390,24 @@ button:disabled {
 }
 
 .chat-main {
+  position: relative; /* 作为顶部悬浮顶栏 ChatTopBar(absolute) 的定位上下文 */
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg);
+}
+
+/* 子代理内嵌视图容器(chat-main 内切换为该子代理全流程) */
+.sub-agent-embed {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 56px; /* 顶部 56px 为悬浮顶栏(ChatTopBar)让位 */
 }
 
 .chat-title {
@@ -429,7 +441,7 @@ button:disabled {
   /* 消息列表只允许纵向滚动：横向溢出（如 hover 操作栏、超宽代码块）一律裁切，
      避免异常出现横向滚动条 */
   overflow-x: hidden;
-  padding: 24px;
+    padding: 56px 24px 24px; /* 顶部 56px 为悬浮顶栏(ChatTopBar)让位 */
   display: flex;
   flex-direction: column;
   gap: 16px;

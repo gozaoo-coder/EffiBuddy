@@ -72,6 +72,11 @@ pub(crate) fn pinned_memories_path() -> std::path::PathBuf {
     appdata_root().join("pinned_memories.json")
 }
 
+/// 常用工作区存储文件：`<appdata>/favorite_workspaces.json`
+pub(crate) fn favorite_workspaces_path() -> std::path::PathBuf {
+    appdata_root().join("favorite_workspaces.json")
+}
+
 /// 附件存储目录：`<appdata>/attachments`
 ///
 /// ImageGenTool 把生成图片落盘到此目录；前端通过 read_attachment 命令读取。

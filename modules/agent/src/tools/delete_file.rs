@@ -71,7 +71,10 @@ impl Tool for DeleteFileTool {
         format!(
             "删除本地文件或空目录。路径不做沙箱限制（信任本地 agent 环境）。\
              默认仅删除文件或空目录；设置 recursive=true 可删除非空目录。\
-             删除前请确认路径正确，删除后不可恢复。\n{cwd_hint}"
+             删除前请确认路径正确，删除后不可恢复。\n\n\
+             **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
+             每个参数一个标签，形如 <!_PATH_>file.txt</!_PATH_>、\n\
+             <!_RECURSIVE_>true</!_RECURSIVE_>。\n{cwd_hint}"
         )
     }
 

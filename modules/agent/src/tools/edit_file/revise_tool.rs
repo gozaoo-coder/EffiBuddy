@@ -75,7 +75,11 @@ impl Tool for EditReviseTool {
          - patch：用 new_text 重做指定 op_id（先撤回恢复 old_content，再用 new_text 重新执行；\
          要求该 op_id 是该文件的最新操作）\n\n\
          **patch 语义**：删除原 op_id 记录并产生新 op_id，AI 需用新 op_id 撤回后续操作。\
-         若 op_id 不是该文件最新操作，请先 edit_undo 后续操作。"
+         若 op_id 不是该文件最新操作，请先 edit_undo 后续操作。\n\n\
+         **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
+         每个参数一个标签，形如 <!_ACTION_>view</!_ACTION_>、<!_OP_ID_>3</!_OP_ID_>、\n\
+         <!_NEW_TEXT_>新文本，可含 < > & 等任意字符</!_NEW_TEXT_>。\n\
+         若内容本身含闭合标签字面量，用 CDATA 包裹（与 write_file 相同）。"
             .to_string()
     }
 

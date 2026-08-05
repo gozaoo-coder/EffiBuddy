@@ -91,6 +91,71 @@ pub(super) const SKILL_SEARCH_MIN_QUERY_LEN: usize = 2;
 /// 经 attachment 事件在子 agent 卡片内展示，不走主会话附件通道）
 pub const SUB_AGENT_DEFAULT_EXCLUDED: &[&str] = &["set_title", "display_image", "image_gen"];
 
+/// 单次对话的推理设置（前端「思考」选择器传入）。
+///
+/// - `thinking`：是否启用 thinking，对应请求体 `extra_body: {"thinking": {"type": "enabled"}}`
+/// - `effort`：`reasoning_effort` 等级（low / high / max），None 表示不传该字段
+///
+/// 仅当 `thinking` 为 true 时才向请求体注入参数（两者语义绑定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ReasoningConfig {
+    /// 是否启用 thinking（`{"thinking": {"type": "enabled"}}`）
+    pub thinking: bool,
+    /// reasoning_effort 等级，None = 不传该字段
+    pub effort: Option<ReasoningEffort>,
+}
+
+impl ReasoningConfig {
+    /// 构建注入到 completion 请求体的 additional_params；未启用 thinking 时返回 None。
+    pub fn additional_params(&self) -> Option<serde_json::Value> {
+        if !self.thinking {
+            return None;
+        }
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "thinking".to_string(),
+            serde_json::json!({ "type": "enabled" }),
+        );
+        if let Some(ef) = self.effort {
+            map.insert(
+                "reasoning_effort".to_string(),
+                serde_json::json!(ef.as_str()),
+            );
+        }
+        Some(serde_json::Value::Object(map))
+    }
+}
+
+/// `reasoning_effort` 枚举：low / high / max。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+    Low,
+    High,
+    Max,
+}
+
+impl ReasoningEffort {
+    /// 序列化到请求体的字符串值
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::High => "high",
+            Self::Max => "max",
+        }
+    }
+
+    /// 从字符串解析（大小写不敏感）；非法值返回 None
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "high" => Some(Self::High),
+            "max" => Some(Self::Max),
+            _ => None,
+        }
+    }
+}
+
+
 /// 通过 [rig](https://crates.io/crates/rig-core) 调用 OpenAI 兼容接口的 [`crate::ChatAgent`] 实现。
 ///
 /// 字段以 `pub(super)` 暴露给 `rig_agent` 子模块的 `impl` 块使用，
@@ -203,4 +268,8 @@ pub struct RigAgent {
     /// 用户中断注入队列句柄（AI 生成期间排队消息）：Some 时 build_agent 注册
     /// InjectPendingUserHook，在下一个 completion 前把排队消息插入模型输入。
     pub(super) pending_user_messages: Option<Arc<PendingUserMessages>>,
+    /// 推理设置共享句柄（thinking 开关 + reasoning_effort 等级）：
+    /// send_message 命令层在每次发送前写入，build_agent 读取并注入 additional_params。
+    /// None = 不发送任何 thinking / reasoning_effort 参数（默认行为）。
+    pub(super) reasoning_config: Arc<RwLock<Option<ReasoningConfig>>>,
 }

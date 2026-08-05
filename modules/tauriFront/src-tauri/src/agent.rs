@@ -65,8 +65,9 @@ pub(crate) fn build_agent(
     remote_task_dispatcher: Arc<dyn RemoteTaskDispatcher>,
     shell_sessions: Arc<ShellSessionManager>,
     agent_pool: AgentPoolStore,
-    pending_user_messages: Arc<effisuite_agent::PendingUserMessages>,
-    ) -> Arc<dyn ChatAgent> {
+      pending_user_messages: Arc<effisuite_agent::PendingUserMessages>,
+      reasoning_config: Arc<tokio::sync::RwLock<Option<effisuite_agent::ReasoningConfig>>>,
+      ) -> Arc<dyn ChatAgent> {
     match config.backend {
         BackendKind::Openai if config.is_rig_ready() => {
             match RigAgent::from_key(
@@ -98,7 +99,8 @@ pub(crate) fn build_agent(
                         .with_remote_task_dispatcher(Some(remote_task_dispatcher))
                         .with_shell_sessions(Some(shell_sessions))
                         .with_agent_pool(Some(agent_pool))
-                        .with_pending_user_messages(Some(pending_user_messages)),
+                          .with_pending_user_messages(Some(pending_user_messages))
+                          .with_reasoning_config(reasoning_config),
                 ),
                 Err(e) => {
                     tracing::warn!(error = %e, "RigAgent 构造失败，回退到 MockAgent");
@@ -142,7 +144,9 @@ pub(crate) fn build_agent_from_state(
           dispatcher,
           Arc::clone(&state.shell_sessions),
           state.agent_pool.clone(),
-          Arc::clone(&state.pending_user_messages),
+            Arc::clone(&state.pending_user_messages),
+            Arc::clone(&state.reasoning_config),
+          )
         )
     }
 

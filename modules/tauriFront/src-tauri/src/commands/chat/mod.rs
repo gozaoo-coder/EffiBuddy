@@ -125,7 +125,10 @@ pub(crate) async fn send_message(
     app_handle: tauri::AppHandle,
     conversation_id: String,
     content: String,
+    reasoning: Option<effisuite_agent::ReasoningConfig>,
 ) -> Result<String, String> {
+    // 写入推理设置：agent 本回合读取注入请求体（thinking + reasoning_effort）
+    *state.reasoning_config.write().await = reasoning;
     // agent 工具（manage_model）可能已修改配置：版本不一致时懒重建
     ensure_agent_synced(&state, &app_handle).await;
     let agent = state.agent.read().await.clone();
@@ -200,7 +203,10 @@ pub(crate) async fn send_message_stream(
     app_handle: tauri::AppHandle,
     conversation_id: String,
     content: String,
+    reasoning: Option<effisuite_agent::ReasoningConfig>,
 ) -> Result<(), String> {
+    // 写入推理设置：agent 每回合读取注入请求体（thinking + reasoning_effort）
+    *state.reasoning_config.write().await = reasoning;
     // agent 工具（manage_model）可能已修改配置：版本不一致时懒重建
     ensure_agent_synced(&state, &app_handle).await;
     let agent = state.agent.read().await.clone();
