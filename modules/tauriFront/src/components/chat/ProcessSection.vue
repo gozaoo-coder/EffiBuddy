@@ -8,7 +8,7 @@
  * - 展开后：推理文本为灰色小字段落，工具列表以嵌入模式(无卡片)呈现
  * - 点击标题行可随时手动展开/折叠
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { animate } from 'animejs'
 import { Icon } from '../basic'
 import ToolCallGroup from '../ToolCallGroup.vue'
@@ -40,23 +40,53 @@ const collapsed = ref(!busy.value)
 const bodyRef = ref<HTMLElement | null>(null)
 const reasoningRef = ref<HTMLElement | null>(null)
 
-// 已思考时长（秒）
-const thinkStart = ref<number>(Date.now())
+// 已思考时长（秒）：多段推理累计；思考中实时刷新
+const thinkStart = ref<number>(0)
 const thinkDuration = ref<number>(0)
+const liveElapsed = ref<number>(0)
+let tickTimer: ReturnType<typeof setInterval> | null = null
 
 watch(
   () => props.isThinking,
   (thinking, was) => {
     if (thinking && !was) {
       thinkStart.value = Date.now()
+      liveElapsed.value = 0
+      startTicker()
     } else if (!thinking && was) {
-      thinkDuration.value = Math.max(
+      stopTicker()
+      if (thinkStart.value) {
+        thinkDuration.value += Math.max(
+          1,
+          Math.round((Date.now() - thinkStart.value) / 1000),
+        )
+        thinkStart.value = 0
+      }
+    }
+  },
+)
+
+// 思考中每秒刷新"思考中 X 秒"文案
+function startTicker() {
+  if (tickTimer) return
+  tickTimer = setInterval(() => {
+    if (props.isThinking && thinkStart.value) {
+      liveElapsed.value = Math.max(
         1,
         Math.round((Date.now() - thinkStart.value) / 1000),
       )
     }
-  },
-)
+  }, 1000)
+}
+
+function stopTicker() {
+  if (tickTimer) {
+    clearInterval(tickTimer)
+    tickTimer = null
+  }
+}
+
+onUnmounted(stopTicker)
 
 // 进行中 → 展开；全部完成 → 短暂延迟后自动折叠
 let collapseTimer: ReturnType<typeof setTimeout> | null = null
@@ -130,7 +160,9 @@ watch(
 const titleText = computed(() => {
   const parts: string[] = []
   if (props.isThinking) {
-    parts.push('思考中')
+    parts.push(
+      liveElapsed.value > 0 ? `思考中 ${liveElapsed.value} 秒` : '思考中',
+    )
   } else if (props.reasoning) {
     parts.push(
       thinkDuration.value > 0 ? `已思考 ${thinkDuration.value} 秒` : '推理过程',

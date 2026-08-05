@@ -2,8 +2,9 @@
  * 流式渲染状态:气泡元数据 / 流式事件处理 / 附件 / 计费
  *
  * 气泡聚合规则:
- *  - 文本 + 工具调用归同一气泡;工具结果后下一段文本/推理新建气泡
- *  - 连续多个工具无中间文本时,工具调用仍追加到当前气泡(视觉连贯)
+ *  - 过程气泡:连续多轮推理 + 工具调用合并为一个过程区块(期间无正文)
+ *  - 正文气泡:一旦出现正文即"断开本次合并"——正文另起气泡,后续推理/工具另起新过程气泡
+ *  - 工具结果后新一轮推理:当前仍为纯过程气泡(无正文)则继续合并,实现连续推理+工具合并
  */
 import { ref, reactive, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
@@ -124,6 +125,18 @@ export function useChatStreaming(
         streamingBubbleId.value = null
         needNewBubbleAfterTool.value = false
       }
+      // 正文内容则断开本次合并:当前为纯过程气泡(有推理/工具但无正文)时,
+      // 正文应另起气泡,并结束该过程气泡的思考计时
+      if (streamingBubbleId.value) {
+        const cur = core.messages.value.find((m) => m.id === streamingBubbleId.value)
+        if (cur && !cur.content) {
+          const meta = bubbleMeta[streamingBubbleId.value]
+          if (meta && (meta.reasoning || meta.toolCalls.length || meta.subAgents.length)) {
+            if (meta.isThinking) meta.isThinking = false
+            streamingBubbleId.value = null
+          }
+        }
+      }
       // 生成期间用户排队插入的消息:若当前流式气泡之后已有用户气泡,
       // 新一轮回复应另起气泡,避免追加到排队消息之前的旧气泡里。
       if (streamingBubbleId.value) {
@@ -157,11 +170,18 @@ export function useChatStreaming(
 
   // ---------- 推理事件 ----------
     async function onReasoning(content: string) {
-      // 工具结果后新一轮推理也应新建气泡(新一轮思考 = 新一段答复)
-      if (needNewBubbleAfterTool.value) {
-        streamingBubbleId.value = null
-        needNewBubbleAfterTool.value = false
-      }
+        // 工具结果后新一轮推理:
+        // - 当前为纯过程气泡(无正文) → 合并进当前气泡,实现"连续多个推理+工具合并"
+        // - 无气泡 / 已有正文 → 另起气泡
+        if (needNewBubbleAfterTool.value) {
+          const cur = streamingBubbleId.value
+            ? core.messages.value.find((m) => m.id === streamingBubbleId.value)
+            : null
+          if (!cur || cur.content) {
+            streamingBubbleId.value = null
+          }
+          needNewBubbleAfterTool.value = false
+        }
       // 生成期间用户排队插入的消息:若当前流式气泡之后已有用户气泡,新一轮思考另起气泡
       if (streamingBubbleId.value) {
         const idx = core.messages.value.findIndex((m) => m.id === streamingBubbleId.value)
@@ -199,6 +219,13 @@ export function useChatStreaming(
 
   // ---------- 工具调用事件 ----------
     async function onToolCall(call: AgentToolCallPayload) {
+      // 正文内容则断开合并:当前气泡已有正文,工具调用另起新过程气泡
+      if (streamingBubbleId.value) {
+        const cur = core.messages.value.find((m) => m.id === streamingBubbleId.value)
+        if (cur && cur.content) {
+          streamingBubbleId.value = null
+        }
+      }
       if (!streamingBubbleId.value) {
         // 没有气泡时先创建一个空的 assistant 气泡（工具组：跳过 spawn 动画）
         streamingBubbleId.value = core.newId()
