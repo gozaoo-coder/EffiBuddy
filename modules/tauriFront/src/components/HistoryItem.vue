@@ -267,6 +267,16 @@ function formatRelativeTime(ts: number): string {
 
 .hr-item.active .hr-item-title {
   color: var(--primary);
+  }
+/* active 项：操作按钮常显不透明（无需 hover），meta 隐藏避免重叠 */
+.hr-item.active .hr-item-actions {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.hr-item.active .hr-item-meta {
+  display: none;
 }
 
 /* 多选模式下的选中态 */
@@ -373,10 +383,11 @@ function formatRelativeTime(ts: number): string {
   gap: 4px;
   max-width: 320px;
   padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.04);
-  color: rgba(0, 0, 0, 0.88);
+  background: var(--menu-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 7px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.184);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24);
   pointer-events: none;
   animation: hr-item-tooltip-in 0.16s var(--ease-standard) both;
 }
@@ -404,7 +415,7 @@ function formatRelativeTime(ts: number): string {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: rgba(0, 0, 0, 0.56);
+  color: var(--muted);
   min-width: 0;
 }
 
@@ -416,7 +427,7 @@ function formatRelativeTime(ts: number): string {
 
 .hr-item-tooltip-meta {
   font-size: 11px;
-  color: rgba(0, 0, 0, 0.44);
+  color: var(--muted);
 }
 
 /* 主体：标题 + 元信息横向排布，两端对齐，占满容器 */
