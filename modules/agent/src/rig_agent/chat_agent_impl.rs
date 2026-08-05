@@ -69,6 +69,11 @@ impl ChatAgent for RigAgent {
         &'a self,
         messages: &'a [Message],
     ) -> BoxStream<'a, Result<AgentStreamItem>> {
+        // 流式请求出错时自动重试的最大次数。
+        // provider 偶发 5xx / 连接中断 / 超时会导致流中断，重试整轮请求避免对话失败。
+        const STREAM_MAX_RETRIES: usize = 20;
+        // 重试退避基数（毫秒）：按重试次数线性增长，封顶 2s，错误风暴时避免雪崩。
+        const STREAM_RETRY_BACKOFF_MS: u64 = 200;
         let s = async_stream::stream! {
             // 先同步历史
             self.sync_history(messages).await;
@@ -79,105 +84,130 @@ impl ChatAgent for RigAgent {
             // 使用完整对话历史上下文，而非仅取最后一条用户消息
             let prompt = self.build_contextual_prompt(messages).await;
 
-            // stream_prompt 返回 StreamingPromptRequest，await 后直接得到流
-            let mut stream = agent.stream_prompt(prompt).await;
+            let mut retry_count = 0usize;
+            loop {
+                // stream_prompt 返回 StreamingPromptRequest，await 后直接得到流
+                let mut stream = agent.stream_prompt(prompt.clone()).await;
 
-            while let Some(item) = stream.next().await {
-                match item {
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
-                        // 文本增量，emit 给前端
-                        if !text.text.is_empty() {
-                            yield Ok(AgentStreamItem::Text { content: text.text });
+                // 记录本次尝试的流错误；None 表示流正常结束。
+                let mut stream_error: Option<String> = None;
+
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text))) => {
+                            // 文本增量，emit 给前端
+                            if !text.text.is_empty() {
+                                yield Ok(AgentStreamItem::Text { content: text.text });
+                            }
                         }
-                    }
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(r))) => {
-                        // 完整推理块：用 display_text() 合并所有 Text/Summary/Redacted 块
-                        let text = r.display_text();
-                        if !text.is_empty() {
-                            yield Ok(AgentStreamItem::Reasoning { content: text });
+                        Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(r))) => {
+                            // 完整推理块：用 display_text() 合并所有 Text/Summary/Redacted 块
+                            let text = r.display_text();
+                            if !text.is_empty() {
+                                yield Ok(AgentStreamItem::Reasoning { content: text });
+                            }
                         }
-                    }
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { reasoning, .. })) => {
-                        // 推理增量：reasoning 字段已是 String，直接透传
-                        if !reasoning.is_empty() {
-                            yield Ok(AgentStreamItem::Reasoning { content: reasoning });
+                        Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { reasoning, .. })) => {
+                            // 推理增量：reasoning 字段已是 String，直接透传
+                            if !reasoning.is_empty() {
+                                yield Ok(AgentStreamItem::Reasoning { content: reasoning });
+                            }
                         }
-                    }
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { tool_call, internal_call_id })) => {
-                        // 模型决定调用工具：透传工具名与参数
-                        yield Ok(AgentStreamItem::ToolCallStart {
-                            call_id: internal_call_id,
-                            tool_name: tool_call.function.name.clone(),
-                            arguments: tool_call.function.arguments.clone(),
-                        });
-                    }
-                    Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, internal_call_id })) => {
-                        // 工具执行结果：从 OneOrMany<ToolResultContent> 提取文本
-                        let output = extract_tool_output(&tool_result.content);
-                        let is_error = output.starts_with("Error:") || output.starts_with("error:");
-                        yield Ok(AgentStreamItem::ToolResult {
-                            call_id: internal_call_id,
-                            output,
-                            is_error,
-                        });
-                    }
-                    Ok(MultiTurnStreamItem::StreamAssistantItem(_)) => {
-                        // ToolCallDelta 等增量事件暂不透传，避免噪音
-                        continue;
-                    }
-                    Ok(MultiTurnStreamItem::ToolExecutionStart { .. }) => {
-                        // rig 执行工具前的事件，与 ToolCall 重复，跳过
-                        continue;
-                    }
-                    Ok(MultiTurnStreamItem::CompletionCall(call)) => {
-                        // 透传单次 completion 请求的 usage 统计：
-                        // 前端累计所有 Usage 事件得到本轮对话的总 token 消耗。
-                        // provider 未返回 usage 时所有字段为 0（rig 的零值哨兵），
-                        // 前端可据此判断是否展示 token 统计。
-                        // cache_hit/cache_miss 来自 DeepSeek 的 prompt_cache_hit_tokens /
-                        // prompt_cache_miss_tokens（rig-core vendored patch 映射到
-                        // cached_input_tokens / cache_creation_input_tokens）。
-                        yield Ok(AgentStreamItem::Usage {
-                            input_tokens: call.usage.input_tokens,
-                            output_tokens: call.usage.output_tokens,
-                            total_tokens: call.usage.total_tokens,
-                            reasoning_tokens: call.usage.reasoning_tokens,
-                            cache_hit_tokens: call.usage.cached_input_tokens,
-                            cache_miss_tokens: call.usage.cache_creation_input_tokens,
-                        });
-                    }
-                    Ok(MultiTurnStreamItem::FinalResponse(_)) => {
-                        // 流结束
-                        return;
-                    }
-                    Ok(_) => {
-                        // non_exhaustive 兜底：未来新增变体暂不透传
-                        continue;
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        // skill 的 preamble 可能提到未在 agent 中注册的工具，
-                        // 直接报错会中断整个流。这里把 UnknownToolCall 转换为
-                        // 一条可读的 assistant 文本，让前端正常显示并结束本轮。
-                        if err_str.contains("UnknownToolCall") {
-                            let tool_name = err_str
-                                .split('`')
-                                .nth(1)
-                                .filter(|s| !s.is_empty())
-                                .unwrap_or("unknown");
-                            yield Ok(AgentStreamItem::Text {
-                                content: format!(
-                                    "⚠️ 我尝试调用工具 `{tool_name}`，但它未在当前 agent 中注册。\
-                                     这通常是因为某个 skill 的说明里提到了未实现的工具。\
-                                     请检查该 skill 是否完整安装，或让我改用 shell / 其他可用工具继续。"
-                                ),
+                        Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { tool_call, internal_call_id })) => {
+                            // 模型决定调用工具：透传工具名与参数
+                            yield Ok(AgentStreamItem::ToolCallStart {
+                                call_id: internal_call_id,
+                                tool_name: tool_call.function.name.clone(),
+                                arguments: tool_call.function.arguments.clone(),
                             });
+                        }
+                        Ok(MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult { tool_result, internal_call_id })) => {
+                            // 工具执行结果：从 OneOrMany<ToolResultContent> 提取文本
+                            let output = extract_tool_output(&tool_result.content);
+                            let is_error = output.starts_with("Error:") || output.starts_with("error:");
+                            yield Ok(AgentStreamItem::ToolResult {
+                                call_id: internal_call_id,
+                                output,
+                                is_error,
+                            });
+                        }
+                        Ok(MultiTurnStreamItem::StreamAssistantItem(_)) => {
+                            // ToolCallDelta 等增量事件暂不透传，避免噪音
+                            continue;
+                        }
+                        Ok(MultiTurnStreamItem::ToolExecutionStart { .. }) => {
+                            // rig 执行工具前的事件，与 ToolCall 重复，跳过
+                            continue;
+                        }
+                        Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                            // 透传单次 completion 请求的 usage 统计：
+                            // 前端累计所有 Usage 事件得到本轮对话的总 token 消耗。
+                            // provider 未返回 usage 时所有字段为 0（rig 的零值哨兵），
+                            // 前端可据此判断是否展示 token 统计。
+                            // cache_hit/cache_miss 来自 DeepSeek 的 prompt_cache_hit_tokens /
+                            // prompt_cache_miss_tokens（rig-core vendored patch 映射到
+                            // cached_input_tokens / cache_creation_input_tokens）。
+                            yield Ok(AgentStreamItem::Usage {
+                                input_tokens: call.usage.input_tokens,
+                                output_tokens: call.usage.output_tokens,
+                                total_tokens: call.usage.total_tokens,
+                                reasoning_tokens: call.usage.reasoning_tokens,
+                                cache_hit_tokens: call.usage.cached_input_tokens,
+                                cache_miss_tokens: call.usage.cache_creation_input_tokens,
+                            });
+                        }
+                        Ok(MultiTurnStreamItem::FinalResponse(_)) => {
+                            // 流结束
                             return;
                         }
-                        yield Err(CoreError::Agent(format!("rig stream item: {e}")));
-                        return;
+                        Ok(_) => {
+                            // non_exhaustive 兜底：未来新增变体暂不透传
+                            continue;
+                        }
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            // skill 的 preamble 可能提到未在 agent 中注册的工具，
+                            // 直接报错会中断整个流。这里把 UnknownToolCall 转换为
+                            // 一条可读的 assistant 文本，让前端正常显示并结束本轮。
+                            if err_str.contains("UnknownToolCall") {
+                                let tool_name = err_str
+                                    .split('`')
+                                    .nth(1)
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or("unknown");
+                                yield Ok(AgentStreamItem::Text {
+                                    content: format!(
+                                        "⚠️ 我尝试调用工具 `{tool_name}`，但它未在当前 agent 中注册。\
+                                         这通常是因为某个 skill 的说明里提到了未实现的工具。\
+                                         请检查该 skill 是否完整安装，或让我改用 shell / 其他可用工具继续。"
+                                    ),
+                                });
+                                return;
+                            }
+                            // 记录错误，跳出内层循环后进入重试逻辑
+                            stream_error = Some(err_str);
+                            break;
+                        }
                     }
                 }
+
+                // 流正常结束（无错误）：本轮完成
+                let Some(err_str) = stream_error else {
+                    return;
+                };
+
+                // 重试次数耗尽：把最后一次错误返回给调用方
+                if retry_count >= STREAM_MAX_RETRIES {
+                    yield Err(CoreError::Agent(format!(
+                        "rig stream item（重试 {STREAM_MAX_RETRIES} 次后仍失败）: {err_str}"
+                    )));
+                    return;
+                }
+
+                // 退避后重试整轮流式请求（重新 stream_prompt）
+                retry_count += 1;
+                let backoff_ms = (STREAM_RETRY_BACKOFF_MS * retry_count as u64).min(2000);
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
             }
         };
         Box::pin(s)
