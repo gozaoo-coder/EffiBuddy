@@ -19,6 +19,7 @@ import type {
   SubAgentEventPayload,
   SubAgentRecord,
   ToolCallRecord,
+  ProcessSegment,
 } from '../../types'
 import type { useChatCore } from './useChatCore'
 import type { useAutoScroll } from './useAutoScroll'
@@ -28,6 +29,8 @@ export interface BubbleMeta {
   reasoning: string
   isThinking: boolean
   toolCalls: ToolCallRecord[]
+  /** 推理过程段(思考文字与工具调用按到达顺序穿插),渲染时按此顺序展示 */
+  segments: ProcessSegment[]
   /** 子 agent 记录(按 session_id 聚合) */
   subAgents: SubAgentRecord[]
   /** 计费统计:仅在 agent-billing 事件(回答结束时)到达后赋值 */
@@ -63,6 +66,7 @@ export function useChatStreaming(
         reasoning: '',
         isThinking: false,
         toolCalls: [],
+        segments: [],
         subAgents: [],
         billing: null,
       }
@@ -213,6 +217,14 @@ export function useChatStreaming(
       const meta = ensureMeta(streamingBubbleId.value)
       meta.isThinking = true
       meta.reasoning += content
+      // 插入推理过程段：若上一段仍是思考文字则续写，否则新建一段
+      // （工具调用会切段，从而实现工具执行结果穿插在思考文字之间展示）
+      const last = meta.segments[meta.segments.length - 1]
+      if (last && last.kind === 'reasoning') {
+        last.text += content
+      } else {
+        meta.segments.push({ kind: 'reasoning', text: content })
+      }
       await nextTick()
       autoscroll.scrollBottom()
     }
@@ -242,14 +254,17 @@ export function useChatStreaming(
       const meta = ensureMeta(streamingBubbleId.value)
       // 收到 tool call 表示推理阶段结束
       meta.isThinking = false
-      meta.toolCalls.push({
+      const rec: ToolCallRecord = {
         call_id: call.call_id,
         tool_name: call.tool_name,
         arguments: call.arguments,
         result: null,
         is_error: false,
         pending: true,
-      })
+      }
+      meta.toolCalls.push(rec)
+      // 插入工具过程段：独立成段，与前后思考文字穿插展示
+      meta.segments.push({ kind: 'tool', call: rec })
       await nextTick()
       autoscroll.scrollBottom()
     }
@@ -508,10 +523,15 @@ export function useChatStreaming(
       if (m.reasoning) {
         meta.reasoning = m.reasoning
         meta.isThinking = false
+        meta.segments.push({ kind: 'reasoning', text: m.reasoning })
       }
       // 工具调用记录 → 工具调用组(历史记录总是已完成,pending=false)
       if (m.toolCalls && m.toolCalls.length > 0) {
         meta.toolCalls = m.toolCalls.map((t) => ({ ...t, pending: false }))
+        // 历史消息内推理在前、工具在后，按持久化顺序还原过程段
+        for (const t of meta.toolCalls) {
+          meta.segments.push({ kind: 'tool', call: t })
+        }
       }
       // token 用量 → 用量显示。历史只持久化 token(价格来自运行时模型配置),
       // 恢复时用当前激活模型的单价重算金额,避免压缩重载后从"元"退化回纯 token 显示。

@@ -575,6 +575,12 @@ export interface ToolCallRecord {
   pending: boolean
 }
 
+// 推理过程段：按流式到达顺序穿插的「思考文字 / 工具调用」片段
+// 用于把工具执行结果插入到思考文字之间展示，而非与思考文字隔开单独成块。
+export type ProcessSegment =
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'tool'; call: ToolCallRecord }
+
 // 子 agent 事件 payload（sub-agent-event 事件）
 // 后端 SubAgentManager 在子 agent 执行全流程中实时推送：
 // started → token / tool_call / tool_result / attachment → done | error

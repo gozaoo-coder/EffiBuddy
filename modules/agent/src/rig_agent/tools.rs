@@ -59,8 +59,10 @@ impl RigAgent {
             .agent(&self.model_name)
             .preamble(&self.preamble);
         // 推理设置（思考开关 + reasoning_effort）：启用时把 `thinking` / `reasoning_effort`
-        // 注入为请求体 additional_params（rig 会 flatten 进 Chat Completions 请求体）。
-        if let Some(extra) = reasoning.and_then(|r| r.additional_params()) {
+        // 注入为请求体 additional_params（rig 会 flatten 进 Chat Completions 请求体）；
+        // 关闭思考时对推理模型（deepseek-reasoner 等默认思考的模型）显式注入 disabled，
+        // 否则“思考已关”后模型仍会输出推理内容。
+        if let Some(extra) = reasoning.and_then(|r| r.additional_params(&self.model_name)) {
             builder = builder.additional_params(extra);
         }
 

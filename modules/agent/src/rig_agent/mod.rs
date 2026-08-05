@@ -106,21 +106,44 @@ pub struct ReasoningConfig {
 }
 
 impl ReasoningConfig {
-    /// 构建注入到 completion 请求体的 additional_params；未启用 thinking 时返回 None。
-    pub fn additional_params(&self) -> Option<serde_json::Value> {
-        if !self.thinking {
-            return None;
-        }
+    /// 模型名是否属于「默认开启思考」的推理模型。
+    ///
+    /// 这类模型（DeepSeek R1 / QwQ 等）在请求体不携带 thinking 参数时**默认思考**，
+    /// 用户关闭思考后必须显式传 `{"thinking": {"type": "disabled"}}` 才能真正关闭；
+    /// 普通对话模型不识别 thinking 参数，注入反而会报错，因此仅在匹配时注入。
+    pub fn is_reasoning_model(model_name: &str) -> bool {
+        let n = model_name.to_ascii_lowercase();
+        ["reasoner", "r1", "thinking", "qwq", "o1", "o3", "o4"]
+            .iter()
+            .any(|k| n.contains(k))
+    }
+
+    /// 构建注入到 completion 请求体的 additional_params；无需注入时返回 None。
+    ///
+    /// - thinking 开启：注入 `{"thinking": {"type": "enabled"}}` + 可选 reasoning_effort
+    /// - thinking 关闭且模型为推理模型：注入 `{"thinking": {"type": "disabled"}}`，
+    ///   显式关闭模型默认的思考行为（否则“思考已关”仍会输出推理）
+    /// - thinking 关闭且模型为普通模型：不注入任何参数
+    pub fn additional_params(&self, model_name: &str) -> Option<serde_json::Value> {
         let mut map = serde_json::Map::new();
-        map.insert(
-            "thinking".to_string(),
-            serde_json::json!({ "type": "enabled" }),
-        );
-        if let Some(ef) = self.effort {
+        if self.thinking {
             map.insert(
-                "reasoning_effort".to_string(),
-                serde_json::json!(ef.as_str()),
+                "thinking".to_string(),
+                serde_json::json!({ "type": "enabled" }),
             );
+            if let Some(ef) = self.effort {
+                map.insert(
+                    "reasoning_effort".to_string(),
+                    serde_json::json!(ef.as_str()),
+                );
+            }
+        } else if Self::is_reasoning_model(model_name) {
+            map.insert(
+                "thinking".to_string(),
+                serde_json::json!({ "type": "disabled" }),
+            );
+        } else {
+            return None;
         }
         Some(serde_json::Value::Object(map))
     }

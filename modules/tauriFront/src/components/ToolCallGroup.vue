@@ -23,9 +23,12 @@ const props = withDefaults(
     calls: ToolCallRecord[]
     /** 嵌入模式：去掉卡片外观与自带组标题，由外层(如 ProcessSection)统一控制折叠 */
     embedded?: boolean
+    /** 结果预览模式：每条工具调用下方直接显示执行结果摘要（供穿插在思考文字间展示） */
+    showResult?: boolean
   }>(),
   {
     embedded: false,
+    showResult: false,
   },
 )
 
@@ -191,6 +194,14 @@ function statusText(c: ToolCallRecord): string {
 
 // 完成数量
 const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
+
+// 结果预览摘要：压平空白后截断（单条工具段内的紧凑展示）
+function resultSummary(c: ToolCallRecord): string {
+  if (c.pending) return '执行中…'
+  if (!c.result) return c.is_error ? '执行失败' : '无返回结果'
+  const compact = c.result.replace(/\s+/g, ' ').trim()
+  return compact.length > 200 ? compact.slice(0, 200) + '…' : compact
+}
 </script>
 
 <template>
@@ -228,6 +239,8 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
           <div class="tool-args">{{ argsSummary(c.arguments) }}</div>
         </div>
         <span v-if="!embedded" class="tool-arrow"><Icon name="chevron-right" :size="16" /></span>
+        <!-- 结果预览：嵌入 + showResult 模式下直接展示执行结果（执行中先隐藏） -->
+        <span v-if="showResult && !c.pending" class="tool-result-inline">{{ resultSummary(c) }}</span>
       </div>
     </div>
 
@@ -346,6 +359,30 @@ const doneCount = computed(() => props.calls.filter((c) => !c.pending).length)
   font-size: 10.5px;
   padding: 0;
   background: transparent;
+}
+
+/* 结果预览模式：参数摘要让位给结果，工具行只保留 名称/状态 + 结果 */
+.tool-group.embedded.show-result .tool-args {
+  display: none;
+}
+
+/* 结果预览（showResult 模式）：等宽小字，单行省略，点缀在工具行内 */
+.tool-result-inline {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-left: 1px solid var(--border, rgba(0, 0, 0, 0.06));
+  padding-left: 8px;
+}
+
+.tool-group.embedded .tool-item:hover .tool-result-inline {
+  color: var(--text, #555);
 }
 
 /* 执行中的状态小圆点：呼吸动画 */

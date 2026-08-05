@@ -22,10 +22,9 @@ defineProps<{
 <template>
   <!-- 推理 + 工具调用合并区块：单行摘要标题，进行中展开、完成后自动折叠 -->
   <ProcessSection
-    v-if="meta?.reasoning || meta?.toolCalls.length"
-    :reasoning="meta?.reasoning ?? ''"
+    v-if="meta?.segments.length"
+    :segments="meta?.segments ?? []"
     :is-thinking="meta?.isThinking ?? false"
-    :tool-calls="meta?.toolCalls ?? []"
   />
     <!-- 子 agent 过程卡片：主视图不作大量片段展开，仅一张紧凑可点卡片，点击进入子代理视图 -->
     <div v-if="meta?.subAgents.length" class="msg-subagents">

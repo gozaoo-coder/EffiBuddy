@@ -5,40 +5,43 @@
  * 设计目标：让 agent 回复像文档一样简洁——
  * - 推理与工具调用合并为单行摘要标题（"已思考 8 秒 · 使用了 3 个工具"）
  * - 进行中（思考中 / 工具执行中）自动展开，全部完成后自动折叠
- * - 展开后：推理文本为灰色小字段落，工具列表以嵌入模式(无卡片)呈现
+ * - 展开后：按流式到达顺序穿插展示思考文字与工具执行结果（segments），
+ *   工具结果直接嵌在思考文字之间，而非与思考文字隔开单独成块；
+ *   点击工具行可弹出完整参数与返回结果
  * - 点击标题行可随时手动展开/折叠
  */
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { animate } from 'animejs'
 import { Icon } from '../basic'
 import ToolCallGroup from '../ToolCallGroup.vue'
-import type { ToolCallRecord } from '../../types'
+import type { ProcessSegment } from '../../types'
 
 const props = withDefaults(
   defineProps<{
-    /** 推理文本 */
-    reasoning?: string
+    /** 推理过程段（思考文字与工具调用按到达顺序穿插） */
+    segments?: ProcessSegment[]
     /** 是否仍在思考中 */
     isThinking?: boolean
-    /** 工具调用记录列表 */
-    toolCalls?: ToolCallRecord[]
   }>(),
   {
-    reasoning: '',
+    segments: () => [],
     isThinking: false,
-    toolCalls: () => [],
   },
+)
+
+// 工具调用记录（从 segments 提取，供忙碌判定与标题统计）
+const toolCalls = computed(() =>
+  props.segments.filter((s) => s.kind === 'tool').map((s) => s.call),
 )
 
 // 是否忙碌：思考中或仍有工具在执行
 const busy = computed(
-  () => props.isThinking || props.toolCalls.some((c) => c.pending),
+  () => props.isThinking || toolCalls.value.some((c) => c.pending),
 )
 
 // 历史消息（加载时已全部完成）默认折叠；进行中默认展开
 const collapsed = ref(!busy.value)
 const bodyRef = ref<HTMLElement | null>(null)
-const reasoningRef = ref<HTMLElement | null>(null)
 
 // 已思考时长（秒）：多段推理累计；思考中实时刷新
 const thinkStart = ref<number>(0)
@@ -121,7 +124,7 @@ function toggle() {
 function expandNow() {
   collapsed.value = false
   nextTick(() => {
-    const el = reasoningRef.value
+    const el = bodyRef.value
     if (el) el.scrollTop = el.scrollHeight
   })
 }
@@ -144,38 +147,44 @@ function collapseNow() {
   }
 }
 
-// 思考内容实时滚动到底部（流式增长时跟随）
-watch(
-  () => props.reasoning,
-  () => {
-    if (collapsed.value) return
-    nextTick(() => {
-      const el = reasoningRef.value
-      if (el) el.scrollTop = el.scrollHeight
-    })
-  },
+// 内容签名：思考文字 / 工具状态变化时滚动到底部（流式跟随）
+const contentSig = computed(() =>
+  props.segments
+    .map((s) =>
+      s.kind === 'reasoning'
+        ? s.text
+        : `${s.call.tool_name}:${s.call.result ?? ''}:${s.call.pending}`,
+    )
+    .join('\u0000'),
 )
+watch(contentSig, () => {
+  if (collapsed.value) return
+  nextTick(() => {
+    const el = bodyRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+})
 
-// 标题摘要文案：推理 + 工具数量合并
+// 标题摘要文案：推理时长 + 工具数量合并
 const titleText = computed(() => {
   const parts: string[] = []
   if (props.isThinking) {
     parts.push(
       liveElapsed.value > 0 ? `思考中 ${liveElapsed.value} 秒` : '思考中',
     )
-  } else if (props.reasoning) {
+  } else if (props.segments.some((s) => s.kind === 'reasoning' && s.text)) {
     parts.push(
       thinkDuration.value > 0 ? `已思考 ${thinkDuration.value} 秒` : '推理过程',
     )
   }
-  if (props.toolCalls.length) {
-    const pending = props.toolCalls.filter((c) => c.pending).length
+  if (toolCalls.value.length) {
+    const pending = toolCalls.value.filter((c) => c.pending).length
     parts.push(
       pending > 0
-        ? `执行工具中 ${props.toolCalls.length - pending}/${props.toolCalls.length}`
-        : props.toolCalls.length === 1
+        ? `执行工具中 ${toolCalls.value.length - pending}/${toolCalls.value.length}`
+        : toolCalls.value.length === 1
           ? '使用了工具'
-          : `使用了 ${props.toolCalls.length} 个工具`,
+          : `使用了 ${toolCalls.value.length} 个工具`,
     )
   }
   return parts.join(' · ')
@@ -196,10 +205,12 @@ const titleText = computed(() => {
       </span>
     </div>
 
-    <!-- 展开内容：推理文本 + 嵌入模式工具列表 -->
+    <!-- 展开内容：思考文字与工具执行结果按到达顺序穿插展示 -->
     <div v-show="!collapsed" ref="bodyRef" class="process-body">
-      <div v-if="reasoning" ref="reasoningRef" class="process-reasoning">{{ reasoning }}</div>
-      <ToolCallGroup v-if="toolCalls.length" :calls="toolCalls" embedded />
+      <template v-for="(seg, i) in segments" :key="i">
+        <div v-if="seg.kind === 'reasoning'" class="process-reasoning">{{ seg.text }}</div>
+        <ToolCallGroup v-else :calls="[seg.call]" embedded show-result />
+      </template>
     </div>
   </div>
 </template>
@@ -281,20 +292,22 @@ const titleText = computed(() => {
 }
 
 /* 展开内容：左侧细线标识层级，缩进与上下 margin 加大，与标题行/正文明确区分；
-   overflow:hidden 供合并时的高度缩小动画裁剪内容 */
+   整块可滚动（思考 + 工具穿插后统一滚动），overflow-y:auto 供流式跟随；
+   overflow:hidden 由折叠动画时临时覆盖（collapseNow 内联 maxHeight） */
 .process-body {
   margin: 8px 0 6px 8px;
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--border, rgba(0, 0, 0, 0.08));
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  overflow: hidden;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
+/* 思考文字段：文档流样式，不单独滚动，跟随整体滚动 */
 .process-reasoning {
-  max-height: 200px;
-  overflow-y: auto;
   padding: 2px 6px 2px 0;
   font-size: 12.5px;
   line-height: 1.6;
@@ -303,11 +316,11 @@ const titleText = computed(() => {
   word-break: break-word;
 }
 
-.process-reasoning::-webkit-scrollbar {
+.process-body::-webkit-scrollbar {
   width: 6px;
 }
 
-.process-reasoning::-webkit-scrollbar-thumb {
+.process-body::-webkit-scrollbar-thumb {
   background: var(--border, rgba(0, 0, 0, 0.152));
   border-radius: 3px;
 }
