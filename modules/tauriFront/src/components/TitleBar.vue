@@ -3,12 +3,14 @@
  * TitleBar 自定义标题栏（配合 tauri.conf decorations:false）
  *
  * 布局（2026-08 重构）：
- * - 左侧：左栏一（IconRail）模态切换 + 左栏二（HistoryRail）模态切换按钮
+ * - 左侧：第一个按钮点击弹出功能菜单（FeatureMenu，左栏一重定义）
+ *   + 第二个按钮切换左栏二（HistoryRail）模态
  * - 中间：多页签栏（TabBar）+ 拖拽区域（data-tauri-drag-region）
  * - 右上角窗口控件：最小化 / 最大化(还原) / 关闭
  *
- * 已移除：品牌 logo 与 "EffiBuddy" 字样（用户要求去掉顶栏品牌信息）。
- * 模态状态由 useLayoutModes 全局单例管理，跨组件实时响应并持久化 localStorage。
+ * 已移除：品牌 logo 与 "EffiBuddy" 字样（用户要求去掉顶栏品牌信息）；
+ * 左栏一（IconRail）已从 layout 分离为下拉功能菜单（FeatureMenu）。
+ * 左栏二模态状态由 useLayoutModes 全局单例管理，跨组件实时响应并持久化 localStorage。
  *
  * 拖拽说明：titlebar-center 上的 data-tauri-drag-region 为裸属性，
  * 仅直接点击该区域自身才触发拖拽（Tauri 2 脚本行为）；TabBar 内的
@@ -20,22 +22,45 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import Icon from './Icon.vue'
 import TabBar from './TabBar.vue'
+import FeatureMenu from './FeatureMenu.vue'
 import { useLayoutModes } from '../composables/useLayoutModes'
+import type { RailView } from '../types'
 
 // 模型配置模式：隐藏聊天页签栏（与主内容区切换保持一致）
 withDefaults(
-  defineProps<{ modelConfigOpen?: boolean }>(),
-  { modelConfigOpen: false },
+  defineProps<{
+    modelConfigOpen?: boolean
+    /** 当前激活视图（功能菜单 ✓ 高亮） */
+    activeView?: RailView | ''
+    /** P2P 待配对请求计数（功能菜单 P2P 项角标） */
+    pendingPairCount?: number
+    /** 交流池活跃条目数（功能菜单交流池项角标） */
+    poolActiveCount?: number
+  }>(),
+  {
+    modelConfigOpen: false,
+    activeView: '',
+    pendingPairCount: 0,
+    poolActiveCount: 0,
+  },
 )
 
-const { modes, toggleRail1Mode, toggleRail2Mode } = useLayoutModes()
+const emit = defineEmits<{
+  (e: 'select', view: RailView): void
+  (e: 'open-plugin-page', pageId: string): void
+  (e: 'open-plugin-command', commandId: string): void
+  (e: 'open-clawhub'): void
+  (e: 'open-p2p'): void
+  (e: 'open-settings'): void
+  (e: 'open-asr', kind: 'asr-stream' | 'asr-upload' | 'asr-history'): void
+}>()
 
-// 左栏一模态选项：icon = 纯图标窄栏；icon-text = 图标+文字宽栏；hidden = 隐藏
-const rail1Options = [
-  { value: 'icon', label: '图标' },
-  { value: 'icon-text', label: '图标+文字' },
-  { value: 'hidden', label: '隐藏' },
-] as const
+// 功能菜单（左栏一）：由第一个按钮点击弹出
+const featureMenuVisible = ref(false)
+const featureMenuTrigger = ref<HTMLElement | null>(null)
+
+const { modes, toggleRail2Mode } = useLayoutModes()
+
 // 左栏二模态选项：expanded = 展开完整列表；hidden = 隐藏
 const rail2Options = [
   { value: 'expanded', label: '展开' },
@@ -43,9 +68,6 @@ const rail2Options = [
 ] as const
 
 // 当前模态文案（按钮 title 提示用）
-const rail1Label = computed(
-  () => rail1Options.find((o) => o.value === modes.value.rail1)?.label ?? '',
-)
 const rail2Label = computed(
   () => rail2Options.find((o) => o.value === modes.value.rail2)?.label ?? '',
 )
@@ -105,24 +127,18 @@ async function close() {
 
 <template>
   <header class="titlebar">
-    <!-- 左侧：左栏一 / 左栏二 模态切换（单按钮：hover 浮出选项，click 直接切换） -->
+    <!-- 左侧：第一个按钮弹出功能菜单（左栏一）+ 左栏二模态切换 -->
     <div class="titlebar-left" data-tauri-drag-region>
       <button
+        ref="featureMenuTrigger"
         type="button"
         class="mode-btn"
-        :title="`左栏一：${rail1Label}（点击切换）`"
-        @click="toggleRail1Mode"
+        :class="{ 'is-active': featureMenuVisible }"
+        title="功能菜单"
+        aria-label="功能菜单"
+        @click="featureMenuVisible = !featureMenuVisible"
       >
         <Icon name="menu" :size="14" />
-        <span class="mode-tip" aria-hidden="true">
-          <span class="tip-title">左栏一</span>
-          <span
-            v-for="opt in rail1Options"
-            :key="opt.value"
-            class="tip-opt"
-            :class="{ active: modes.rail1 === opt.value }"
-          >{{ opt.label }}</span>
-        </span>
       </button>
 
       <div class="mode-sep" />
@@ -145,6 +161,22 @@ async function close() {
         </span>
       </button>
     </div>
+
+    <!-- 功能菜单（左栏一重定义）：dropdown menu，由第一个按钮点击弹出 -->
+    <FeatureMenu
+      v-model:visible="featureMenuVisible"
+      :trigger-ref="featureMenuTrigger"
+      :active="$props.activeView"
+      :pending-pair-count="$props.pendingPairCount"
+      :pool-active-count="$props.poolActiveCount"
+      @select="emit('select', $event)"
+      @open-plugin-page="emit('open-plugin-page', $event)"
+      @open-plugin-command="emit('open-plugin-command', $event)"
+      @open-clawhub="emit('open-clawhub')"
+      @open-p2p="emit('open-p2p')"
+      @open-settings="emit('open-settings')"
+      @open-asr="emit('open-asr', $event)"
+    />
 
     <!-- 中间：聊天多页签栏 + 拖拽区（裸 data-tauri-drag-region：仅直接点击空白处拖拽，页签可交互） -->
     <div class="titlebar-center" data-tauri-drag-region>
@@ -243,6 +275,12 @@ async function close() {
 
 .mode-btn:active {
   background: var(--border);
+}
+
+/* 菜单打开时高亮触发按钮 */
+.mode-btn.is-active {
+  background: var(--card-2);
+  color: var(--primary);
 }
 
 .mode-sep {

@@ -3132,6 +3132,24 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* 数字/文本角标（右侧，如待办计数） */
+.menu-item-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--primary, #4a7eff);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 /* 子菜单指示箭头 */
 .menu-item-arrow {
   display: inline-flex;

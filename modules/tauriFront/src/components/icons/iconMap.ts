@@ -85,6 +85,8 @@ import {
   Alert01Icon,
   StopIcon,
   PauseIcon,
+  Layout02Icon,
+  Grid02Icon,
 } from '@hugeicons/core-free-icons'
 
 /** Hugeicons 图标数据类型（[tag, attrs][]），由所有图标导出共享。 */

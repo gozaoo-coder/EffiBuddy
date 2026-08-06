@@ -83,6 +83,7 @@ export const BUILTIN_RAIL_ITEMS: RailItemDef[] = [
   { key: 'automation', label: '自动化', icon: 'alarm', section: 'main', kind: 'view', value: 'automation', builtin: true },
   { key: 'skills', label: '技能', icon: 'bolt', section: 'main', kind: 'view', value: 'skills', builtin: true },
   { key: 'plugins', label: '插件', icon: 'puzzle', section: 'main', kind: 'view', value: 'plugins', builtin: true },
+  { key: 'widget', label: '桌面小组件', icon: 'layout', section: 'main', kind: 'view', value: 'widget', builtin: true },
   { key: 'asr', label: '语音转写', icon: 'mic', section: 'main', kind: 'asr', builtin: true },
   { key: 'p2p', label: 'P2P 设备', icon: 'device', section: 'bottom', kind: 'p2p', builtin: true },
   { key: 'more', label: '更多', icon: 'more-horizontal', section: 'bottom', kind: 'more', builtin: true, fixed: true },

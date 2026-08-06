@@ -931,7 +931,7 @@ export interface InstalledPlugin {
 // asr-* 页签 id = 业务 uuid
 // =========================================================
 
-  export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history' | 'sub-agent' | 'plugin'
+  export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history' | 'sub-agent' | 'plugin' | 'widget'
 
   export interface TabItem {
     /** 唯一 id（chat 用 conversation_id，asr-* 用 uuid） */
@@ -964,6 +964,12 @@ export interface InstalledPlugin {
      */
     pluginPageId?: string
   }
+
+  /**
+   * 功能菜单视图（左栏一重定义后的功能入口）
+   * 由 TitleBar 左侧第一个按钮弹出的功能菜单（FeatureMenu）驱动。
+   */
+  export type RailView = 'chat' | 'model-config' | 'automation' | 'skills' | 'plugins' | 'pool' | 'widget'
 // =========================================================
 // ASR 语音转写（与 core::asr::types + commands::asr 对齐）
 // 后端 serde 均为 snake_case（未启用 rename_all = "camelCase"）：

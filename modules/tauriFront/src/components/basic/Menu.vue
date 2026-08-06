@@ -30,6 +30,8 @@ export interface MenuItemOption {
   selected?: boolean
   /** 项之间显示分隔线 */
   divided?: boolean
+  /** 数字/文本角标（如待办计数，显示在项右侧） */
+  badge?: number | string
   /** 危险项，红色文字 */
   danger?: boolean
   /** 子菜单 */
@@ -486,6 +488,8 @@ export function useContextMenu(): {
               <span v-if="item.icon" class="menu-item-icon"><Icon :name="item.icon" :size="18" /></span>
               <!-- 文本 -->
               <span class="menu-item-label">{{ item.label }}</span>
+              <!-- 数字/文本角标 -->
+              <span v-if="item.badge !== undefined && item.badge !== '' && item.badge !== 0" class="menu-item-badge">{{ item.badge }}</span>
               <!-- 子菜单指示箭头 -->
               <span
                 v-if="item.children && item.children.length > 0"

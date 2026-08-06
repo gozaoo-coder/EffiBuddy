@@ -223,6 +223,8 @@ function onTabLeave(el: Element, done: () => void) {
         return 'attachment'
       case 'asr-history':
         return 'clock'
+      case 'widget':
+        return 'layout'
     }
   }
 

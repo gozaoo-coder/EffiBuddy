@@ -1,28 +1,27 @@
 /**
- * useLayoutModes —— 左栏模态全局状态（模块级单例）
+ * useLayoutModes —— 布局模态全局状态（模块级单例）
  *
- * 职责：
- * - 左栏一（IconRail）：`icon`（纯图标窄栏）| `icon-text`（图标+文字宽栏）| `hidden`（隐藏）
- * - 左栏二（HistoryRail）：`expanded`（展开完整列表）| `hidden`（隐藏）
+ * 2026-08 重构：左栏一（IconRail）已重定义为功能菜单（FeatureMenu，由 topbar 左侧
+ * 第一个按钮点击弹出），不再作为常驻布局栏占用空间，故 rail1 模态（icon / icon-text /
+ * hidden）整体移除；仅保留左栏二（HistoryRail / SecondRailHost）：
+ * - `expanded`（展开完整列表）| `hidden`（隐藏）
  *
  * 持久化：localStorage（键 `effisuite:layout-modes`），启动时同步、变更时落盘。
- * 顶栏 TitleBar 的模态切换按钮、IconRail 的「修改侧栏icon」设置都读写这里，
+ * 兼容读取旧数据（忽略已废弃的 rail1 字段）。顶栏 TitleBar 的左栏二切换按钮读写这里，
  * 保证全局唯一数据源、跨组件实时响应。
  */
 import { ref, watch } from 'vue'
 
-export type Rail1Mode = 'icon' | 'icon-text' | 'hidden'
 export type Rail2Mode = 'expanded' | 'hidden'
 
 export interface LayoutModes {
-  rail1: Rail1Mode
   rail2: Rail2Mode
 }
 
 const STORAGE_KEY = 'effisuite:layout-modes'
 
-/** 默认模态：左栏一纯图标、左栏二展开 */
-const DEFAULT_MODES: LayoutModes = { rail1: 'icon', rail2: 'expanded' }
+/** 默认模态：左栏二展开 */
+const DEFAULT_MODES: LayoutModes = { rail2: 'expanded' }
 
 function loadModes(): LayoutModes {
   try {
@@ -30,8 +29,6 @@ function loadModes(): LayoutModes {
     if (!raw) return { ...DEFAULT_MODES }
     const parsed = JSON.parse(raw) as Partial<LayoutModes>
     return {
-      rail1:
-        parsed.rail1 === 'icon-text' ? 'icon-text' : parsed.rail1 === 'hidden' ? 'hidden' : 'icon',
       rail2: parsed.rail2 === 'hidden' ? 'hidden' : 'expanded',
     }
   } catch {
@@ -55,16 +52,8 @@ watch(
   { deep: true },
 )
 
-/** 左栏一循环顺序：icon → icon-text → hidden → icon */
-const RAIL1_CYCLE: Rail1Mode[] = ['icon', 'icon-text', 'hidden']
 /** 左栏二循环顺序：expanded → hidden → expanded */
 const RAIL2_CYCLE: Rail2Mode[] = ['expanded', 'hidden']
-
-/** 切换左栏一模态（icon → icon-text → hidden 循环） */
-function toggleRail1Mode(): void {
-  const i = RAIL1_CYCLE.indexOf(modes.value.rail1)
-  modes.value.rail1 = RAIL1_CYCLE[(i + 1) % RAIL1_CYCLE.length]
-}
 
 /** 切换左栏二模态（expanded ↔ hidden 循环） */
 function toggleRail2Mode(): void {
@@ -74,10 +63,9 @@ function toggleRail2Mode(): void {
 
 export interface UseLayoutModesReturn {
   modes: typeof modes
-  toggleRail1Mode: typeof toggleRail1Mode
   toggleRail2Mode: typeof toggleRail2Mode
 }
 
 export function useLayoutModes(): UseLayoutModesReturn {
-  return { modes, toggleRail1Mode, toggleRail2Mode }
+  return { modes, toggleRail2Mode }
 }

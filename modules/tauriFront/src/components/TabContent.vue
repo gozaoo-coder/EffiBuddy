@@ -55,6 +55,7 @@ import AsrUploadTab from './tabs/AsrUploadTab.vue'
   import AsrHistoryTab from './tabs/AsrHistoryTab.vue'
   import SubAgentTab from './tabs/SubAgentTab.vue'
   import PluginPageTab from './tabs/PluginPageTab.vue'
+  import WidgetDesktopTab from './tabs/WidgetDesktopTab.vue'
   import { useTabs } from '../composables/useTabs'
 import type { TabItem } from '../types'
 
@@ -88,6 +89,8 @@ const activeTab = getActive()
         return AsrUploadTab
       case 'asr-history':
         return AsrHistoryTab
+      case 'widget':
+        return WidgetDesktopTab
     }
   })
 

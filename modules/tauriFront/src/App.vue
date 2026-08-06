@@ -3,17 +3,16 @@
  * EffiSuite 应用根组件
  *
  * 布局（2026-08 重构）：
- * - 顶栏 TitleBar：无品牌，左栏一 / 左栏二模态切换按钮 + 窗口控件
- * - 左栏一 IconRail：双模态（纯图标 / 图标+文字），数据驱动 + 插件按钮 + 「修改侧栏icon」
+ * - 顶栏 TitleBar：左侧第一个按钮弹出功能菜单（左栏一重定义），第二个按钮切换左栏二 + 窗口控件
+ * - 功能菜单 FeatureMenu：dropdown menu，图标+文字，内置功能 + 插件贡献按钮
  * - 左栏二 SecondRailHost：HistoryRail 展开 / 收起封装，含 交流池/模型配置 三态切换
- * - 主内容区：多页签（聊天 / ASR / 子 agent / 插件页面）
+ * - 主内容区：多页签（聊天 / ASR / 子 agent / 插件页面 / 桌面小组件）
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import TitleBar from './components/TitleBar.vue'
 import TabContent from './components/TabContent.vue'
-import IconRail, { type RailView } from './components/IconRail.vue'
 import SecondRailHost from './components/SecondRailHost.vue'
 import P2pPanel from './components/P2pPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
@@ -32,7 +31,7 @@ import { useAgentPool } from './composables/useAgentPool'
 import { useAnimeTransition } from './composables/useAnimeTransition'
 import { usePluginContributions } from './composables/usePluginContributions'
 import { useAppActions } from './composables/appActions'
-import type { ConversationTitlePayload } from './types'
+import type { ConversationTitlePayload, RailView } from './types'
 
 const agentBackend = ref('')
 // 各功能面板状态（均从 IconRail 触发）
@@ -89,13 +88,14 @@ const { register: registerAction } = useAppActions()
 // 事件取消订阅句柄集合
 let unlistens: UnlistenFn[] = []
 
-// IconRail 当前高亮视图：有面板打开时高亮对应图标，否则默认聊天
+// 功能菜单当前高亮视图：有面板打开时高亮对应项，激活 widget 页签时高亮桌面小组件，否则默认聊天
 const activeView = computed<RailView | ''>(() => {
   if (modelConfigOpen.value) return 'model-config'
   if (poolOpen.value) return 'pool'
   if (scheduledTasksOpen.value) return 'automation'
   if (skillPanelOpen.value) return 'skills'
   if (pluginPanelOpen.value) return 'plugins'
+  if (activeTab.value?.kind === 'widget') return 'widget'
   return 'chat'
 })
 
@@ -111,7 +111,7 @@ function closeAllPanels() {
   clawhubPanelOpen.value = false
 }
 
-// IconRail 主栏点击：切换视图 / 开关面板
+// 功能菜单视图选择：切换视图 / 开关面板
 function onRailSelect(view: RailView) {
   // 切换时先关闭其它功能面板，避免叠加
   p2pPanelOpen.value = false
@@ -120,6 +120,10 @@ function onRailSelect(view: RailView) {
   switch (view) {
     case 'chat':
       closeAllPanels()
+      break
+    case 'widget':
+      closeAllPanels()
+      openWidgetTab()
       break
     case 'pool':
       // 切换交流池模式：再次点击关闭
@@ -275,6 +279,24 @@ function onConversationChanged() {
   secondRailRef.value?.refresh()
 }
 
+// 从功能菜单打开桌面小组件页签（单例：__widget_desktop__ 已存在则仅激活）
+const WIDGET_TAB_ID = '__widget_desktop__'
+function openWidgetTab() {
+  const found = tabs.value.find((t) => t.id === WIDGET_TAB_ID)
+  if (found) {
+    activate(found.id)
+    return
+  }
+  openTab({
+    id: WIDGET_TAB_ID,
+    kind: 'widget',
+    title: '桌面小组件',
+    icon: 'layout',
+    closable: true,
+    instanceKey: '',
+  })
+}
+
 // 从 IconRail 打开 P2P 设备面板（同时刷新数据）
 function openP2pPanel() {
   p2pPanelOpen.value = true
@@ -347,24 +369,22 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
 
 <template>
   <div class="app-shell">
-    <!-- 自定义标题栏：左栏模态切换 + 中间页签栏 + 窗口控件（无品牌，已移除 icon 与 effiBuddy 字样） -->
-    <TitleBar :model-config-open="modelConfigOpen" />
+    <!-- 自定义标题栏：左侧功能菜单按钮 + 左栏二切换 + 中间页签栏 + 窗口控件 -->
+    <TitleBar
+      :model-config-open="modelConfigOpen"
+      :active-view="activeView"
+      :pending-pair-count="pendingCount"
+      :pool-active-count="poolActiveCount"
+      @select="onRailSelect"
+      @open-plugin-page="openPluginPage"
+      @open-plugin-command="handlePluginCommand"
+      @open-clawhub="openClawHub"
+      @open-p2p="openP2pPanel"
+      @open-settings="openSettingsPanel"
+      @open-asr="openAsrTab"
+    />
 
     <main class="app-main">
-      <!-- 左栏一：router（双模态：纯图标 / 图标+文字；数据驱动 + 插件按钮） -->
-      <IconRail
-        :active="activeView"
-        :pending-pair-count="pendingCount"
-        :pool-active-count="poolActiveCount"
-        @select="onRailSelect"
-        @open-plugin-page="openPluginPage"
-        @open-plugin-command="handlePluginCommand"
-        @open-clawhub="openClawHub"
-        @open-p2p="openP2pPanel"
-        @open-settings="openSettingsPanel"
-        @open-asr="openAsrTab"
-      />
-
       <!-- 左栏二：SecondRailHost 封装 展开/收起 + 交流池/模型配置 三态切换 -->
       <SecondRailHost
         ref="secondRailRef"
