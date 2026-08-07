@@ -92,17 +92,13 @@ impl Tool for ScheduleTool {
     type Args = ScheduleArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "管理 cron 定时任务。支持创建/更新/暂停/恢复/删除/列表/查询/触发定时任务。\n\
-         定时任务通过 cron 表达式（5字段：分 时 日 月 周）按计划自动执行关联的技能。\n\
-         注意：任务按服务器本地时区（Asia/Shanghai）执行，暂不支持自定义时区。\n\n\
-         各 action 所需参数：\n\
-         - create: name, cron_expression, skill_id（message 为任务内容，触发时执行）\n\
-         - update: scheduled_task_id（其他字段可选，仅传需要更新的）\n\
-         - pause/resume/delete/get/trigger: scheduled_task_id\n\
-         - list: 无需额外参数"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "管理 cron 定时任务：create/update/pause/resume/delete/list/get/trigger。\
+       cron 5 字段：分 时 日 月 周，按计划自动执行关联技能。\
+       create 需 name+cron_expression+skill_id；update 需 scheduled_task_id+可选字段；\
+       pause/resume/delete/get/trigger 需 scheduled_task_id；list 无需参数。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -123,11 +119,11 @@ impl Tool for ScheduleTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "任务内容/消息，描述任务要做什么（create/update 需要）"
+                      "description": "任务内容/消息（create/update 需要）"
                 },
                 "cron_expression": {
                     "type": "string",
-                    "description": "标准 5 字段 cron 表达式：分(0-59) 时(0-23) 日(1-31) 月(1-12) 周(0-6, 0=周日)。例如 '0 9 * * *' = 每天 9:00；'0 9 * * 1-5' = 工作日 9:00"
+                      "description": "5 字段 cron：分 时 日 月 周"
                 },
                 "skill_id": {
                     "type": "string",

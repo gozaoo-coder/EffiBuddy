@@ -127,47 +127,21 @@ impl Tool for SearchCodebaseTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（默认搜索根，相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，默认在进程工作目录下搜索".to_string());
-        format!(
-            "用自然语言描述搜索代码库中的相关代码（基于关键词加权排序的代码搜索，非关键词精确匹配）。\
-             输入一句自然语言描述（如「how does authentication work」「处理用户登录的逻辑」），\
-             自动提取关键词后在工作区代码文件中检索最相关的代码块。\n\n\
-             **与其他查找工具的边界**：\n\
-             - `list_files`：列目录树，不按模式过滤、不读内容\n\
-             - `glob`：按文件名模式匹配，不读内容\n\
-             - `search_file`：字面关键词搜文件内容（非正则，返回所有命中行）\n\
-             - `grep`：正则表达式搜文件内容\n\
-             - `search_codebase`（本工具）：基于关键词加权排序（简化版 TF-IDF）的代码搜索，返回 Top-N 最相关代码块，适合「我想找做 X 的代码但不知道具体函数名」的场景\n\n\
-             **返回格式**：每个结果包含文件路径、命中关键词、得分、代码块（带行号），\
-             自动扩展到包含匹配行的完整函数/结构体。\n\n\
-             自动跳过生成目录（.git / node_modules / target / dist 等）与非代码文件，\
-             仅扫描代码文件（rs / py / js / ts / go / java / c / cpp / ...）。\
-             默认最多返回 {MAX_RESULTS} 个结果。\n{cwd_hint}"
-        )
+        "用自然语言描述搜索代码库中的相关代码（基于关键词加权排序，非精确匹配）。\
+         输入一句自然语言描述（如「how does authentication work」），自动提取关键词后检索最相关代码块。\
+         返回每个结果：文件路径、命中关键词、得分、代码块（带行号），自动扩展到完整函数/结构体。\
+         自动跳过生成目录与非代码文件，仅扫描代码文件（rs/py/js/ts/go/java/c/cpp/...）；默认最多 20 个结果。\
+         分工：文件名→list_files/glob；字面关键词→search_file；正则→grep。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "自然语言查询（描述想找什么代码），如「how does authentication work」"
-                },
-                "target_directories": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "搜索根目录数组（绝对或相对工作区），默认搜索整个工作区"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "最大返回结果数，默认 20",
-                    "default": MAX_RESULTS
-                }
+                "query": { "type": "string", "description": "自然语言查询（描述想找什么代码）" },
+                "target_directories": { "type": "array", "items": { "type": "string" }, "description": "搜索根目录数组，默认整个工作区" },
+                "max_results": { "type": "integer", "description": "最大返回结果数，默认 20", "default": MAX_RESULTS }
             },
             "required": ["query"]
         })

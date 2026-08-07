@@ -57,11 +57,10 @@ impl Tool for SearchHistoryTool {
     type Args = SearchHistoryArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "在当前会话的历史消息中按关键词检索相关内容。当用户提到之前讨论过的话题、\
-         或需要回顾历史信息时调用。返回相关消息的摘要。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "在当前会话历史消息中按关键词检索相关内容，返回相关消息摘要。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -73,7 +72,7 @@ impl Tool for SearchHistoryTool {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "最多返回的结果条数，默认 5",
+                      "description": "最多返回条数",
                     "default": 5
                 }
             },

@@ -139,13 +139,12 @@ impl Tool for PoolReportTool {
     type Args = PoolReportArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "在运行时 agent 公共会话交流池登记 / 上报当前长任务状态（进行中/等待中/已完成），\
-         附研究报告与 todoTree 摘要。多会话并行时，其他 agent 通过 pool_lookup 看到你的任务、\
-         通过 pool_at @ 你询问状态，避免重复劳动与文件操作冲突。\
-         调用时机：开始长任务时登记（status=in_progress）；中途等待依赖时上报（status=waiting）；\
-         干完后上报（status=completed）。".to_string()
-    }
+  fn description(&self) -> String {
+      "在 agent 公共交流池登记/上报长任务状态（in_progress/waiting/completed），附研究报告与 todoTree 摘要，\
+       便于其他 agent 通过 pool_lookup/pool_at 了解，避免重复劳动与文件冲突。\
+       开始长任务时登记，中途等待依赖上报，干完上报 completed。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -155,11 +154,11 @@ impl Tool for PoolReportTool {
                 "status": {
                     "type": "string",
                     "enum": ["in_progress", "waiting", "completed"],
-                    "description": "工作状态：in_progress（正在干）/ waiting（等待中）/ completed（干完了）"
+                      "description": "工作状态：in_progress/waiting/completed"
                 },
-                "research_report": { "type": "string", "description": "研究报告（可选）：任务背景、调研结论、实施计划" },
-                "todo_summary": { "type": "string", "description": "todoTree 摘要（可选）：当前任务树的关键进度" },
-                "last_report": { "type": "string", "description": "最近一次状态上报文本（可选）：本次干了什么 / 卡在哪" }
+                  "research_report": { "type": "string", "description": "研究报告（可选）：背景、结论、计划" },
+                  "todo_summary": { "type": "string", "description": "todoTree 摘要（可选）：关键进度" },
+                  "last_report": { "type": "string", "description": "最近一次上报文本（可选）" }
             },
             "required": ["task", "status"]
         })
@@ -257,23 +256,20 @@ impl Tool for PoolLookupTool {
     type Error = PoolLookupError;
     type Args = PoolLookupArgs;
     type Output = String;
-
-    fn description(&self) -> String {
-        "查询运行时 agent 公共会话交流池：是否有其他 agent 正在处理同一事项\
-         （同文件 / 同接口 / 同任务）。仅返回进行中 / 等待中的活跃长任务；\
-         已完成的任务对新查询不可见（不会与已完成的工作冲突）。\
-         若发现相关任务，用 pool_at 指定其 agent_id 或 conversation_id 联系询问。\
-         若你的工作与其他 agent 无关，则无需协助。".to_string()
-    }
+  fn description(&self) -> String {
+      "查询 agent 交流池：是否有其他 agent 正在处理同一事项（同文件/接口/任务）。\
+       仅返回进行中/等待中的活跃任务；发现相关任务用 pool_at 联系。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "查询关键词（可选）：文件名/接口名/任务主题；空 = 列出全部活跃条目"
-                }
+                  "query": {
+                      "type": "string",
+                      "description": "查询关键词；空 = 列出全部活跃条目"
+                  }
             }
         })
     }
@@ -330,14 +326,13 @@ impl Tool for PoolAtTool {
     type Args = PoolAtArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "在运行时 agent 公共会话交流池中 @ 一个长任务 agent，定向询问其状态（\
-         接口状态如何？干完没有？我操作文件是否会冲突？）。提问会插入到目标 agent 的\
-         下一次 completion 中，由它调用 pool_reply 回复。\n\
-         mode=async：投递后不等待回复，先干自己的事（默认）；\n\
-         mode=await：投递后轮询等待对方回复（默认超时 60 秒），拿到回复后再决策。\n\
-         若目标已完成，会立即返回其完成结论，无需等待。".to_string()
-    }
+  fn description(&self) -> String {
+      "在交流池 @ 一个长任务 agent 定向询问状态（干完没有？是否会冲突？）。\
+       提问插入对方下一次 completion，由它调用 pool_reply 回复；\
+       mode=async 投递后先干自己的（默认）；mode=await 轮询等回复（默认超时 60 秒）；\
+       目标已完成时立即返回其结论。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -349,16 +344,16 @@ impl Tool for PoolAtTool {
                 },
                 "question": {
                     "type": "string",
-                    "description": "提问内容，如「接口状态如何？干完没有？我操作文件是否会冲突？」"
+                      "description": "提问内容"
                 },
                 "mode": {
                     "type": "string",
                     "enum": ["async", "await"],
-                    "description": "async=投递后继续干自己的；await=等待回复后再决策（默认 async）"
+                      "description": "async=不等待；await=等待回复（默认 async）"
                 },
                 "timeout_ms": {
                     "type": "integer",
-                    "description": "await 模式等待上限（毫秒，默认 60000）"
+                      "description": "await 等待上限（毫秒，默认 60000）"
                 }
             },
             "required": ["target", "question"]
@@ -483,20 +478,19 @@ impl Tool for PoolReplyTool {
     type Error = PoolReplyError;
     type Args = PoolReplyArgs;
     type Output = String;
-
-    fn description(&self) -> String {
-        "回复交流池收件箱中的 @ 消息。你的收件箱消息会出现在上下文段的\
-         [Agent 交流池] 里（形如 [at_id=xxx] 来自「xx」）。调用本工具把答复回传给\
-         对方（对方若用 pool_at mode=await 会立刻收到）。".to_string()
-    }
+  fn description(&self) -> String {
+      "回复交流池收件箱中的 @ 消息（上下文 [Agent 交流池] 段，形如 [at_id=xxx]）。\
+       答复回传后，对方若用 pool_at mode=await 会立刻收到。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
-            "type": "object",
-            "properties": {
-                "at_id": { "type": "string", "description": "@ 消息 id（来自上下文收件箱的 at_id=xxx）" },
-                "reply": { "type": "string", "description": "你的答复，如实说明状态/是否干完/是否会冲突" }
-            },
+              "type": "object",
+              "properties": {
+                  "at_id": { "type": "string", "description": "@ 消息 id（来自收件箱 at_id=xxx）" },
+                  "reply": { "type": "string", "description": "答复内容" }
+              },
             "required": ["at_id", "reply"]
         })
     }

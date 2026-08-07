@@ -40,12 +40,11 @@ impl Tool for GetSkillDetailTool {
     type Args = GetSkillDetailArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "按 id 获取已安装技能的完整说明（preamble 全文 + 工作目录）。\
-         在准备使用某技能、需要了解技能完整指令、或访问技能附带资源文件时调用。\
-         id 支持前 8 字符前缀匹配。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "按 id 获取已安装技能的完整说明（preamble 全文 + 工作目录）。\
+       准备使用某技能或需了解完整指令时调用；id 支持前 8 字符前缀匹配。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({

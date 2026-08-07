@@ -57,13 +57,11 @@ impl Tool for EnableSkillTool {
     type Args = EnableSkillArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "启用指定技能：把技能指令（preamble）注入当前会话上下文。\
-         注入后，后续对话会遵循此技能的指令行事。\
-         在需要使用某技能、或用户要求启用某技能时调用。\
-         id 支持前 8 字符前缀匹配。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "启用指定技能：把技能指令（preamble）注入当前会话上下文，后续对话遵循其行事。\
+       需要使用某技能或用户要求启用时调用；id 支持前 8 字符前缀匹配。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -71,7 +69,7 @@ impl Tool for EnableSkillTool {
             "properties": {
                 "id": {
                     "type": "string",
-                    "description": "要启用的技能 id（完整或前 8 字符前缀）"
+                      "description": "技能 id（完整或前 8 字符前缀）"
                 }
             },
             "required": ["id"]

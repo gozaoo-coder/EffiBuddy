@@ -96,43 +96,20 @@ impl Tool for WriteFileTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
-        format!(
-            "写入本地文件。路径不做沙箱限制（信任本地 agent 环境）。\
-             默认覆盖写入，设置 append=true 可追加。单次最多写入 1 MiB。\n\n\
-             **内容格式（重要，避免转义问题）**：\n\
-             推荐把文件内容用 XML 标签包裹，标签内的字符无需任何转义：\n\
-             <content>文件原始内容，可含 < > & \" \\ 等任意字符</content>\n\n\
-             若内容本身包含字面量 `</content>`，改用 CDATA 包裹：\n\
-             <content><![CDATA[任意内容，包括 </content> 字面量]]></content>\n\n\
-             不推荐直接传裸文本：需要 JSON 转义（双引号、反斜杠、换行），容易写错。\n\n\
-               **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
-               每个参数一个标签，形如 <!_PATH_>test.txt</!_PATH_>、\n\
-               <!_CONTENT_>代码内容，无需 JSON 转义</!_CONTENT_>。\n\n{cwd_hint}"
-        )
+        "写入本地文件（默认覆盖，append=true 追加，单次最多 1 MiB）。\
+         内容避免转义：推荐用 <content>...</content> 包裹，标签内任意字符无需转义；\
+         内容含 </content> 字面量时改用 CDATA 包裹；不推荐裸文本（需 JSON 转义，易错）。\
+         路径支持工作区相对路径。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "文件路径（绝对或相对工作区）"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "文件内容。推荐用 <content>...</content> 包裹以避免转义；含 </content> 字面量时用 <content><![CDATA[...]]></content>"
-                },
-                "append": {
-                    "type": "boolean",
-                    "description": "是否追加写入而非覆盖，默认 false",
-                    "default": false
-                }
+                "path": { "type": "string", "description": "文件路径（绝对或相对工作区）" },
+                "content": { "type": "string", "description": "文件内容，推荐 <content>...</content> 包裹免转义" },
+                "append": { "type": "boolean", "description": "是否追加写入而非覆盖，默认 false", "default": false }
             },
             "required": ["path", "content"]
         })

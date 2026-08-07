@@ -65,12 +65,11 @@ impl Tool for InstallClawHubSkillTool {
     type Args = InstallClawHubSkillArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "从 ClawHub 下载并安装指定技能。安装后技能立即可用：\
-         下一轮对话的 RAG 自动注入会包含它，也可直接调用 enable_skill 启用。\
-         slug 可从 search_clawhub_skills 结果获取。安装是幂等的，重复安装返回已存在 id。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "从 ClawHub 下载并安装指定技能，安装后立即可用（RAG 自动注入 / enable_skill 启用）。\
+       slug 来自 search_clawhub_skills 结果；安装幂等，重复安装返回已存在 id。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({

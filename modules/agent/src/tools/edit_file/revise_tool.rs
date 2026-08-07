@@ -67,19 +67,10 @@ impl Tool for EditReviseTool {
     type Output = String;
 
     fn description(&self) -> String {
-        "查看 / 修订历史编辑操作。每次 edit_file / edit_file_regex 调用成功后会分配 op_id，\
-         本工具据此查看详情或用新 text 重做。\n\n\
-         **action**：\n\
-         - view：查看指定 op_id 详情（原内容、新内容、摘要、时间戳）\n\
-         - list：列出最近 N 条历史摘要（默认 10，最大 50）\n\
-         - patch：用 new_text 重做指定 op_id（先撤回恢复 old_content，再用 new_text 重新执行；\
-         要求该 op_id 是该文件的最新操作）\n\n\
-         **patch 语义**：删除原 op_id 记录并产生新 op_id，AI 需用新 op_id 撤回后续操作。\
-         若 op_id 不是该文件最新操作，请先 edit_undo 后续操作。\n\n\
-         **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
-         每个参数一个标签，形如 <!_ACTION_>view</!_ACTION_>、<!_OP_ID_>3</!_OP_ID_>、\n\
-         <!_NEW_TEXT_>新文本，可含 < > & 等任意字符</!_NEW_TEXT_>。\n\
-         若内容本身含闭合标签字面量，用 CDATA 包裹（与 write_file 相同）。"
+        "查看 / 修订历史编辑操作（op_id 由 edit_file / edit_file_regex 成功操作返回）。\
+         action：view=查看指定 op_id 详情；list=列出最近 N 条摘要（默认 10，最大 50）；\
+         patch=用 new_text 重做指定 op_id（要求它是该文件最新操作）。\
+         patch 会删除原 op_id 并产生新 op_id。推荐 XML 传参免转义。"
             .to_string()
     }
 
@@ -87,24 +78,10 @@ impl Tool for EditReviseTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["view", "list", "patch"],
-                    "description": "操作类型：view=查看详情，list=列出最近操作，patch=用新 text 重做"
-                },
-                "op_id": {
-                    "type": "integer",
-                    "description": "目标 op_id（view / patch 必填，list 忽略）"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "list 模式最大条数，默认 10，最大 50",
-                    "default": 10
-                },
-                "new_text": {
-                    "type": "string",
-                    "description": "patch 模式的新文本（替换原操作的 text / replacement）；推荐 <content>...</content> 包裹避免转义"
-                }
+                "action": { "type": "string", "enum": ["view", "list", "patch"], "description": "操作类型：view / list / patch" },
+                "op_id": { "type": "integer", "description": "目标 op_id（view / patch 必填）" },
+                "limit": { "type": "integer", "description": "list 最大条数，默认 10，最大 50", "default": 10 },
+                "new_text": { "type": "string", "description": "patch 的新文本，推荐 <content> 包裹" }
             },
             "required": ["action"]
         })

@@ -76,13 +76,11 @@ impl Tool for OpenPreviewTool {
     type Args = OpenPreviewArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "在浏览器中打开预览 URL（如本地开发服务器 http://localhost:8000/）。\
-         前端收到后会在默认浏览器或内嵌 webview 中打开。\
-         URL 必须以 http:// 或 https:// 开头。\
-         适用于：启动 dev server 后展示页面、打开在线文档等场景。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "在浏览器/内嵌 webview 中打开预览 URL（须以 http:// 或 https:// 开头）。\
+       适用于启动 dev server 后展示页面、打开在线文档等。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -90,12 +88,12 @@ impl Tool for OpenPreviewTool {
             "properties": {
                 "preview_url": {
                     "type": "string",
-                    "description": "预览 URL，必须以 http:// 或 https:// 开头",
+                      "description": "预览 URL（须 http/https 开头）",
                     "pattern": "^https?://"
                 },
                 "command_id": {
                     "type": "string",
-                    "description": "关联的命令 ID（用于追踪启动预览的命令，可选）"
+                      "description": "关联的命令 ID（可选）"
                 }
             },
             "required": ["preview_url"]

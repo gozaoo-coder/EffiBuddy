@@ -88,12 +88,12 @@ impl Tool for SearchMemoryTool {
     type Args = SearchMemoryArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "跨所有历史会话检索相关记忆（不仅限当前对话）。当用户提到过去讨论过的话题、\
-         需要回顾跨会话信息、或当前对话历史不足以回答时调用。\
-         支持三种模式：lexical（词法匹配）、vector（语义向量）、hybrid（混合，默认）。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "跨所有历史会话检索相关记忆（不仅限当前对话）。用户提到过去讨论过的话题、\
+       需要回顾跨会话信息、或当前对话历史不足以回答时调用。\
+       模式：lexical（词法）/vector（语义）/hybrid（混合，默认）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -101,17 +101,17 @@ impl Tool for SearchMemoryTool {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "搜索查询字符串，可以是关键词或完整问题"
+                      "description": "查询字符串，关键词或完整问题"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "最多返回的结果条数，默认 5",
+                      "description": "最多返回条数",
                     "default": 5
                 },
                 "mode": {
                     "type": "string",
                     "enum": ["lexical", "vector", "hybrid"],
-                    "description": "检索模式：lexical=词法BM25，vector=语义向量，hybrid=混合（默认）",
+                      "description": "检索模式：lexical/vector/hybrid",
                     "default": "hybrid"
                 }
             },

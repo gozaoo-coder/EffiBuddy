@@ -181,13 +181,12 @@ impl Tool for ImageGenTool {
     type Args = ImageGenArgs;
     type Output = ImageGenOutput;
 
-    fn description(&self) -> String {
-        "调用图像生成模型为用户生成图片。支持英文/中文提示词，\
-         生成后图片会自动保存并显示给用户。\
-         提示词越具体效果越好，建议包含风格、构图、光影等描述。\
-         生成后文件保存到 attachments 目录，返回的 absolute_path 可直接用于 read_file/delete_file 等文件操作。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "调用图像生成模型生成图片，支持英文/中文提示词；生成后自动保存并显示给用户，\
+       返回 absolute_path 可直接用于 read_file/delete_file 等文件操作。\
+       提示词越具体效果越好（风格、构图、光影）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -195,26 +194,26 @@ impl Tool for ImageGenTool {
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "图像生成提示词，建议详细描述风格、构图、主体、光影等"
+                      "description": "图像生成提示词（风格、构图、主体、光影）"
                 },
                 "size": {
                     "type": "string",
-                    "description": "图片尺寸，如 1024x1024 / 1792x1024 / 1024x1792，留空用默认",
+                      "description": "图片尺寸，如 1024x1024",
                     "enum": ["1024x1024", "1792x1024", "1024x1792"]
                 },
                 "quality": {
                     "type": "string",
-                    "description": "质量：standard 或 hd（部分模型支持），留空用默认",
+                      "description": "质量：standard 或 hd",
                     "enum": ["standard", "hd"]
                 },
                 "n": {
                     "type": "integer",
-                    "description": "生成数量，默认 1",
+                      "description": "生成数量",
                     "default": 1
                 },
                 "model_id": {
                     "type": "string",
-                    "description": "指定图像模型 id（模型列表中 kind=image_gen 的模型）；缺省用当前激活图像模型"
+                      "description": "图像模型 id；缺省用当前激活模型"
                 }
             },
             "required": ["prompt"]

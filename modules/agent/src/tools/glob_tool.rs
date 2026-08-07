@@ -323,28 +323,11 @@ impl Tool for GlobTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（默认搜索根，相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，默认在进程工作目录下搜索".to_string());
         format!(
-            "按文件名 glob 模式**递归搜索**文件（不读文件内容），返回匹配文件路径列表（相对工作区，按修改时间降序）。\n\n\
-             **与其他查找工具的边界**：\n\
-             - `list_files`：列目录树，不按模式过滤、不读内容\n\
-             - `glob`（本工具）：按文件名模式匹配，不读内容\n\
-             - `search_file`：字面关键词搜文件内容（非正则）\n\
-             - `grep`：正则表达式搜文件内容\n\
-             - `search_codebase`：基于关键词加权排序的代码搜索（自然语言查询）\n\n\
-             **支持的 glob 语法**：\n\
-             - `*` 匹配除路径分隔符外的任意字符\n\
-             - `**` 匹配任意层级目录（含 0 层，如 `**/*.rs` 同时命中根目录与任意子目录下的 .rs）\n\
-             - `?` 匹配单个字符\n\
-             - `[abc]` / `[a-z]` / `[^abc]` 字符集（含范围与取反）\n\
-             - `{{a,b,c}}` 多选项（如 `*.{{json,toml}}`）\n\n\
-             **返回**：每行一个文件路径（带序号），尾部附统计信息。\
-             自动跳过 .git / node_modules / target / dist 等生成目录。\
-             默认最多返回 {MAX_RESULTS} 个文件，可用 max_results 调整。\n{cwd_hint}"
+            "按文件名 glob 模式递归搜索文件（不读内容），返回匹配文件路径列表（相对工作区，按修改时间降序）。\
+             语法：`*`=任意字符（不含分隔符）；`**`=任意层级；`?`=单字符；`[abc]`/`[a-z]`/`[^abc]` 字符集；\
+             `{{a,b,c}}` 多选项（如 `*.{{json,toml}}`）。自动跳过 .git/node_modules/target 等生成目录；\
+             默认最多 {MAX_RESULTS} 个。分工：目录→list_files；内容→search_file/grep/search_codebase。"
         )
     }
 
@@ -352,19 +335,9 @@ impl Tool for GlobTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "glob 模式，如 *.rs、src/**/*.ts、*.{json,toml}"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "搜索根目录（绝对或相对工作区），默认工作区根目录"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "最大返回文件数，默认 500",
-                    "default": MAX_RESULTS
-                }
+                "pattern": { "type": "string", "description": "glob 模式，如 *.rs、src/**/*.ts、*.{json,toml}" },
+                "path": { "type": "string", "description": "搜索根目录（绝对或相对工作区），默认工作区根" },
+                "max_results": { "type": "integer", "description": "最大返回文件数，默认 500", "default": MAX_RESULTS }
             },
             "required": ["pattern"]
         })

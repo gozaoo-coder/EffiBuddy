@@ -70,33 +70,18 @@ impl Tool for ListFilesTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
-        format!(
-            "列目录结构（不按模式过滤）；如需按文件名模式匹配用 glob；如需搜文件内容用 search_file/grep。\n\n\
-             列出指定目录下的文件与子目录。非递归只列一层；\
-             递归模式限制深度 3 层、总条目 500 防止爆炸。\
-             返回每条目的**完整相对路径**、大小、类型（file/dir），\
-             路径分隔符统一为 `/`，便于直接回传给 read_file/edit_file。\n{cwd_hint}"
-        )
+        "列目录结构（不按模式过滤）。按文件名模式匹配用 glob；搜文件内容用 search_file/grep。\
+         非递归只列一层；递归限制深度 3 层、总条目 500 防爆炸。\
+         返回每条目完整相对路径、大小、类型（file/dir），便于回传 read_file/edit_file。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "目录路径（绝对或相对工作区），默认工作区根目录"
-                },
-                "recursive": {
-                    "type": "boolean",
-                    "description": "是否递归列出子目录，默认 false",
-                    "default": false
-                }
+                "path": { "type": "string", "description": "目录路径（绝对或相对工作区），默认工作区根目录" },
+                "recursive": { "type": "boolean", "description": "是否递归列出子目录，默认 false", "default": false }
             }
         })
     }

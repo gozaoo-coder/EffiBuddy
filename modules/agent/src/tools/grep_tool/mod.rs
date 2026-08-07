@@ -118,84 +118,26 @@ impl Tool for GrepTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（默认搜索根，相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，默认在进程工作目录下搜索".to_string());
-        format!(
-            "在工作区目录下**递归正则搜索**：对全部文本文件的内容做正则表达式匹配，\
-             返回命中行的文件路径 + 行号 + 行内容（类似 grep / ripgrep）。\n\n\
-             **与其他查找工具的边界**：\n\
-             - `list_files`：列目录树，不按模式过滤、不读内容\n\
-             - `glob`：按文件名模式匹配，不读内容\n\
-             - `search_file`：字面关键词搜文件内容（非正则）\n\
-             - `grep`（本工具）：正则表达式搜文件内容\n\
-             - `search_codebase`：基于关键词加权排序的代码搜索（自然语言查询）\n\n\
-             **输入**：pattern 为正则表达式（如 `fn \\w+`、`TODO\\(.*\\)`、`\\d{{4}}-\\d{{2}}-\\d{{2}}`），\
-             默认不区分大小写，case_sensitive=true 时区分。multiline=true 时正则匹配整篇文本\
-             （可跨行，`^`/`$` 锚定行边界），默认逐行匹配。\n\n\
-             **输出模式**（output_mode）：\n\
-             - `content`（默认）：显示每个匹配行（path + 行号 + 内容），格式与 search_file 一致\n\
-             - `files_with_matches`：只列出有匹配的文件路径\n\
-             - `count`：每文件一行 `path: N matches`\n\n\
-             **返回格式**（行号 1-based，与 read_file 一致）：\n\
-             path: src/main.rs\n\
-             &nbsp;&nbsp;12  fn main() {{\n\
-             &nbsp;&nbsp;45  let x = 1;   // 命中\n\n\
-             **行号用于精确编辑**：拿到命中行号后，可直接调用 edit_file 的 start_line/end_line \
-             替换目标行。\n\
-             **context 参数**：命中行前后各显示 N 行上下文（默认 0 = 只显示命中行），\
-             上下文行以 `·` 前缀标记。\n\
-             **glob 参数**：文件名过滤（如 `*.rs` 只搜 Rust 文件），只匹配文件名不匹配路径。\n\
-             自动跳过生成目录（.git/node_modules/target/dist 等）、二进制文件与 \
-             大于 4 MiB 的文件。默认最多返回 {DEFAULT_MAX_MATCHES} 条结果，可用 max_matches 调整。\n\
-             正则在调用入口编译一次后复用于全部文件。{cwd_hint}"
-        )
+        "在工作区目录下递归正则搜索：对全部文本文件内容做正则匹配，返回命中行（文件路径+行号+内容）。\
+         pattern：正则表达式（regex 语法）；默认不区分大小写（case_sensitive=true 区分）；\
+         multiline=true 跨行匹配；output_mode 可选 content / files_with_matches / count；\
+         glob 按文件名过滤；context=N 显示上下文；自动跳过生成目录、二进制与 >4MiB 文件；\
+         默认最多 300 条。分工：文件名→list_files/glob；关键词→search_file；语义→search_codebase。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "正则表达式（regex crate 语法，如 fn \\w+、TODO\\(.*\\)、\\d{4}-\\d{2}-\\d{2}）"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "搜索根目录（绝对或相对工作区），默认工作区根目录"
-                },
-                "output_mode": {
-                    "type": "string",
-                    "enum": ["content", "files_with_matches", "count"],
-                    "description": "输出模式：content=显示匹配行（默认），files_with_matches=只列文件名，count=每文件计数",
-                    "default": "content"
-                },
-                "glob": {
-                    "type": "string",
-                    "description": "文件名 glob 过滤模式（如 *.rs），只匹配文件名不匹配路径，默认不过滤"
-                },
-                "case_sensitive": {
-                    "type": "boolean",
-                    "description": "是否区分大小写，默认 false（不区分）",
-                    "default": false
-                },
-                "multiline": {
-                    "type": "boolean",
-                    "description": "多行模式：true 时正则匹配整篇文本（可跨行，^/$ 锚定行边界），默认 false（逐行匹配）",
-                    "default": false
-                },
-                "context": {
-                    "type": "integer",
-                    "description": "命中行前后各显示多少行上下文，默认 0（只显示命中行）；上下文行以 · 前缀标记",
-                    "default": 0
-                },
-                "max_matches": {
-                    "type": "integer",
-                    "description": "最多返回命中数（content 限制显示行数，其他模式限制文件数），默认 300",
-                    "default": DEFAULT_MAX_MATCHES
-                }
+                "pattern": { "type": "string", "description": "正则表达式（regex crate 语法）" },
+                "path": { "type": "string", "description": "搜索根目录（绝对或相对工作区），默认工作区根" },
+                "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "description": "输出模式，默认 content" },
+                "glob": { "type": "string", "description": "文件名 glob 过滤（如 *.rs），默认不过滤" },
+                "case_sensitive": { "type": "boolean", "description": "是否区分大小写，默认 false", "default": false },
+                "multiline": { "type": "boolean", "description": "多行模式：正则匹配整篇文本，默认 false", "default": false },
+                "context": { "type": "integer", "description": "命中行前后各显示 N 行上下文，默认 0" },
+                "max_matches": { "type": "integer", "description": "最多返回命中数，默认 300", "default": DEFAULT_MAX_MATCHES }
             },
             "required": ["pattern"]
         })

@@ -86,79 +86,27 @@ impl Tool for EditFileRegexTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
-        let history_hint = if self.history.is_some() {
-            "\n**编辑历史**：每次成功替换会分配 op_id，可用 edit_revise 查看/修订、edit_undo 撤回。"
-        } else {
-            ""
-        };
-        format!(
-            "**代码修改的首选工具**：当改动具有规律性（批量替换某函数调用、统一命名/格式、\
-             所有 `println!` 调用、`TODO` 注释等）时**优先用本工具**，比手数行号的 edit_file 更稳更快。\
-             用正则表达式匹配并替换文件内容。与 edit_file（按行号精确编辑）互补：\
-              不确定行号但能描述匹配模式时使用（如所有 println! 调用、TODO 注释）。\n\n\
-             **参数**：\n\
-             - pattern：正则表达式（regex crate 语法）\n\
-             - replacement：替换文本，支持 $1 / ${{name}} 捕获组引用；\
-             推荐 <content>...</content> 包裹避免转义\n\
-             - global：true=替换全部匹配，false=仅第一处（默认 false）\n\
-             - multiline：true 时 ^ / $ 匹配行边界（默认 false）\n\
-             - case_sensitive：默认 false（不区分大小写）\n\
-             - dry_run=true 仅预览命中位置与上下文，不写入磁盘\n\
-             - diff_context=N 命中明细上下文行数（每侧，默认 1，0=只显示命中行）\n\n\
-                **安全**：编译失败返回友好错误；建议先用 dry_run 确认匹配范围再执行。\
-                **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：每个参数一个标签，\
-                形如 <!_PATTERN_>fn \\w+</!_PATTERN_>、\
-                <!_REPLACEMENT_>替换文本</!_REPLACEMENT_>，正则里的反斜杠/引号无需 JSON 转义。\
-               {history_hint}\n{cwd_hint}"
-        )
+        "用正则表达式匹配并替换文件内容（regex crate 语法）。规律性批量改动（如所有 `println!`、`TODO` 注释）\
+         优先用本工具，比手数行号的 edit_file 更稳更快。\
+         pattern：正则；replacement：替换文本，支持 $1 / ${name} 捕获组引用；\
+         global=true 全部 / false 仅第一处（默认）；multiline=true 时 ^/$ 匹配行边界；\
+         case_sensitive 默认 false；dry_run=true 仅预览。建议先用 dry_run 确认匹配范围。\
+         成功替换返回 op_id 可撤回/修订。支持工作区相对路径。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "文件路径（绝对或相对工作区），文件必须已存在"
-                },
-                "pattern": {
-                    "type": "string",
-                    "description": "正则表达式（regex crate 语法，如 `fn \\w+`、`TODO\\(.*\\)`）"
-                },
-                "replacement": {
-                    "type": "string",
-                    "description": "替换文本。支持 $1 / ${name} 捕获组引用；推荐 <content>...</content> 包裹避免转义"
-                },
-                "global": {
-                    "type": "boolean",
-                    "description": "true = 替换所有匹配；false = 仅替换第一处。默认 false",
-                    "default": false
-                },
-                "multiline": {
-                    "type": "boolean",
-                    "description": "多行模式：^ / $ 匹配行边界。默认 false",
-                    "default": false
-                },
-                "case_sensitive": {
-                    "type": "boolean",
-                    "description": "是否区分大小写。默认 false（不区分）",
-                    "default": false
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "true = 仅预览：返回命中位置与上下文，不写入磁盘",
-                    "default": false
-                },
-                "diff_context": {
-                    "type": "integer",
-                    "description": "命中明细中上下文行数（每侧），默认 1；0 = 只显示命中行本身",
-                    "default": 1
-                }
+                "path": { "type": "string", "description": "文件路径（绝对或相对工作区），文件须已存在" },
+                "pattern": { "type": "string", "description": "正则表达式（regex crate 语法，如 `fn \\w+`）" },
+                "replacement": { "type": "string", "description": "替换文本，支持 $1 / ${name}；推荐 <content> 包裹" },
+                "global": { "type": "boolean", "description": "true=全部 / false=仅第一处，默认 false", "default": false },
+                "multiline": { "type": "boolean", "description": "多行模式：^ / $ 匹配行边界，默认 false", "default": false },
+                "case_sensitive": { "type": "boolean", "description": "是否区分大小写，默认 false", "default": false },
+                "dry_run": { "type": "boolean", "description": "true=仅预览不写盘", "default": false },
+                "diff_context": { "type": "integer", "description": "命中上下文行数（每侧），默认 1", "default": 1 }
             },
             "required": ["path", "pattern", "replacement"]
         })

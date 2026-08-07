@@ -84,45 +84,20 @@ impl Tool for ReadFileTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
-        format!(
-            "读取本地文本文件内容并返回，**每一行前面都带行号**（1-based，如 `  12  let x = 1;`），\
-             格式与 search_file 一致。适用于查看配置、日志、源码等本地文本文件。\n\n\
-             **行号用于精确编辑**：根据返回的行号调用 edit_file 的 start_line/end_line \
-             替换目标行；不需要按行编辑时也可用 write_file 整体重写。\n\n\
-             支持行范围读取：start_line / end_line 只返回指定区间（如先读全文行数，\
-             再分段精读中间区域，避免大文件一次读完）。\n\
-             默认最多输出 256 KiB，超出部分截断；非 UTF-8 字节以替换字符返回。\n\
-             路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}"
-        )
+        "读取本地文本文件内容并返回，每一行前面都带行号（1-based），格式与 search_file 一致。\
+         适用于查看配置、日志、源码等文本文件。行号用于精确编辑：按返回行号调用 edit_file。\
+         start_line/end_line 支持行范围读取。默认最多输出 256 KiB，超出截断。路径支持工作区相对路径。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "文件路径（绝对或相对工作区）"
-                },
-                "max_bytes": {
-                    "type": "integer",
-                    "description": "最大输出字节数，默认 262144（256 KiB）",
-                    "default": DEFAULT_MAX_BYTES
-                },
-                "start_line": {
-                    "type": "integer",
-                    "description": "起始行号（1-based，含），默认 1",
-                    "default": 1
-                },
-                "end_line": {
-                    "type": "integer",
-                    "description": "结束行号（1-based，含），默认文件末尾"
-                }
+                "path": { "type": "string", "description": "文件路径（绝对或相对工作区）" },
+                "max_bytes": { "type": "integer", "description": "最大输出字节数，默认 262144", "default": DEFAULT_MAX_BYTES },
+                "start_line": { "type": "integer", "description": "起始行号（1-based 含），默认 1", "default": 1 },
+                "end_line": { "type": "integer", "description": "结束行号（1-based 含），默认文件末尾" }
             },
             "required": ["path"]
         })

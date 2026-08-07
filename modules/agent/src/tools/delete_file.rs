@@ -63,34 +63,17 @@ impl Tool for DeleteFileTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
-        format!(
-            "删除本地文件或空目录。路径不做沙箱限制（信任本地 agent 环境）。\
-             默认仅删除文件或空目录；设置 recursive=true 可删除非空目录。\
-             删除前请确认路径正确，删除后不可恢复。\n\n\
-             **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：\n\
-             每个参数一个标签，形如 <!_PATH_>file.txt</!_PATH_>、\n\
-             <!_RECURSIVE_>true</!_RECURSIVE_>。\n{cwd_hint}"
-        )
+        "删除本地文件或空目录（recursive=true 可删非空目录）。\
+         删除前请确认路径，删除后不可恢复。路径支持工作区相对路径。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "文件或目录路径（绝对或相对工作区）"
-                },
-                "recursive": {
-                    "type": "boolean",
-                    "description": "删除目录时是否递归删除非空目录，默认 false",
-                    "default": false
-                }
+                "path": { "type": "string", "description": "文件或目录路径（绝对或相对工作区）" },
+                "recursive": { "type": "boolean", "description": "删除目录时是否递归删除非空目录，默认 false", "default": false }
             },
             "required": ["path"]
         })

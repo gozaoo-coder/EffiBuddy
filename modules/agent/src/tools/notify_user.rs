@@ -62,11 +62,11 @@ impl Tool for NotifyUserTool {
     type Args = NotifyUserArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "通知用户审核文件或查看重要信息。前端会弹出审核 UI 展示说明文字与文件路径列表。\
-         适用于：生成/修改文件后请用户确认、需要用户查阅文档、纯文字提醒等场景。\
-         file_paths 为空时仅展示文字通知。".to_string()
-    }
+  fn description(&self) -> String {
+      "通知用户审核文件或查看重要信息：前端弹出审核 UI 展示说明文字与文件路径列表。\
+       file_paths 为空时仅展示文字通知。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -74,12 +74,12 @@ impl Tool for NotifyUserTool {
             "properties": {
                 "explanation": {
                     "type": "string",
-                    "description": "通知说明文字（不能为空）"
+                      "description": "通知说明文字"
                 },
                 "file_paths": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "需要审核的文档路径列表（可为空，表示纯文字通知）"
+                      "description": "需审核的文档路径列表（可为空）"
                 }
             },
             "required": ["explanation"]

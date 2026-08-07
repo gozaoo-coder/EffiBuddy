@@ -63,7 +63,6 @@ pub enum TodoStatus {
 }
 
 /// 单个待办项
-/// 单个待办项
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
     pub id: String,
@@ -77,6 +76,44 @@ pub struct TodoItem {
     /// 旧数据无此字段时默认 None（根任务），保证向后兼容。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+
+    // ===== 高级待办字段（v2） =====
+
+    /// 紧急程度: "urgent" | "not_urgent"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urgency: Option<String>,
+
+    /// 截止日期（ISO 8601 日期字符串，如 "2026-08-15"）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+
+    /// 截止时间（ISO 8601 时间字符串，如 "14:30"）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_time: Option<String>,
+
+    /// 提前提醒分钟数（如 30 表示提前30分钟提醒）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reminder_minutes_before: Option<u32>,
+
+    /// 重复类型: "once" | "daily" | "cumulative"，默认 "once"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_type: Option<String>,
+
+    /// 累计次数（仅 repeat_type="cumulative" 时有效）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_count: Option<u32>,
+
+    /// 打卡日期列表（ISO 8601 日期字符串数组）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_in_dates: Option<Vec<String>>,
+
+    /// 是否启用提醒
+    #[serde(default)]
+    pub reminder_enabled: bool,
+
+    /// 标签列表
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// 工具参数
@@ -160,19 +197,15 @@ impl Tool for TodoWriteTool {
     type Args = TodoWriteArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "创建、更新并管理结构化待办列表（todoTree），用于跟踪复杂多步任务的进度。\
-          支持 merge 模式：merge=false（默认）替换整个列表；merge=true 按 id 合并\
-          （已有 id 更新字段，新 id 追加，未提及的 id 保留）。\
-          支持树形层级：parent_id 为 None 表示根任务；Some(id) 表示该 id 任务的子任务，\
-          子任务排在父任务之后作为从属。\
-          任务有 pending / in_progress / completed 三种状态，同一时间只允许一个 in_progress\
-          （多个时自动只保留第一个）。列表按状态（in_progress > pending > completed）\
-          和优先级（high > medium > low）自动排序。\
-          调用时机：开始一个 3 步以上的复杂任务时先建立清单；每完成一步或转移焦点时更新状态；\
-          不要为简单任务建清单。该清单会永久保存在本会话上下文中，每轮对话都会注入。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "创建、更新并管理结构化待办列表（todoTree），跟踪复杂多步任务进度。\
+       3 步以上复杂任务开始前建清单，每完成一步或转移焦点时更新；简单任务不用。\
+       merge=false（默认）替换整个列表；merge=true 按 id 合并（已有更新、新 id 追加、未提及保留）。\
+       parent_id：None=根任务，Some(id)=该 id 任务的子任务。\
+       同一时间只允许一个 in_progress（多个时自动保留第一个）；列表自动按状态与优先级排序。\
+       清单永久保存在本会话上下文，每轮对话注入。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -180,13 +213,13 @@ impl Tool for TodoWriteTool {
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "待办列表。merge=false 时替换全部；merge=true 时按 id 合并（已有 id 更新字段，新 id 追加，未提及的 id 保留）。id 为空时自动生成递增数字 id",
+                      "description": "待办列表；merge=false 替换全部，merge=true 按 id 合并。id 空时自动生成递增数字 id",
                     "items": {
                         "type": "object",
                         "properties": {
                             "id": {
                                 "type": "string",
-                                "description": "唯一 id；为空时自动生成递增数字 id，便于后续 merge 引用"
+                                "description": "唯一 id；空时自动生成递增数字 id",
                             },
                             "content": {
                                 "type": "string",
@@ -204,11 +237,51 @@ impl Tool for TodoWriteTool {
                             },
                             "summary": {
                                 "type": "string",
-                                "description": "可选；仅在 status=completed 时显示的完成总结"
+                                "description": "可选；仅 completed 时显示的完成总结",
                             },
                             "parent_id": {
                                 "type": "string",
-                                "description": "可选；父任务 id。None/缺省表示根任务（平行或顺序执行），Some(id) 表示作为该 id 任务的子任务（从属）"
+                                "description": "可选；父任务 id，缺省=根任务",
+                            },
+                            "urgency": {
+                                "type": "string",
+                                "enum": ["urgent", "not_urgent"],
+                                "description": "紧急程度：urgent 或 not_urgent",
+                            },
+                            "due_date": {
+                                "type": "string",
+                                "description": "截止日期（ISO 8601）",
+                            },
+                            "due_time": {
+                                "type": "string",
+                                "description": "截止时间（HH:mm）",
+                            },
+                            "reminder_minutes_before": {
+                                "type": "integer",
+                                "description": "提前提醒分钟数"
+                            },
+                            "repeat_type": {
+                                "type": "string",
+                                "enum": ["once", "daily", "cumulative"],
+                                "description": "重复类型：once/daily/cumulative",
+                            },
+                            "repeat_count": {
+                                "type": "integer",
+                                "description": "累计目标次数（仅 cumulative 时有效）"
+                            },
+                            "check_in_dates": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "可选；打卡日期列表（ISO 8601）",
+                            },
+                            "reminder_enabled": {
+                                "type": "boolean",
+                                "description": "是否启用提醒"
+                            },
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "标签列表"
                             }
                         },
                         "required": ["id", "content", "priority", "status"]
@@ -216,7 +289,7 @@ impl Tool for TodoWriteTool {
                 },
                 "merge": {
                     "type": "boolean",
-                    "description": "是否合并到现有列表，默认 false（替换整个列表）",
+                      "description": "是否合并到现有列表，默认 false（替换）",
                     "default": false
                 }
             },
@@ -474,7 +547,7 @@ fn format_todos(list: &[TodoItem]) -> String {
 mod tests {
     use super::*;
 
-    /// 构造一个待办项（summary 默认 None）
+    /// 构造一个待办项（summary 默认 None，高级字段默认 None/false）
     fn todo(id: &str, content: &str, p: TodoPriority, s: TodoStatus) -> TodoItem {
         TodoItem {
             id: id.to_string(),
@@ -483,6 +556,15 @@ mod tests {
             status: s,
             summary: None,
             parent_id: None,
+            urgency: None,
+            due_date: None,
+            due_time: None,
+            reminder_minutes_before: None,
+            repeat_type: None,
+            repeat_count: None,
+            check_in_dates: None,
+            reminder_enabled: false,
+            tags: None,
         }
     }
 
@@ -539,6 +621,15 @@ mod tests {
                     status: TodoStatus::Completed,
                     summary: Some("已完成A".to_string()),
                     parent_id: None,
+                    urgency: None,
+                    due_date: None,
+                    due_time: None,
+                    reminder_minutes_before: None,
+                    repeat_type: None,
+                    repeat_count: None,
+                    check_in_dates: None,
+                    reminder_enabled: false,
+                    tags: None,
                 }],
                 merge: Some(true),
             })
@@ -662,6 +753,15 @@ mod tests {
                     status: TodoStatus::Pending,
                     summary: Some("不该出现的总结".to_string()),
                     parent_id: None,
+                    urgency: None,
+                    due_date: None,
+                    due_time: None,
+                    reminder_minutes_before: None,
+                    repeat_type: None,
+                    repeat_count: None,
+                    check_in_dates: None,
+                    reminder_enabled: false,
+                    tags: None,
                 }],
                 merge: Some(false),
             })
@@ -681,6 +781,15 @@ mod tests {
                     status: TodoStatus::Completed,
                     summary: Some("已完成的总结".to_string()),
                     parent_id: None,
+                    urgency: None,
+                    due_date: None,
+                    due_time: None,
+                    reminder_minutes_before: None,
+                    repeat_type: None,
+                    repeat_count: None,
+                    check_in_dates: None,
+                    reminder_enabled: false,
+                    tags: None,
                 }],
                 merge: Some(true),
             })

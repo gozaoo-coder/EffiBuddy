@@ -90,13 +90,11 @@ impl Tool for AsrTool {
     type Args = TranscribeAudioArgs;
     type Output = TranscribeAudioOutput;
 
-    fn description(&self) -> String {
-        "转写本地音频文件为文本，自动生成结构化摘要。\
-         支持 wav/mp3/m4a/flac 等常见音频格式。\
-         转写结果会持久化保存，可通过 search_asr_records 检索。\
-         适用于用户要求转写录音、会议音频、播客等场景。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "转写本地音频文件为文本并生成结构化摘要（支持 wav/mp3/m4a/flac 等）。\
+       结果持久化，可用 search_asr_records 检索。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -104,11 +102,11 @@ impl Tool for AsrTool {
             "properties": {
                 "audio_path": {
                     "type": "string",
-                    "description": "音频文件的绝对路径（支持 wav/mp3/m4a/flac 等）"
+                      "description": "音频文件绝对路径（wav/mp3/m4a/flac 等）"
                 },
                 "lang": {
                     "type": "string",
-                    "description": "语言代码（zh-CN / en-US 等），留空用默认语言",
+                      "description": "语言代码（zh-CN/en-US 等）",
                     "default": ""
                 }
             },
@@ -202,12 +200,10 @@ impl Tool for SearchAsrTool {
     type Args = SearchAsrArgs;
     type Output = Vec<AsrRecordSummary>;
 
-    fn description(&self) -> String {
-        "搜索已转写的 ASR 语音记录。可按关键词匹配标题、转写文本、摘要或标签。\
-         返回最近匹配的记录列表（含转写预览）。\
-         适用于用户询问'之前那段录音讲了什么'、'找一下关于 XX 的录音'等场景。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "搜索已转写的 ASR 语音记录，关键词匹配标题/转写文本/摘要/标签，返回最近匹配列表（含预览）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -215,11 +211,11 @@ impl Tool for SearchAsrTool {
             "properties": {
                 "keyword": {
                     "type": "string",
-                    "description": "搜索关键词，匹配标题/转写/摘要/标签"
+                      "description": "搜索关键词（标题/转写/摘要/标签）"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "返回条数上限，默认 10",
+                      "description": "返回条数上限",
                     "default": 10
                 }
             }
@@ -296,11 +292,10 @@ impl Tool for ListAsrTool {
     type Args = ListAsrArgs;
     type Output = Vec<AsrRecordSummary>;
 
-    fn description(&self) -> String {
-        "列出最近的 ASR 语音转写记录。按创建时间倒序返回。\
-         适用于用户询问'我有哪些录音'、'最近转写了什么'等场景。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "列出最近的 ASR 语音转写记录（按创建时间倒序）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -308,12 +303,12 @@ impl Tool for ListAsrTool {
             "properties": {
                 "limit": {
                     "type": "integer",
-                    "description": "返回条数上限，默认 10",
+                      "description": "返回条数上限",
                     "default": 10
                 },
                 "source": {
                     "type": "string",
-                    "description": "仅返回指定来源：streaming（流式录音）或 upload（文件上传），留空不限制",
+                      "description": "来源过滤：streaming 或 upload",
                     "enum": ["streaming", "upload"]
                 }
             }
@@ -410,11 +405,10 @@ impl Tool for GetAsrRecordTool {
     type Args = GetAsrRecordArgs;
     type Output = AsrRecordDetail;
 
-    fn description(&self) -> String {
-        "获取指定 ASR 记录的完整转写文本与摘要。\
-         适用于用户询问'打开那段录音'、'看看 XX 录音的完整内容'等场景。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "获取指定 ASR 记录的完整转写文本与摘要。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -422,7 +416,7 @@ impl Tool for GetAsrRecordTool {
             "properties": {
                 "record_id": {
                     "type": "string",
-                    "description": "ASR 记录 id（可从 list_asr_records / search_asr_records 获取）"
+                      "description": "ASR 记录 id（可从 list/search 获取）"
                 }
             },
             "required": ["record_id"]

@@ -112,34 +112,12 @@ impl Tool for SearchFileTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（默认搜索根，相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，默认在进程工作目录下搜索".to_string());
         format!(
-            "在工作区目录下**递归全文搜索**：对全部文本文件的每一行做**字面关键词**匹配（非正则），\
-             返回命中行的文件路径 + 行号 + 行内容。\n\n\
-             **与其他查找工具的边界**：\n\
-             - `list_files`：列目录树，不按模式过滤、不读内容\n\
-             - `glob`：按文件名模式匹配，不读内容\n\
-             - `search_file`（本工具）：字面关键词搜文件内容（非正则）\n\
-             - `grep`：正则表达式搜文件内容\n\
-             - `search_codebase`：基于关键词加权排序的代码搜索（自然语言查询）\n\n\
-             **输入**：keywords 为关键词数组（如 `[\"fn main\", \"tokio\"]`），\
-             一行包含**任意一个**即命中；match_all=true 时需包含全部。\
-             默认不区分大小写，case_sensitive=true 时区分。\n\n\
-             **返回格式**（行号 1-based，与 read_file 一致）：\n\
-             path: src/main.rs\n\
-             &nbsp;&nbsp;12  fn main() {{\n\
-             &nbsp;&nbsp;45  let x = 1;   // 命中\n\n\
-              **行号用于精确编辑**：拿到命中行号后，可直接调用 edit_file \
-              的 start_line/end_line 替换目标行。\n\
-              **context 参数**：命中行前后各显示 N 行上下文（默认 0 = 只显示命中行），\
-              上下文行以 `·` 前缀标记，便于就地判断是否值得精读。\n\
-              自动跳过生成目录（.git/node_modules/target/dist 等）、二进制文件与 \
-              大于 4 MiB 的文件。默认最多返回 {DEFAULT_MAX_MATCHES} 行命中，\
-                可用 max_matches 调整。\n{cwd_hint}"
+            "在工作区目录下递归全文搜索：对全部文本文件逐行做字面关键词匹配（非正则），返回命中行的文件路径+行号+内容。\
+             keywords 为数组，一行含任意一个即命中（match_all=true 需全含）；\
+             默认不区分大小写（case_sensitive=true 区分）；context=N 显示上下文；\
+             自动跳过 .git/node_modules/target 等生成目录、二进制与 >4MiB 文件；\
+             默认最多 {DEFAULT_MAX_MATCHES} 行命中。分工：文件名→list_files/glob；正则→grep；语义→search_codebase。"
         )
     }
 
@@ -147,37 +125,14 @@ impl Tool for SearchFileTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "keywords": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "关键词数组：一行包含任意一个即命中（match_all=true 时需包含全部）"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "搜索根目录（绝对或相对工作区），默认工作区根目录"
-                },
-                "match_all": {
-                    "type": "boolean",
-                    "description": "true = 一行需包含所有关键词；false = 任意一个即可，默认 false",
-                    "default": false
-                },
-                "case_sensitive": {
-                    "type": "boolean",
-                    "description": "是否区分大小写，默认 false（不区分）",
-                    "default": false
-                },
-                "max_matches": {
-                    "type": "integer",
-                    "description": "最多返回命中行数，默认 300",
-                    "default": DEFAULT_MAX_MATCHES
-                },
-                "context": {
-                    "type": "integer",
-                    "description": "命中行前后各显示多少行上下文，默认 0（只显示命中行）；上下文行以 · 前缀标记",
-                    "default": 0
-                  }
-              },
-              "required": ["keywords"]
+                "keywords": { "type": "array", "items": { "type": "string" }, "description": "关键词数组，一行含任意一个即命中" },
+                "path": { "type": "string", "description": "搜索根目录（绝对或相对工作区），默认工作区根" },
+                "match_all": { "type": "boolean", "description": "true=一行需含所有关键词", "default": false },
+                "case_sensitive": { "type": "boolean", "description": "是否区分大小写，默认 false", "default": false },
+                "max_matches": { "type": "integer", "description": "最多返回命中行数，默认 300", "default": DEFAULT_MAX_MATCHES },
+                "context": { "type": "integer", "description": "命中行前后各显示 N 行上下文，默认 0" }
+            },
+            "required": ["keywords"]
         })
     }
 

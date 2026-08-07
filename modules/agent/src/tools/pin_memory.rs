@@ -82,12 +82,11 @@ impl Tool for PinMemoryTool {
     type Args = PinMemoryArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "把一条内容永久加入上下文记忆。当用户明确要求「请记住」「以后都要记得」「记住这一点」\
-         等时调用。被记忆的内容会在之后所有对话中自动注入到上下文，无需检索。\
-         不要用来记忆临时信息或大段对话，仅用于用户希望长期生效的偏好/事实/指令。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "把一条内容永久加入上下文记忆（用户明确要求「请记住」「记住这一点」时调用），之后所有对话自动注入。\
+       仅用于长期生效的偏好/事实/指令，不记临时信息或大段对话。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -95,11 +94,11 @@ impl Tool for PinMemoryTool {
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "要永久记住的内容，简洁清晰的一句话或一段说明"
+                      "description": "要永久记住的内容（简洁清晰）"
                 },
                 "category": {
                     "type": "string",
-                    "description": "可选分类标签，如 preference(偏好)/fact(事实)/instruction(指令)",
+                      "description": "分类标签：preference/fact/instruction",
                     "default": null
                 }
             },
@@ -170,10 +169,10 @@ impl Tool for ListPinnedMemoriesTool {
     type Args = ListPinnedMemoriesArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "列出当前所有已永久记住的内容。在用户询问「你记住了什么」或准备添加新记忆前\
-         检查是否重复时调用。".to_string()
-    }
+  fn description(&self) -> String {
+      "列出当前所有已永久记住的内容（用户询问「你记住了什么」时调用）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -232,11 +231,10 @@ impl Tool for DeletePinnedMemoryTool {
     type Args = DeletePinnedMemoryArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "按 id 删除一条永久记忆。当用户说「忘掉这条」「不要再记这个」「删除刚才记住的」\
-         等时调用。id 可从 list_pinned_memories 工具的结果中获取，支持前缀匹配。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "按 id 删除一条永久记忆（用户说「忘掉这条」「删除刚才记住的」时调用），id 支持前缀匹配。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -244,7 +242,7 @@ impl Tool for DeletePinnedMemoryTool {
             "properties": {
                 "id": {
                     "type": "string",
-                    "description": "要删除的永久记忆 id（完整或前 8 字符前缀）"
+                      "description": "要删除的记忆 id（完整或前 8 字符前缀）"
                 }
             },
             "required": ["id"]

@@ -118,12 +118,11 @@ impl Tool for WebSearchTool {
     type Args = WebSearchArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "通过搜索引擎 API 搜索网络信息，返回搜索结果（标题、URL、摘要）。\
-         支持结果数量控制（默认 5，最大 10）与语言限制（如 lang_en / lang_zh）。\
-         适用于查询最新资讯、技术文档、事实核查等。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "通过搜索引擎 API 搜索网络信息，返回结果（标题、URL、摘要）。\
+       支持数量控制（默认 5，最大 10）与语言限制（lang_en/lang_zh）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -140,7 +139,7 @@ impl Tool for WebSearchTool {
                 },
                 "lr": {
                     "type": "string",
-                    "description": "语言限制，如 lang_en（英文）/ lang_zh（中文），可选",
+                      "description": "语言限制：lang_en/lang_zh",
                     "default": null
                 }
             },

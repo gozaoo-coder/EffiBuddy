@@ -67,87 +67,36 @@ impl Tool for EditFileTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（相对路径以此为准）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，相对路径依赖进程工作目录".to_string());
-        let history_hint = if self.history.is_some() {
-            "\n**编辑历史**：每次成功编辑会分配一个 op_id（在返回报告开头），\
-             可用 edit_revise 查看/修订、edit_undo 撤回该操作。"
-        } else {
-            ""
-        };
         format!(
-            "**代码修改优先用正则**：当改动具有规律性（批量替换某函数调用、统一命名/格式、\
-             \"所有 `println!` 调用\"、`TODO` 注释等），请**优先使用 `edit_file_regex`**\
-             （正则匹配替换，支持首处/全部 + 捕获组引用），比手数行号更稳更快；\
-             `edit_file` 用于需要精确控制行号的单点编辑（如插入/替换特定某几行、追加）。\n\n\
-             按行号精确编辑本地文本文件，**不覆盖整文件**。与 read_file / search_file 配合：\
-             先读取或搜索拿到行号，再替换指定行。\n\n\
-             **操作模式**（edits 为操作数组，每个元素一种模式）：\n\
-             1. 替换：start_line（+ 可选 end_line）+ text，把该行/该区间整段替换为 text；\
-             空 text 表示删除该行\n\
-             2. 插入：insert_before + text，在指定行之前插入新行；\
-             insert_before = 总行数+1 等价于追加\n\
-             3. 追加：不给任何行号字段，直接把 text 作为新行写入文件末尾（无需知道行数）\n\n\
-              **规则**：行号一律 1-based 且指编辑前原文件；多个操作自动排序执行、区间不能重叠；\
-              一次最多 {MAX_OPS} 个操作。text 推荐用 <content>...</content> 包裹避免转义（同 write_file）。\n\
-              **可选参数**：dry_run=true 仅预览不写盘（大改前先确认安全，返回完整 diff 与行号变化）；\
-              diff_context=N 控制变更明细上下文行数（默认 1，0 = 只显示变更行）。\n\
-               **行数校准**：替换模式下若 text 行数与 (end_line - start_line + 1) 不一致，\
-               报告会明确标注声明行数与实际写入行数，便于核对的下次操作。\
-                 **推荐用 XML 传参**（默认方式，JSON 作为第二可用的备选）：每个参数一个标签，\
-                 形如 <!_PATH_>src/main.rs</!_PATH_>；edits 数组用重复的 <!_ITEM_> 包裹元素表达，\
-                 text 内容可写在 XML 标签之间免转义。\
-                 路径不做沙箱限制（信任本地 agent 环境）。\n{cwd_hint}{history_hint}"
-    )
-}
+            "按行号精确编辑本地文本文件（不覆盖整文件）。先 read_file/search_file 拿行号再改。\
+             edits 数组每元素一种模式：替换=start_line(+end_line)+text；插入=insert_before+text；\
+             追加=不给行号写文件末尾。行号 1-based 指编辑前原文件；多操作自动排序、区间不重叠；\
+             一次最多 {MAX_OPS} 个。dry_run=true 仅预览。成功编辑返回 op_id 可撤回/修订。\
+             规律性批量改动用 edit_file_regex。推荐 XML 传参免转义。支持工作区相对路径。"
+        )
+    }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "文件路径（绝对或相对工作区），文件必须已存在"
-                },
+                "path": { "type": "string", "description": "文件路径（绝对或相对工作区），文件须已存在" },
                 "edits": {
                     "type": "array",
-                      "description": "编辑操作列表，按行号自动排序执行；行号指编辑前原文件（1-based）。规律性批量改动请改用 edit_file_regex",
+                    "description": "编辑操作列表，按行号自动排序执行（行号指编辑前原文件）",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "start_line": {
-                                "type": "integer",
-                                "description": "替换模式起始行号（1-based，含）；不给任何行号 = 追加到文件末尾"
-                            },
-                            "end_line": {
-                                "type": "integer",
-                                "description": "替换模式结束行号（1-based，含）；缺省 = 只替换 start_line 一行"
-                            },
-                            "insert_before": {
-                                "type": "integer",
-                                "description": "插入模式：在指定行号之前插入 text；总行数+1 等价于追加到末尾"
-                            },
-                            "text": {
-                                "type": "string",
-                                "description": "目标文本，推荐 <content>...</content> 包裹避免转义"
-                            }
+                            "start_line": { "type": "integer", "description": "替换模式起始行号（1-based 含）；不给=追加末尾" },
+                            "end_line": { "type": "integer", "description": "替换模式结束行号（1-based 含）；缺省=只替换起始行" },
+                            "insert_before": { "type": "integer", "description": "插入模式：在该行前插入；总行数+1=追加末尾" },
+                            "text": { "type": "string", "description": "目标文本，推荐 <content> 包裹" }
                         },
                         "required": ["text"]
                     }
                 },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "true = 仅预览：计算并返回完整报告（含 diff 与行号变化），不写入磁盘",
-                    "default": false
-                },
-                "diff_context": {
-                    "type": "integer",
-                    "description": "变更明细中上下文行数（每侧），默认 1；0 = 只显示变更行本身",
-                    "default": 1
-                }
+                "dry_run": { "type": "boolean", "description": "true=仅预览不写盘", "default": false },
+                "diff_context": { "type": "integer", "description": "变更上下文行数（默认 1）", "default": 1 }
             },
             "required": ["path", "edits"]
         })

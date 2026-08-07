@@ -65,14 +65,11 @@ impl Tool for SetTitleTool {
     type Args = SetTitleArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "为当前会话设置或更新标题。标题应简洁概括对话主题，不超过 25 个字。\n\
-         注意：新会话的首条消息会自动生成标题，无需在本轮调用本工具。\n\
-         调用时机：\n\
-         1. 话题发生明显转变，当前标题已不能概括对话内容时；\n\
-         2. 用户明确要求修改标题时。\n\
-         可多次调用，新标题会覆盖旧标题。".to_string()
-    }
+  fn description(&self) -> String {
+      "为当前会话设置或更新标题（≤25 字，新标题覆盖旧标题）。\
+       话题明显转变或用户明确要求修改标题时调用；新会话首条消息自动生成标题，无需调用。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -80,7 +77,7 @@ impl Tool for SetTitleTool {
             "properties": {
                 "title": {
                     "type": "string",
-                    "description": "新标题，简洁概括对话主题，≤25 字",
+                      "description": "新标题（≤25 字）",
                     "maxLength": MAX_TITLE_CHARS
                 }
             },

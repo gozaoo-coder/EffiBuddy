@@ -856,11 +856,12 @@ impl Tool for SubAgentTool {
     type Args = SubAgentArgs;
     type Output = String;
 
-      fn description(&self) -> String {
-          "召唤一个子 agent 执行任务并返回其最终回复。子 agent 有独立会话历史（可多轮继续）、可调用工具、可用其他模型（model_id），全过程前端以卡片展示。\
-           复杂任务可拆给子 agent 并行/独立完成（代码审查、独立调研、文案起草）；复用同一 session_id 可继续对话；\
-           嵌套深度上限 2 层，禁止无限递归。单轮简单询问用 call_model 更轻量。".to_string()
-      }
+  fn description(&self) -> String {
+      "召唤子 agent 执行任务并返回其最终回复。子 agent 有独立会话历史（可多轮继续）、可调用工具、可用其他模型（model_id）。\
+       复杂任务可拆给子 agent 并行/独立完成（代码审查、独立调研、文案起草）；复用同一 session_id 可继续对话；\
+       嵌套深度上限 2 层，禁止无限递归；单轮简单询问用 call_model 更轻量。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -880,7 +881,7 @@ impl Tool for SubAgentTool {
                 },
                 "model_id": {
                     "type": "string",
-                    "description": "子 agent 使用的模型 id（manage_model list 可查看）；缺省与主 agent 相同"
+                      "description": "使用的模型 id；缺省与主 agent 相同"
                 },
                 "instructions": {
                     "type": "string",
@@ -893,7 +894,7 @@ impl Tool for SubAgentTool {
                 },
                 "close": {
                     "type": "boolean",
-                    "description": "执行完毕后关闭会话，默认 false",
+                      "description": "执行完毕后关闭会话",
                     "default": false
                 }
             },
@@ -965,7 +966,8 @@ mod tests {
                 model_id: None,
                 instructions: None,
                 tools: None,
-                close: None,
+                  agent_def_id: None,
+                  close: None,
             })
             .await;
         assert!(r.is_err());
@@ -1009,7 +1011,8 @@ mod tests {
                 model_id: None,
                 instructions: None,
                 tools: None,
-                close: None,
+                  agent_def_id: None,
+                  close: None,
             })
             .await;
         assert!(r.is_err());
@@ -1056,7 +1059,8 @@ mod tests {
                 model_id: Some("missing-id".to_string()),
                 instructions: None,
                 tools: None,
-                close: None,
+                  agent_def_id: None,
+                  close: None,
             })
             .await;
         // 应报"模型不存在"（而非 api_key 错误）

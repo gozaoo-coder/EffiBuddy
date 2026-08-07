@@ -72,13 +72,12 @@ impl Tool for CallModelTool {
     type Args = CallModelArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "一次性调用一个模型回答问题（无工具、单轮），返回该模型的文本回复。\
-         用于跨模型征求意见 / 让其他模型执行子任务 / 模型间交叉验证。\
-         model_id 可指定模型列表中的任意对话模型；不传则用当前对话模型。\
-         需要多轮对话或让子模型使用工具时，请改用 sub_agent。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "一次性调用一个模型回答问题（无工具、单轮），返回该模型的文本回复。\
+       用于跨模型征求意见 / 让其他模型执行子任务 / 模型间交叉验证；\
+       model_id 缺省用当前对话模型；需要多轮对话或让子模型使用工具时改用 sub_agent。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -90,7 +89,7 @@ impl Tool for CallModelTool {
                 },
                 "model_id": {
                     "type": "string",
-                    "description": "目标模型 id（manage_model list 可查看）；缺省用当前激活对话模型"
+                      "description": "目标模型 id；缺省用当前激活对话模型"
                 },
                 "system": {
                     "type": "string",
@@ -98,11 +97,11 @@ impl Tool for CallModelTool {
                 },
                 "temperature": {
                     "type": "number",
-                    "description": "采样温度 0-2，缺省用模型默认"
+                      "description": "采样温度 0-2"
                 },
                 "max_tokens": {
                     "type": "integer",
-                    "description": "最大输出 token 数，缺省用模型默认"
+                      "description": "最大输出 token 数"
                 }
             },
             "required": ["prompt"]
@@ -237,4 +236,31 @@ pub(crate) async fn call_model_once(
         .prompt(prompt)
         .await
         .map_err(|e| CallModelError(format!("模型 {} 调用失败: {e}", model.model_name)))
+}
+
+/// 群聊等场景的公开模型调用入口：按模型 id（缺省当前激活对话模型）解析配置，
+/// 注入系统提示词后单轮调用，返回文本。供 Agent Team 让自定义智能体回复使用。
+pub async fn call_model_by_id(
+    config: &Arc<RwLock<Arc<AgentConfig>>>,
+    model_id: Option<&str>,
+    system: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let tool = CallModelTool {
+        config: Arc::clone(config),
+    };
+    let resolved = tool
+        .resolve_model(model_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let reply = call_model_once(
+        &resolved,
+        if system.trim().is_empty() { None } else { Some(system) },
+        prompt,
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(reply)
 }

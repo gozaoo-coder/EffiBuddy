@@ -134,20 +134,11 @@ impl Tool for AskUserTool {
     type Args = AskUserArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "当任务目标不明确、用户意图模糊、或修改方向过多时，主动向用户提出一组选择题以澄清需求。\n\
-         \n\
-         【何时使用】\n\
-         - 用户需求含糊（如\"优化一下\"\"改一下\"\"帮我做\"缺少具体方向）\n\
-         - 一次修改涉及多个互斥方向（技术选型 / UI 风格 / 范围边界）\n\
-         - 多个方案难以取舍，需要用户偏好确认\n\
-         - 任务边界不清，需要确认目标而非盲目执行\n\
-         \n\
-         【规格】1-4 个问题，每题 2-4 个选项。\n\
-         【流程】调用后前端弹出选项卡片，用户选择会作为新消息进入会话，你在后续轮次即可读到回答。\n\
-         【约束】不要在同一轮内重复提问；选项要具体可执行，包含明确取舍维度，而非泛泛而谈。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "任务目标不明确、意图模糊或多方案难取舍时，向用户提出 1-4 个选择题澄清需求。\
+       每题 2-4 个选项；前端弹选项卡片，用户选择作为新消息进入会话，后续轮次可读到回答。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -193,7 +184,7 @@ impl Tool for AskUserTool {
                             "multi_select": {
                                 "type": "boolean",
                                 "default": false,
-                                "description": "是否多选，默认 false"
+                                  "description": "是否多选"
                             }
                         },
                         "required": ["question", "header", "options"]

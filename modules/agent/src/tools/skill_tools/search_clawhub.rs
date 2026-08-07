@@ -44,12 +44,11 @@ impl Tool for SearchClawHubSkillsTool {
     type Args = SearchClawHubSkillsArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "从 ClawHub 远程技能市场搜索技能（不限于本地已安装）。\
-         当用户需要的能力本地已安装技能都无法满足时调用。\
-         找到合适技能后，用返回的 slug 调用 install_clawhub_skill 安装。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "从 ClawHub 远程技能市场搜索技能（本地已安装技能无法满足需求时调用），\
+       用返回的 slug 调用 install_clawhub_skill 安装。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -57,11 +56,11 @@ impl Tool for SearchClawHubSkillsTool {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "搜索关键词，如 'weather' / '翻译' / 'code review'"
+                      "description": "搜索关键词"
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "最多返回的结果条数，默认 10",
+                      "description": "最多返回条数",
                     "default": 10
                 }
             },

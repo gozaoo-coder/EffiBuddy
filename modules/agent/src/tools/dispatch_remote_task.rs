@@ -79,17 +79,12 @@ impl Tool for DispatchRemoteTaskTool {
     type Args = DispatchRemoteTaskArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "跨已配对设备派发任务（P2P 镜像模式）。支持：\n\
-         - list：列出当前在线且已配对的设备（id / 名称 / 地址 / 最近在线时间），AI 据此选择派发目标\n\
-         - dispatch：向指定设备派发自然语言任务，远端 AI 处理后返回结果文本\n\n\
-         典型场景：用户在多设备间协作（如本机为「电脑」负责编程，向「手机」派发检索用户信息的任务），\n\
-         仅当目标设备在线时才可派发；派发会阻塞至远端 AI 返回结果（百毫秒到分钟级）。\n\n\
-         各 action 所需参数：\n\
-         - list: 无需额外参数\n\
-         - dispatch: device_id, task"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "跨已配对设备派发任务（P2P 镜像模式）。list 列出在线设备；\
+       dispatch 向指定设备派发自然语言任务，远端 AI 处理后返回结果。\
+       仅目标设备在线才可派发，会阻塞至远端返回。dispatch 需 device_id+task。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -98,15 +93,15 @@ impl Tool for DispatchRemoteTaskTool {
                 "action": {
                     "type": "string",
                     "enum": ["list", "dispatch"],
-                    "description": "操作类型：list=列出在线设备；dispatch=派发任务"
+                      "description": "操作类型：list/dispatch"
                 },
                 "device_id": {
                     "type": "string",
-                    "description": "目标设备 id（dispatch 必填，可先用 list 查询在线设备获取）"
+                      "description": "目标设备 id（dispatch 必填）"
                 },
                 "task": {
                     "type": "string",
-                    "description": "任务描述（dispatch 必填，自然语言描述要远端设备做的事；远端 AI 处理后返回结果）"
+                      "description": "任务描述（dispatch 必填）"
                 }
             },
             "required": ["action"]

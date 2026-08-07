@@ -208,13 +208,12 @@ impl Tool for GenerateVideoTool {
     type Args = GenerateVideoArgs;
     type Output = GenerateVideoOutput;
 
-    fn description(&self) -> String {
-        "调用视频生成模型为用户生成视频。支持文本/图片/视频作为参考，\
-         生成后视频会自动保存并显示给用户。\
-         提示词越具体效果越好，建议包含主体动作、场景、镜头、风格等描述。\
-         生成后文件保存到 attachments 目录，返回的 absolute_path 可直接用于 read_file/delete_file 等文件操作。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "调用视频生成模型生成视频，支持文本/图片/视频作为参考；生成后自动保存并显示给用户，\
+       返回 absolute_path 可直接用于 read_file/delete_file 等文件操作。\
+       提示词越具体效果越好（主体动作、场景、镜头、风格）。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -222,30 +221,30 @@ impl Tool for GenerateVideoTool {
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "视频生成提示词，建议详细描述主体动作、场景、镜头、风格等"
+                      "description": "视频生成提示词（主体动作、场景、镜头、风格）"
                 },
                 "file_path": {
                     "type": "string",
-                    "description": "目标保存路径（绝对路径）。留空则保存到 attachments 目录，自动命名 video_{uuid}.mp4"
+                      "description": "目标保存路径；留空保存到 attachments"
                 },
                 "image_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "参考图片路径数组（image-to-video），按顺序作为 image 1/N 引用"
+                      "description": "参考图片路径数组（image-to-video）"
                 },
                 "video_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "参考视频路径数组（video-to-video），按顺序作为 video 1/N 引用"
+                      "description": "参考视频路径数组（video-to-video）"
                 },
                 "resolution": {
                     "type": "string",
-                    "description": "分辨率：480p 或 720p，留空用默认",
+                      "description": "分辨率：480p 或 720p",
                     "enum": ["480p", "720p"]
                 },
                 "ratio": {
                     "type": "string",
-                    "description": "宽高比，留空用默认",
+                      "description": "宽高比",
                     "enum": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
                 },
                 "duration": {
@@ -255,7 +254,7 @@ impl Tool for GenerateVideoTool {
                 },
                 "model_id": {
                     "type": "string",
-                    "description": "指定视频模型 id（模型列表中 kind=video_gen 的模型）；缺省用当前激活视频模型"
+                      "description": "视频模型 id；缺省用当前激活模型"
                 }
             },
             "required": ["prompt"]

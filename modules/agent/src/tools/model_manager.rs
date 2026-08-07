@@ -94,14 +94,13 @@ impl Tool for ManageModelTool {
     type Args = ManageModelArgs;
     type Output = String;
 
-    fn description(&self) -> String {
-        "管理'可使用模型'列表（模型配置面板里的同一份数据）：\
-         list 查看全部模型；save 新增/更新模型（填 label/base_url/model_name/api_key/kind 等）；\
-         delete 删除模型；activate 激活模型（kind=chat 激活为当前对话模型，kind=image_gen 激活为图像生成模型）。\
-         用户要求'换个模型/添加模型/删除模型'时使用本工具，无需用户手动打开设置。\
-         注意：激活对话模型在下一轮对话生效；模型列表变更会持久化到配置文件。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "管理'可使用模型'列表（模型配置面板同一份数据）：\
+       list 查看全部；save 新增/更新（label/base_url/model_name/api_key/kind 等）；delete 删除；\
+       activate 激活（chat 激活为对话模型，image_gen 激活为图像模型）。\
+       用户要求'换个模型/添加模型/删除模型'时使用；激活对话模型下一轮生效，变更持久化到配置文件。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -110,11 +109,11 @@ impl Tool for ManageModelTool {
                 "action": {
                     "type": "string",
                     "enum": ["list", "save", "delete", "activate"],
-                    "description": "操作类型：list 查看全部；save 新增/更新；delete 删除；activate 激活"
+                      "description": "操作类型：list/save/delete/activate"
                 },
                 "model": {
                     "type": "object",
-                    "description": "save 必填。字段：label(显示名), provider_id(如 openai/deepseek/custom), base_url, model_name, api_key, preamble(可选), enable_tools(可选), kind(chat|image_gen, 默认 chat), image_size/image_quality(图像模型可选), context_window_tokens(可选), pricing(可选)"
+                      "description": "save 必填。字段：label, provider_id, base_url, model_name, api_key, kind(chat|image_gen)，其余可选"
                 },
                 "id": {
                     "type": "string",

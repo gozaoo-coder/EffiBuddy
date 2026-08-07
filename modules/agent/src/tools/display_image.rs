@@ -134,12 +134,11 @@ impl Tool for DisplayImageTool {
     type Args = DisplayImageArgs;
     type Output = DisplayImageOutput;
 
-    fn description(&self) -> String {
-        "把已有图片发送到聊天框显示给用户。支持本地文件路径或网络 URL。\
-         用于展示工作区中的图片、回显用户上传的图片、或嵌入网络图片。\
-         与 image_gen（生成新图片）互补：本工具只搬运已有图片，不调用生成模型。"
-            .to_string()
-    }
+  fn description(&self) -> String {
+      "把已有图片发送到聊天框显示给用户，支持本地路径或网络 URL。\
+       与 image_gen 互补：本工具只搬运已有图片，不调用生成模型。"
+          .to_string()
+  }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
@@ -147,15 +146,15 @@ impl Tool for DisplayImageTool {
             "properties": {
                 "local_path": {
                     "type": "string",
-                    "description": "本地图片路径（绝对或相对工作区）。支持 png/jpg/jpeg/gif/webp/bmp/svg。与 url 二选一，同时提供时优先使用。"
+                      "description": "本地图片路径；支持 png/jpg/jpeg/gif/webp/bmp/svg，与 url 二选一"
                 },
                 "url": {
                     "type": "string",
-                    "description": "网络图片 URL（仅 http/https）。与 local_path 二选一。"
+                      "description": "网络图片 URL（http/https），与 local_path 二选一"
                 },
                 "name": {
                     "type": "string",
-                    "description": "可选显示名（不含扩展名）。留空时用源文件名或'图片'。"
+                      "description": "可选显示名（不含扩展名）"
                 }
             }
         })

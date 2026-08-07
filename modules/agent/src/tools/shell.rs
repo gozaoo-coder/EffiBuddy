@@ -70,56 +70,24 @@ impl Tool for ShellTool {
     type Output = String;
 
     fn description(&self) -> String {
-        let cwd_hint = self
-            .cwd
-            .as_ref()
-            .map(|p| format!("当前工作区：{}（命令在此目录执行）", p.display()))
-            .unwrap_or_else(|| "未设置工作区，命令在进程工作目录执行".to_string());
-        let shell_line = {
-            let avail = shell_env::available_shells()
-                .iter()
-                .map(|k| k.label())
-                .collect::<Vec<_>>()
-                .join(" / ");
-            format!(
-                "当前可用 shell：{avail}，不指定时默认用 {}。\
-                 可用 `shell` 参数显式选择（bash / cmd / powershell / sh / auto）",
-                shell_env::shell_kind().label()
-            )
-        };
-        format!(
-            "在本地执行 shell 命令并返回 stdout+stderr。{shell_line}。\
-                默认超时 30 秒，输出截断到 8 KiB；Windows 上静默运行，不弹出控制台窗口。\
-                可用于调用已安装的 CLI 工具，例如：\n\
-                 - agent-reach: `agent-reach doctor`、`agent-reach install --env=auto --safe`、`opencli twitter search \"query\"`\n\
-                 - browser-act: `browser-act browser list`、`browser-act fetch \"url\"`\n\
-                 **注意**：本工具一次性执行（每次新进程，不保留状态）。\
-                 如需多步操作、保持工作目录、长任务或交互式命令，改用 shell_session_start +\
-                 shell_session_send + shell_session_read（后台常驻会话，前端底栏可见）。\
-                 **Windows 环境提示**：bash 下 ls/grep/cat 等 Unix 工具开箱即用；\
-                 powershell 适合脚本/管道对象，中文输出乱码可先 `chcp 65001`。\n\
-                   注意：这是本地命令执行，请谨慎调用可能修改系统的命令。\n{cwd_hint}"
-        )
+        "在本地执行 shell 命令并返回 stdout+stderr。可用于调用已安装 CLI 工具（如 agent-reach、browser-act）。\
+         默认超时 30 秒，输出截断到 8 KiB；Windows 上静默运行不弹窗。\
+         注意：一次性执行（每次新进程，不保留状态）；多步/长任务/交互命令改用 shell_session_* 工具。\
+         请谨慎调用可能修改系统的命令。支持工作区相对路径。"
+            .to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "要执行的 shell 命令（如 `agent-reach doctor`、`browser-act browser list`）"
-                },
+                "command": { "type": "string", "description": "要执行的 shell 命令" },
                 "shell": {
                     "type": "string",
                     "enum": ["auto", "bash", "cmd", "powershell", "sh"],
-                    "description": "要使用的命令行工具，默认 auto（自动选择）"
+                    "description": "命令行工具，默认 auto"
                 },
-                "timeout_ms": {
-                    "type": "integer",
-                    "description": "命令超时毫秒数，默认 30000",
-                    "default": DEFAULT_TIMEOUT_MS
-                }
+                "timeout_ms": { "type": "integer", "description": "超时毫秒数，默认 30000", "default": DEFAULT_TIMEOUT_MS }
             },
             "required": ["command"]
         })
