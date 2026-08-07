@@ -42,12 +42,10 @@ pub(super) fn push_entry(state: &mut IndexState, entry: MemoryEntry) {
         *tf_map.entry(tok.as_str()).or_insert(0) += 1;
     }
     for (tok, tf) in tf_map {
-        state
-            .inverted
-            .entry(tok.to_string())
-            .or_default()
-            .push((idx, tf));
-        *state.df.entry(tok.to_string()).or_insert(0) += 1;
+        // 复用同一次所有权转移，避免 inverted 与 df 各分配一次 String
+        let owned = tok.to_string();
+        state.inverted.entry(owned.clone()).or_default().push((idx, tf));
+        *state.df.entry(owned).or_insert(0) += 1;
     }
     state.n_docs += 1;
     state.total_dl += dl as u64;

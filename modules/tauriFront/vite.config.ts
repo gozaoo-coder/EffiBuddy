@@ -13,5 +13,21 @@ export default defineConfig({
   build: {
     target: 'es2021',
     outDir: 'dist',
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        // 大型第三方依赖独立分包，避免主 bundle 过大、拖慢首屏解析
+        manualChunks: {
+          // 图表 / 数学公式渲染（体积大，独立缓存）
+          mermaid: ['mermaid'],
+          katex: ['katex'],
+          // markdown 流式渲染
+          markstream: ['markstream-vue', 'stream-monaco', 'stream-diffs'],
+          // 动画与状态
+          vendor: ['vue', 'pinia', 'animejs'],
+          icons: ['@hugeicons/core-free-icons'],
+        },
+      },
+    },
   },
 })

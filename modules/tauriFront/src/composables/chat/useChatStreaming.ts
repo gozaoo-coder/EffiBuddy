@@ -145,9 +145,15 @@ export function useChatStreaming(
       // 新一轮回复应另起气泡,避免追加到排队消息之前的旧气泡里。
       if (streamingBubbleId.value) {
         const idx = core.messages.value.findIndex((m) => m.id === streamingBubbleId.value)
-        if (core.messages.value.slice(idx + 1).some((m) => m.role === 'user')) {
-          streamingBubbleId.value = null
+        // 遍历 idx 之后的元素,避免 slice() 每次 token 分配新数组
+        let hasQueuedUser = false
+        for (let i = idx + 1; i < core.messages.value.length; i++) {
+          if (core.messages.value[i].role === 'user') {
+            hasQueuedUser = true
+            break
+          }
         }
+        if (hasQueuedUser) streamingBubbleId.value = null
       }
       if (!streamingBubbleId.value) {
         streamingBubbleId.value = core.newId()
@@ -351,11 +357,14 @@ export function useChatStreaming(
         depth: p.depth,
         status: 'running',
         task: '',
+        reasoning: '',
         text: '',
+        segments: [],
         toolCalls: [],
         images: [],
         error: '',
         finishedAt: null,
+        isThinking: false,
       }
       meta.subAgents.push(rec)
     }
@@ -364,19 +373,35 @@ export function useChatStreaming(
         rec.task = p.content
         rec.status = 'running'
         break
+      case 'reasoning':
+        rec.reasoning += p.content
+        rec.isThinking = true
+        {
+          const last = rec.segments[rec.segments.length - 1]
+          if (last && last.kind === 'reasoning') {
+            last.text += p.content
+          } else {
+            rec.segments.push({ kind: 'reasoning', text: p.content })
+          }
+        }
+        break
       case 'token':
         rec.text += p.content
         break
-      case 'tool_call':
-        rec.toolCalls.push({
+      case 'tool_call': {
+        const call: ToolCallRecord = {
           call_id: p.session_id + '_' + rec.toolCalls.length,
           tool_name: p.tool_name,
           arguments: p.arguments,
           result: null,
           is_error: false,
           pending: true,
-        })
+        }
+        rec.toolCalls.push(call)
+        rec.segments.push({ kind: 'tool', call })
+        rec.isThinking = false
         break
+      }
       case 'tool_result': {
         const tc = rec.toolCalls.find((t) => t.tool_name === p.tool_name && t.pending)
         if (tc) {
@@ -400,11 +425,13 @@ export function useChatStreaming(
         rec.status = 'done'
         rec.text = p.content || rec.text
         rec.finishedAt = Date.now()
+        rec.isThinking = false
         break
       case 'error':
         rec.status = 'error'
         rec.error = p.content
         rec.finishedAt = Date.now()
+        rec.isThinking = false
         break
     }
     // 同步写入 message.subAgents:右栏概览(用量分析/子代理 token/次数)读 m.subAgents。
