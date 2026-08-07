@@ -103,13 +103,28 @@
   --fs-lg: 18px;
   --fs-xl: 20px;
 
-  /* 动效 */
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
-  --ease-decelerated: cubic-bezier(0, 0, 0, 1);
-  --duration-fast: 0.15s;
-  --duration-base: 0.25s;
-  --duration-slow: 0.4s;
+    /* 动效
+     * --ease-standard/emphasized/decelerated 为 Material 系快出曲线（现有）
+     * --ease-out/in-out/drawer 为 emilkowalski 推荐强曲线（UI 动效首选）
+     * 规则：进入/退出用 ease-out；屏上移动用 ease-in-out；hover/颜色用 ease；UI 动画 < 300ms
+     */
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+    --ease-decelerated: cubic-bezier(0, 0, 0, 1);
+    /* emil 强曲线：强 ease-out（UI 交互首选） */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    /* emil 强曲线：强 ease-in-out（屏上移动/变形） */
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    /* emil 强曲线：抽屉（iOS 式，Ionic） */
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    --duration-fast: 0.15s;
+    --duration-base: 0.25s;
+    --duration-slow: 0.4s;
+    /* 按压反馈时长（emil：100-160ms） */
+    --duration-press: 0.16s;
+
+    /* 按压反馈缩放（emil：0.95-0.98 微妙缩放） */
+    --scale-press: 0.97;
 
   /* 阴影：更柔和的弥散阴影（Kimi 风格） */
   --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.08);
@@ -306,7 +321,7 @@ button:disabled {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  transition: all 0.15s;
+  transition: border-color 0.15s, color 0.15s;
 }
 
 .header-btn:hover {
@@ -356,7 +371,7 @@ button:disabled {
   background: transparent;
   border: 1px solid var(--primary);
   border-radius: var(--radius-md);
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .new-btn:hover:not(:disabled) {
@@ -455,7 +470,7 @@ button:disabled {
   background: transparent;
   border: 1px solid rgba(255, 92, 92, 0.4);
   border-radius: var(--radius-md);
-  transition: all 0.15s;
+  transition: background 0.15s;
 }
 
 .del-btn:hover:not(:disabled) {
@@ -803,7 +818,7 @@ button:disabled {
   background: var(--card-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  transition: all 0.15s;
+  transition: border-color 0.15s, color 0.15s;
 }
 
 .pair-btn:hover:not(:disabled) {
@@ -886,7 +901,7 @@ button:disabled {
   color: var(--muted);
   background: transparent;
   border-radius: 50%;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .close-btn:hover {
@@ -958,7 +973,7 @@ button:disabled {
   font-size: 13px;
   color: var(--muted);
   background: var(--card);
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .seg-btn.active {
@@ -990,7 +1005,7 @@ button:disabled {
   height: 16px;
   border-radius: 50%;
   background: #fff;
-  transition: transform 0.2s;
+  transition: transform 0.2s var(--ease-in-out);
 }
 
 .toggle.on .toggle-knob {
@@ -1029,7 +1044,7 @@ button:disabled {
   padding: 8px 18px;
   font-size: 13px;
   border-radius: var(--radius-md);
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .btn-ghost {
@@ -1073,7 +1088,7 @@ button:disabled {
   color: var(--muted);
   background: transparent;
   border-radius: 5px;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 
 .ts-btn:hover {
@@ -1108,7 +1123,7 @@ button:disabled {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 
 .preset-chip:hover {
@@ -1182,7 +1197,7 @@ button:disabled {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  transition: all 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .model-item:hover {
@@ -1229,7 +1244,7 @@ button:disabled {
   color: var(--muted);
   background: transparent;
   border-radius: 50%;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
   flex-shrink: 0;
 }
 
@@ -1307,7 +1322,8 @@ button:disabled {
 /* 顶部 toast 动效：从上方滑入 */
 .toast-top-enter-active,
 .toast-top-leave-active {
-  transition: all var(--duration-base) var(--ease-emphasized);
+  transition: opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
 }
 .toast-top-enter-from {
   opacity: 0;
@@ -1321,7 +1337,8 @@ button:disabled {
 /* 底部 toast 动效：从下方滑入 */
 .toast-bottom-enter-active,
 .toast-bottom-leave-active {
-  transition: all var(--duration-base) var(--ease-emphasized);
+  transition: opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
 }
 .toast-bottom-enter-from {
   opacity: 0;
@@ -1400,7 +1417,7 @@ button:disabled {
   color: var(--muted);
   background: transparent;
   border-radius: 50%;
-  transition: all var(--duration-fast);
+  transition: color var(--duration-fast), background var(--duration-fast);
 }
 
 .snackbar-close:hover {
@@ -1416,7 +1433,8 @@ button:disabled {
 /* snackbar 动效：从底部滑入 */
 .snackbar-enter-active,
 .snackbar-leave-active {
-  transition: all var(--duration-base) var(--ease-emphasized);
+  transition: opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-base) var(--ease-out);
 }
 .snackbar-enter-from {
   opacity: 0;
@@ -1482,7 +1500,7 @@ button:disabled {
   color: var(--muted);
   background: transparent;
   border-radius: 50%;
-  transition: all var(--duration-fast);
+  transition: color var(--duration-fast), background var(--duration-fast);
   flex-shrink: 0;
   line-height: 1;
 }
@@ -1511,7 +1529,7 @@ button:disabled {
   border: 1px solid var(--primary);
   border-radius: var(--radius-sm);
   font-weight: 500;
-  transition: all var(--duration-fast);
+  transition: background var(--duration-fast), color var(--duration-fast);
 }
 
 .popup-btn:hover {
@@ -1560,7 +1578,8 @@ button:disabled {
 /* popup 动效：淡入 + 轻微缩放 */
 .popup-enter-active,
 .popup-leave-active {
-  transition: all var(--duration-fast) var(--ease-decelerated);
+  transition: opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 .popup-enter-from,
 .popup-leave-to {
@@ -1594,7 +1613,7 @@ button:disabled {
   transition: background var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard),
-    transform var(--duration-fast) var(--ease-standard);
+    transform var(--duration-press) var(--ease-out);
 }
 
 .btn-base:disabled {
@@ -1603,7 +1622,7 @@ button:disabled {
 }
 
 .btn-base:not(:disabled):active {
-  transform: scale(0.97);
+  transform: scale(var(--scale-press));
 }
 
 /* 尺寸 */
@@ -1775,7 +1794,7 @@ button:disabled {
   transition: background var(--duration-base) var(--ease-standard),
     border-color var(--duration-base) var(--ease-standard),
     color var(--duration-base) var(--ease-standard),
-    transform var(--duration-fast) var(--ease-standard);
+    transform var(--duration-press) var(--ease-out);
 }
 
 .toggle-btn:disabled {
@@ -1784,7 +1803,7 @@ button:disabled {
 }
 
 .toggle-btn:not(:disabled):active {
-  transform: scale(0.97);
+  transform: scale(var(--scale-press));
 }
 
 /* 尺寸 */
@@ -1862,7 +1881,7 @@ button:disabled {
   transition: background var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard),
-    transform var(--duration-fast) var(--ease-standard);
+    transform var(--duration-press) var(--ease-out);
 }
 
 .icon-btn:disabled {
@@ -2397,8 +2416,10 @@ button:disabled {
   transition: transform var(--duration-fast) var(--ease-standard);
 }
 
-.slider-input::-webkit-slider-thumb:hover {
-  transform: scale(1.1);
+@media (hover: hover) and (pointer: fine) {
+  .slider-input::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+  }
 }
 
 .slider-input::-webkit-slider-thumb:active {
@@ -2431,8 +2452,10 @@ button:disabled {
   transition: transform var(--duration-fast) var(--ease-standard);
 }
 
-.slider-input::-moz-range-thumb:hover {
-  transform: scale(1.1);
+@media (hover: hover) and (pointer: fine) {
+  .slider-input::-moz-range-thumb:hover {
+    transform: scale(1.1);
+  }
 }
 
 .slider-input::-moz-range-thumb:active {
@@ -2977,244 +3000,10 @@ button:disabled {
 }
 
 /* ============================================================
- * 基础组件：Menu / Dialog / BindSheet
+ * 基础组件：Dialog / BindSheet
  * 浮层类组件统一使用 Teleport 到 body，使用 design tokens
  * 参考 HarmonyOS NEXT 规范
  * ============================================================ */
-
-/* ---------- Menu 菜单 ---------- */
-.menu {
-  position: absolute;
-  z-index: var(--z-menu);
-  min-width: 160px;
-  max-width: 320px;
-  padding: var(--space-1);
-  background: var(--menu-bg, var(--card-2));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  overflow: visible;
-  display: flex;
-  flex-direction: column;
-}
-
-.menu--sub {
-  z-index: calc(var(--z-menu) + 1);
-}
-
-.menu--with-title {
-  padding-top: 0;
-}
-
-/* 标题栏 */
-.menu-title {
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: var(--space-1);
-  user-select: none;
-}
-
-/* 列表容器 */
-.menu-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-
-.menu-list::-webkit-scrollbar {
-  width: 6px;
-}
-.menu-list::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-.menu-list::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
-}
-
-/* 单项：高度 36px，左右 padding 16px */
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: var(--h-control-md);
-  padding: 0 var(--space-4);
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-base);
-  line-height: 1;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-  outline: none;
-  border-radius: var(--radius-md);
-  transition: background var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-.menu-item:not(.is-disabled):hover,
-.menu-item.is-hover {
-  background: var(--hover, var(--card));
-}
-
-.menu-item.is-disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.menu-item.is-selected {
-  color: var(--primary);
-}
-
-.menu-item.is-danger {
-  color: var(--danger);
-}
-
-.menu-item.is-danger:not(.is-disabled):hover,
-.menu-item.is-danger.is-hover {
-  background: rgba(255, 92, 92, 0.12);
-}
-
-.menu-item.is-divided {
-  margin-top: var(--space-1);
-  border-top: 1px solid var(--border);
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-  padding-top: 0;
-  height: calc(var(--h-control-md) - 1px);
-}
-
-/* 子菜单缩进 */
-.menu-item--child {
-  padding-left: calc(var(--space-4) * 2 + var(--space-2));
-  font-size: var(--fs-sm);
-}
-
-/* 选中状态 ✓ */
-.menu-item-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  font-size: var(--fs-sm);
-  color: var(--primary);
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.menu-item.is-danger .menu-item-check {
-  color: var(--danger);
-}
-
-/* 图标 */
-.menu-item-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.1em;
-  line-height: 1;
-  flex-shrink: 0;
-  min-width: 16px;
-}
-
-/* 文本 */
-.menu-item-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 数字/文本角标（右侧，如待办计数） */
-.menu-item-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: var(--radius-full);
-  background: var(--primary, #4a7eff);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-/* 子菜单指示箭头 */
-.menu-item-arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  line-height: 1;
-  flex-shrink: 0;
-  transition: transform var(--duration-fast) var(--ease-standard);
-}
-
-.menu-item-arrow.is-expanded {
-  transform: rotate(90deg);
-}
-
-/* 指向箭头（指向触发元素） */
-.menu-arrow {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  background: var(--card-2);
-  border: 1px solid var(--border);
-  z-index: -1;
-}
-
-.menu-arrow--top {
-  bottom: -5px;
-  transform: rotate(225deg);
-  border-top: none;
-  border-left: none;
-}
-
-.menu-arrow--bottom {
-  top: -5px;
-  transform: rotate(45deg);
-  border-bottom: none;
-  border-right: none;
-}
-
-.menu-arrow--left {
-  right: -5px;
-  transform: rotate(135deg);
-  border-top: none;
-  border-right: none;
-}
-
-.menu-arrow--right {
-  left: -5px;
-  transform: rotate(315deg);
-  border-bottom: none;
-  border-left: none;
-}
-
-/* 浮层动效：淡入 + 轻微缩放 0.95 */
-.menu-enter-active,
-.menu-leave-active {
-  transition: opacity var(--duration-fast) var(--ease-decelerated),
-    transform var(--duration-fast) var(--ease-decelerated);
-}
-.menu-enter-from,
-.menu-leave-to {
-  opacity: 0;
-  transform: scale(0.95);
-}
 
 /* ---------- Dialog 弹出框 ---------- */
 .dialog-root {
@@ -3354,11 +3143,12 @@ button:disabled {
   outline: none;
   transition: background var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
+    color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-press) var(--ease-out);
 }
 
 .dialog-btn:active {
-  transform: scale(0.97);
+  transform: scale(var(--scale-press));
 }
 
 /* primary 按钮 */
@@ -3703,4 +3493,32 @@ button:disabled {
   --anime-duration-slow: 420;
   /* stagger 步进 */
   --anime-stagger-step: 60;
+}
+
+/* ============================================================
+ * 无障碍：prefers-reduced-motion 降级
+ * emil 原则：reduce 是“更少更温和”，不是归零。
+ * 保留 opacity/color/background 等不产生运动的过渡（辅助理解状态变化），
+ * 移除/瞬间完成 transform 位移与缩放（主要致晕源）。
+ * ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* keyframe 动画（blink / btn-spin 等）瞬间完成，不产生连续运动 */
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    /* 过渡只保留不产生运动的属性（位移/缩放瞬间到位） */
+    transition-property: opacity, color, background-color, border-color,
+      box-shadow, filter !important;
+    transition-duration: 0.15s !important;
+  }
+}
+
+/* hover 位移/缩放动效仅限精确指针设备（触屏 tap 会误触发 hover）
+ * 现有 hover 缩放（.slider-input 滑块 thumb scale(1.1)）已收敛进对应 @media 块，
+ * 新增 hover 位移/缩放一律写在此类门控内。 */
+@media (hover: hover) and (pointer: fine) {
+  /* hover 位移/缩放动效入口 */
 }

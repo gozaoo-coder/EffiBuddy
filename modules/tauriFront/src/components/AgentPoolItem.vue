@@ -422,10 +422,10 @@ function truncate(s: string, max: number): string {
 }
 
 @keyframes ap-at-pop {
-  0% { transform: scale(0); }
-  60% { transform: scale(1.15); }
-  100% { transform: scale(1); }
-}
+    0% { transform: scale(0.9); opacity: 0; }
+    60% { transform: scale(1.15); }
+    100% { transform: scale(1); opacity: 1; }
+  }
 
 /* 折叠箭头 */
 .ap-item-arrow {

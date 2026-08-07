@@ -2,7 +2,7 @@
 /**
  * Menu 菜单组件
  * 临时性弹出窗口，展示可执行操作
- * 参考 HarmonyOS NEXT 设计规范
+ * 现代玻璃质感设计风格
  *
  * 支持类型：
  * - 普通菜单：纯文本项
@@ -130,19 +130,35 @@ const hoverKey = ref<string | null>(null)
 // overlay 模式下子菜单面板定位样式
 const subPanelStyle = ref<Record<string, string>>({})
 
-// 主面板与子菜单面板共用进入/离开动画：淡入 + scale(.95)→1（保持原 CSS 行为）
+// 键盘导航：当前焦点索引
+const focusIndex = ref(-1)
+// 菜单项列表（含 inline 展开的子项）
+const flatItems = computed(() => {
+  const list: { item: MenuItemOption; depth: number; parentKey?: string }[] = []
+  for (const item of props.items) {
+    list.push({ item, depth: 0 })
+    if (props.subMenuMode === 'inline' && expandedKeys.value.has(item.key) && item.children) {
+      for (const child of item.children) {
+        list.push({ item: child, depth: 1, parentKey: item.key })
+      }
+    }
+  }
+  return list
+})
+
+// 主面板与子菜单面板共用进入/离开动画：淡入 + scale(.92)→1 + 向上位移
 const { onEnter: onMenuEnter, onLeave: onMenuLeave } = useAnimeTransition({
   enter: {
     opacity: [0, 1],
-    transform: ['scale(.95)', 'scale(1)'],
-    duration: 180,
+    transform: ['translateY(4px) scale(.92)', 'translateY(0) scale(1)'],
+    duration: 200,
     ease: 'out(3)',
   },
   leave: {
     opacity: [1, 0],
-    transform: ['scale(1)', 'scale(.95)'],
-    duration: 150,
-    ease: 'inOut(2)',
+    transform: ['translateY(0) scale(1)', 'translateY(-2px) scale(.96)'],
+    duration: 160,
+    ease: 'in(2)',
   },
 })
 
@@ -163,35 +179,24 @@ async function updatePosition() {
   if (props.position) {
     const { x, y } = props.position
     anchor = {
-      x,
-      y,
-      left: x,
-      top: y,
-      right: x,
-      bottom: y,
-      width: 1,
-      height: 1,
+      x, y, left: x, top: y, right: x, bottom: y,
+      width: 1, height: 1,
       toJSON: () => ({}),
     } as DOMRect
   } else if (props.triggerRef) {
     anchor = props.triggerRef.getBoundingClientRect()
   } else {
-    // 既没有 trigger 也没有 position，居中显示
     anchor = {
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2,
-      left: window.innerWidth / 2,
-      top: window.innerHeight / 2,
-      right: window.innerWidth / 2,
-      bottom: window.innerHeight / 2,
-      width: 1,
-      height: 1,
+      x: window.innerWidth / 2, y: window.innerHeight / 2,
+      left: window.innerWidth / 2, top: window.innerHeight / 2,
+      right: window.innerWidth / 2, bottom: window.innerHeight / 2,
+      width: 1, height: 1,
       toJSON: () => ({}),
     } as DOMRect
   }
 
   const panel = panelEl.value.getBoundingClientRect()
-  const margin = 4
+  const margin = 6
   const arrowSize = 8
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -214,7 +219,6 @@ async function updatePosition() {
   const arrow: Record<string, string> = {}
 
   if (side === 'top' || side === 'bottom') {
-    // 水平对齐
     if (align === 'start') {
       left = anchor.left
     } else if (align === 'end') {
@@ -227,11 +231,9 @@ async function updatePosition() {
     } else {
       top = anchor.bottom + margin
     }
-    // 箭头水平位置（跟随锚点中心）
     const arrowLeft = anchor.left + anchor.width / 2 - left
     arrow.left = `${Math.max(arrowSize + 4, Math.min(panel.width - arrowSize - 4, arrowLeft))}px`
   } else {
-    // left / right
     if (align === 'start') {
       top = anchor.top
     } else if (align === 'end') {
@@ -270,9 +272,9 @@ async function updatePosition() {
 // 监听 visible 变化重新计算定位
 watch(innerVisible, (v) => {
   if (v) {
-    // 重置内部状态
     expandedKeys.value = new Set()
     hoverKey.value = null
+    focusIndex.value = -1
     nextTick(() => updatePosition())
   }
 })
@@ -304,10 +306,8 @@ onUnmounted(() => {
 // 项点击处理
 function onItemClick(item: MenuItemOption) {
   if (item.disabled) return
-  // 有子菜单时根据模式处理
   if (item.children && item.children.length > 0) {
     if (props.subMenuMode === 'inline') {
-      // inline 模式：切换展开
       const next = new Set(expandedKeys.value)
       if (next.has(item.key)) next.delete(item.key)
       else next.add(item.key)
@@ -315,45 +315,71 @@ function onItemClick(item: MenuItemOption) {
       nextTick(() => updatePosition())
       return
     }
-    // overlay 模式：点击有子菜单的项不直接关闭，等用户选子项
     return
   }
   emit('select', item)
   setVisible(false)
 }
 
+// 子菜单隐藏延迟定时器（避免移入子菜单项时闪烁消失）
+const HIDE_DELAY = 180
+let hideTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearHideTimer() {
+  if (hideTimer !== null) {
+    clearTimeout(hideTimer)
+    hideTimer = null
+  }
+}
+
+function scheduleHideSubMenu() {
+  clearHideTimer()
+  hideTimer = setTimeout(() => {
+    hoverKey.value = null
+    hideTimer = null
+  }, HIDE_DELAY)
+}
+
 // overlay 模式 hover 处理
 function onItemEnter(item: MenuItemOption, ev: MouseEvent) {
   if (props.subMenuMode !== 'overlay') return
-  if (!item.children || item.children.length === 0) {
-    hoverKey.value = null
+  clearHideTimer()
+
+  // 有子菜单的项：立即切换显示
+  if (item.children && item.children.length > 0) {
+    hoverKey.value = item.key
+    const target = ev.currentTarget as HTMLElement
+    const rect = target.getBoundingClientRect()
+    const vw = window.innerWidth
+    let left = rect.right + 4
+    if (left + 200 > vw - 8) {
+      left = rect.left - 200 - 4
+      if (left < 8) left = 8
+    }
+    subPanelStyle.value = {
+      top: `${rect.top + window.scrollY}px`,
+      left: `${left + window.scrollX}px`,
+      minWidth: `${props.minWidth}px`,
+    }
     return
   }
-  hoverKey.value = item.key
-  // 计算子菜单面板位置（基于当前项元素的位置）
-  const target = ev.currentTarget as HTMLElement
-  const rect = target.getBoundingClientRect()
-  const vw = window.innerWidth
-  // 默认放在右侧
-  let left = rect.right + 4
-  // 右侧空间不足则放左侧
-  if (left + 200 > vw - 8) {
-    left = rect.left - 200 - 4
-    if (left < 8) left = 8
-  }
-  subPanelStyle.value = {
-    top: `${rect.top + window.scrollY}px`,
-    left: `${left + window.scrollX}px`,
-    minWidth: `${props.minWidth}px`,
-  }
+
+  // 无子菜单的项：不修改 hoverKey，让子面板保持打开
+  // 子面板关闭由 onSubPanelLeave 的延迟定时器处理
 }
 
 function onItemLeave() {
   // overlay 模式不立即清空，由子面板的 leave 处理
 }
 
+function onSubPanelEnter() {
+  // 鼠标进入子面板 → 取消任何待执行的隐藏定时器
+  clearHideTimer()
+}
+
 function onSubPanelLeave() {
-  hoverKey.value = null
+  // 鼠标离开子面板 → 延迟后隐藏（给用户返回父菜单的缓冲时间）
+  scheduleHideSubMenu()
 }
 
 // 点击外部关闭
@@ -361,7 +387,6 @@ function onDocumentClick(e: MouseEvent) {
   if (!innerVisible.value) return
   const target = e.target as Node
   if (panelEl.value?.contains(target)) return
-  // 检查 trigger
   if (props.triggerRef?.contains(target)) return
   setVisible(false)
 }
@@ -376,19 +401,64 @@ onUnmounted(() => {
 
 // ESC 关闭
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && innerVisible.value) {
-    e.stopPropagation()
-    setVisible(false)
+  if (!innerVisible.value) return
+
+  switch (e.key) {
+    case 'Escape':
+      e.stopPropagation()
+      if (hoverKey.value) {
+        hoverKey.value = null
+      } else {
+        setVisible(false)
+      }
+      break
+    case 'ArrowDown':
+      e.preventDefault()
+      e.stopPropagation()
+      if (flatItems.value.length > 0) {
+        focusIndex.value = (focusIndex.value + 1) % flatItems.value.length
+        scrollToFocused()
+      }
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      e.stopPropagation()
+      if (flatItems.value.length > 0) {
+        focusIndex.value = (focusIndex.value - 1 + flatItems.value.length) % flatItems.value.length
+        scrollToFocused()
+      }
+      break
+    case 'Enter':
+    case ' ':
+      e.preventDefault()
+      e.stopPropagation()
+      if (focusIndex.value >= 0 && focusIndex.value < flatItems.value.length) {
+        const entry = flatItems.value[focusIndex.value]
+        if (entry && !entry.item.disabled) {
+          onItemClick(entry.item)
+        }
+      }
+      break
   }
 }
 if (typeof document !== 'undefined') {
   document.addEventListener('keydown', onKeydown)
 }
 onUnmounted(() => {
+  clearHideTimer()
   if (typeof document !== 'undefined') {
     document.removeEventListener('keydown', onKeydown)
   }
 })
+
+function scrollToFocused() {
+  nextTick(() => {
+    if (!panelEl.value) return
+    const items = panelEl.value.querySelectorAll('.menu-item')
+    const target = items[focusIndex.value] as HTMLElement | undefined
+    target?.scrollIntoView({ block: 'nearest' })
+  })
+}
 
 // 阻止浮层点击冒泡到 document 防止误关闭
 function onPanelClick(e: MouseEvent) {
@@ -460,65 +530,59 @@ export function useContextMenu(): {
         ></span>
 
         <!-- 标题栏 -->
-        <div v-if="hasTitle" class="menu-title">{{ title }}</div>
+        <div v-if="hasTitle" class="menu-header">
+          <span class="menu-header-label">{{ title }}</span>
+        </div>
 
         <!-- 菜单项列表 -->
         <div class="menu-list">
-          <template v-for="item in items" :key="item.key">
+          <template v-for="(entry, idx) in flatItems" :key="entry.item.key">
+            <div
+              v-if="entry.item.divided && idx > 0"
+              class="menu-divider"
+            ></div>
             <button
               type="button"
               class="menu-item"
               :class="{
-                'is-disabled': item.disabled,
-                'is-selected': item.selected,
-                'is-danger': item.danger,
-                'is-divided': item.divided,
-                'is-hover': hoverKey === item.key,
-                'has-children': item.children && item.children.length > 0,
-                'is-expanded': expandedKeys.has(item.key),
+                'is-disabled': entry.item.disabled,
+                'is-selected': entry.item.selected,
+                'is-danger': entry.item.danger,
+                'is-hover': hoverKey === entry.item.key && !entry.parentKey,
+                'is-focused': focusIndex === idx,
+                'is-child': entry.depth > 0,
+                'has-children': entry.item.children && entry.item.children.length > 0 && !entry.parentKey,
+                'is-expanded': expandedKeys.has(entry.item.key),
               }"
-              :disabled="item.disabled"
-              @click="onItemClick(item)"
-              @mouseenter="onItemEnter(item, $event)"
+              :disabled="entry.item.disabled"
+              :style="entry.depth > 0 ? { paddingLeft: '44px' } : undefined"
+              @click="onItemClick(entry.item)"
+              @mouseenter="onItemEnter(entry.item, $event)"
               @mouseleave="onItemLeave"
             >
-              <!-- 选中状态占位（左侧 ✓） -->
-              <span v-if="item.selected || !hideCheckWhenUnselected" class="menu-item-check"><Icon v-if="item.selected" name="check-builtin" :size="16" /></span>
+              <!-- 选中标记 -->
+              <span class="menu-item-indicator">
+                <span v-if="entry.item.selected" class="menu-item-dot"></span>
+              </span>
               <!-- 图标 -->
-              <span v-if="item.icon" class="menu-item-icon"><Icon :name="item.icon" :size="18" /></span>
+              <span v-if="entry.item.icon" class="menu-item-icon"><Icon :name="entry.item.icon" :size="16" /></span>
               <!-- 文本 -->
-              <span class="menu-item-label">{{ item.label }}</span>
+              <span class="menu-item-label">{{ entry.item.label }}</span>
+              <!-- 快捷键提示（预留） -->
               <!-- 数字/文本角标 -->
-              <span v-if="item.badge !== undefined && item.badge !== '' && item.badge !== 0" class="menu-item-badge">{{ item.badge }}</span>
+              <span
+                v-if="entry.item.badge !== undefined && entry.item.badge !== '' && entry.item.badge !== 0"
+                class="menu-item-badge"
+              >{{ entry.item.badge }}</span>
               <!-- 子菜单指示箭头 -->
               <span
-                v-if="item.children && item.children.length > 0"
+                v-if="entry.item.children && entry.item.children.length > 0 && !entry.parentKey"
                 class="menu-item-arrow"
-                :class="{ 'is-expanded': expandedKeys.has(item.key) }"
-              ><Icon name="chevron-right" :size="12" /></span>
-            </button>
-
-            <!-- inline 模式：展开子项在原位置下方 -->
-            <template v-if="subMenuMode === 'inline' && expandedKeys.has(item.key) && item.children">
-              <button
-                v-for="child in item.children"
-                :key="child.key"
-                type="button"
-                class="menu-item menu-item--child"
-                :class="{
-                  'is-disabled': child.disabled,
-                  'is-selected': child.selected,
-                  'is-danger': child.danger,
-                  'is-divided': child.divided,
-                }"
-                :disabled="child.disabled"
-                @click="onItemClick(child)"
+                :class="{ 'is-expanded': expandedKeys.has(entry.item.key) }"
               >
-                <span v-if="child.selected || !hideCheckWhenUnselected" class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
-                <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="18" /></span>
-                <span class="menu-item-label">{{ child.label }}</span>
-              </button>
-            </template>
+                <Icon name="chevron-right" :size="12" />
+              </span>
+            </button>
           </template>
         </div>
 
@@ -529,28 +593,39 @@ export function useContextMenu(): {
               v-if="subMenuMode === 'overlay' && hoverKey"
               class="menu menu--sub"
               :style="subPanelStyle"
+              @mouseenter="onSubPanelEnter"
               @mouseleave="onSubPanelLeave"
               @click="onPanelClick"
             >
               <div class="menu-list">
-                <button
-                  v-for="child in items.find((i) => i.key === hoverKey)?.children ?? []"
-                  :key="child.key"
-                  type="button"
-                  class="menu-item"
-                  :class="{
-                    'is-disabled': child.disabled,
-                    'is-selected': child.selected,
-                    'is-danger': child.danger,
-                    'is-divided': child.divided,
-                  }"
-                  :disabled="child.disabled"
-                  @click="onItemClick(child)"
-                >
-                  <span v-if="child.selected || !hideCheckWhenUnselected" class="menu-item-check"><Icon v-if="child.selected" name="check-builtin" :size="16" /></span>
-                  <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="18" /></span>
-                  <span class="menu-item-label">{{ child.label }}</span>
-                </button>
+                <template v-for="(child, cidx) in items.find((i) => i.key === hoverKey)?.children ?? []" :key="child.key">
+                  <div
+                    v-if="child.divided && cidx > 0"
+                    class="menu-divider"
+                  ></div>
+                  <button
+                    type="button"
+                    class="menu-item"
+                    :class="{
+                      'is-disabled': child.disabled,
+                      'is-selected': child.selected,
+                      'is-danger': child.danger,
+                    }"
+                    :disabled="child.disabled"
+                    @click="onItemClick(child)"
+                    @mouseenter="onItemEnter(child, $event)"
+                  >
+                    <span class="menu-item-indicator">
+                      <span v-if="child.selected" class="menu-item-dot"></span>
+                    </span>
+                    <span v-if="child.icon" class="menu-item-icon"><Icon :name="child.icon" :size="16" /></span>
+                    <span class="menu-item-label">{{ child.label }}</span>
+                    <span
+                      v-if="child.badge !== undefined && child.badge !== '' && child.badge !== 0"
+                      class="menu-item-badge"
+                    >{{ child.badge }}</span>
+                  </button>
+                </template>
               </div>
             </div>
           </Transition>
@@ -559,3 +634,341 @@ export function useContextMenu(): {
     </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+/* ============================================================
+ * Menu 菜单组件样式
+ * 现代玻璃质感设计风格
+ * 参考 macOS / HarmonyOS NEXT 设计语言
+ * ============================================================ */
+
+/* ---------- 浮层面板 ---------- */
+.menu {
+  position: absolute;
+  z-index: var(--z-menu);
+  min-width: 160px;
+  max-width: 320px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--card-2) 85%, transparent);
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 80%, transparent);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--border-strong) 30%, transparent),
+    0 8px 32px rgba(0, 0, 0, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  transform-origin: var(--menu-origin, top center);
+}
+
+[data-theme='light'] .menu {
+  background: color-mix(in srgb, var(--card-2) 92%, transparent);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--border-strong) 20%, transparent),
+    0 8px 32px rgba(0, 0, 0, 0.08),
+    0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.menu--sub {
+  z-index: calc(var(--z-menu) + 1);
+}
+
+.menu--with-title {
+  padding-top: 0;
+}
+
+/* ---------- 标题栏 ---------- */
+.menu-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.menu-header-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  user-select: none;
+}
+
+/* ---------- 列表容器 ---------- */
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 0;
+}
+
+.menu-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.menu-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.menu-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 25%, transparent);
+  border-radius: 2px;
+}
+
+.menu-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+}
+
+/* ---------- 分隔线 ---------- */
+.menu-divider {
+  height: 1px;
+  margin: 3px 8px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--border-strong) 60%, transparent) 20%,
+    color-mix(in srgb, var(--border-strong) 60%, transparent) 80%,
+    transparent
+  );
+  flex-shrink: 0;
+}
+
+/* ---------- 菜单项 ---------- */
+.menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  border-radius: 6px;
+  transition:
+    background 0.12s ease,
+    transform 0.1s ease;
+  user-select: none;
+}
+
+/* 子项缩进 */
+.menu-item.is-child {
+  font-size: 12.5px;
+}
+
+/* hover 状态 */
+.menu-item:not(.is-disabled):hover,
+.menu-item.is-hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+[data-theme='light'] .menu-item:not(.is-disabled):hover,
+[data-theme='light'] .menu-item.is-hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* 键盘焦点状态 */
+.menu-item.is-focused:not(.is-disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+/* 选中状态：左侧圆点指示器 */
+.menu-item.is-selected {
+  color: var(--primary);
+}
+
+/* 危险项 */
+.menu-item.is-danger {
+  color: var(--danger);
+}
+
+.menu-item.is-danger:not(.is-disabled):hover,
+.menu-item.is-danger.is-hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* 禁用 */
+.menu-item.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* active 按下效果 */
+.menu-item:not(.is-disabled):active {
+  transform: scale(0.97);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+/* ---------- 选中指示器 ---------- */
+.menu-item-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.menu-item-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: menu-dot-enter 0.2s cubic-bezier(0.3, 0, 0, 1);
+}
+
+@keyframes menu-dot-enter {
+    from {
+      transform: scale(0.5);
+      opacity: 0;
+    }
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+
+.menu-item.is-danger .menu-item-dot {
+  background: var(--danger);
+}
+
+/* ---------- 图标 ---------- */
+.menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: color 0.12s ease;
+}
+
+.menu-item:not(.is-disabled):hover .menu-item-icon,
+.menu-item.is-hover .menu-item-icon {
+  color: var(--text);
+}
+
+.menu-item.is-selected .menu-item-icon {
+  color: var(--primary);
+}
+
+.menu-item.is-danger .menu-item-icon {
+  color: var(--danger);
+}
+
+/* ---------- 文本 ---------- */
+.menu-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 角标 ---------- */
+.menu-item-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--primary) 90%, white);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  flex-shrink: 0;
+  letter-spacing: 0.2px;
+}
+
+.menu-item.is-danger .menu-item-badge {
+  background: var(--danger);
+}
+
+/* ---------- 子菜单指示箭头 ---------- */
+.menu-item-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.menu-item-arrow.is-expanded {
+  transform: rotate(90deg);
+  color: var(--primary);
+}
+
+.menu-item:not(.is-disabled):hover .menu-item-arrow {
+  color: var(--text);
+}
+
+/* ---------- 指向箭头（指向触发元素） ---------- */
+.menu-arrow {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: color-mix(in srgb, var(--card-2) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 60%, transparent);
+  z-index: -1;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+.menu-arrow--top {
+  bottom: -6px;
+  transform: rotate(225deg);
+  border-top: none;
+  border-left: none;
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+
+.menu-arrow--bottom {
+  top: -6px;
+  transform: rotate(45deg);
+  border-bottom: none;
+  border-right: none;
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.menu-arrow--left {
+  right: -6px;
+  transform: rotate(135deg);
+  border-top: none;
+  border-right: none;
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.menu-arrow--right {
+  left: -6px;
+  transform: rotate(315deg);
+  border-bottom: none;
+  border-left: none;
+  clip-path: polygon(0 0, 0 100%, 100% 100%);
+}
+</style>

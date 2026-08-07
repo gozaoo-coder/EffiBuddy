@@ -536,7 +536,8 @@ onMounted(() => {
 /* 列表项过渡 */
 .todo-enter-active,
 .todo-leave-active {
-  transition: all var(--duration-base) var(--ease-standard);
+    transition: opacity var(--duration-base) var(--ease-standard),
+      transform var(--duration-base) var(--ease-standard);
 }
 
 .todo-enter-from,

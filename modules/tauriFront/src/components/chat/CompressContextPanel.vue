@@ -376,7 +376,7 @@ if (compressionSettings.value == null) void loadCompressionSettings()
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--success) 8%, var(--bg-2));
   border: 1px solid color-mix(in srgb, var(--success) 25%, var(--border));
-  transition: all 0.3s ease;
+    transition: border-color 0.3s ease, background-color 0.3s ease;
 }
 .ccp-compare.is-done {
   animation: ccp-saved-pop 0.4s ease;

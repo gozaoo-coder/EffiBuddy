@@ -225,6 +225,8 @@ function onTabLeave(el: Element, done: () => void) {
         return 'clock'
       case 'widget':
         return 'layout'
+      case 'todo':
+        return 'check-square'
     }
   }
 
@@ -528,8 +530,8 @@ onBeforeUnmount(() => {
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
-  transition: background var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
+    transition: background-color 0.2s var(--ease-out),
+      color 0.2s var(--ease-out);
 }
 
 .tab-item:hover {

@@ -306,8 +306,22 @@ const { onCopy, onBranch, onSaveTemp, onRollback, onUndoBefore } = versioning
 }
 
 /* 消息气泡定位:作为 hover 操作栏的定位基准 */
+/* 消息气泡定位:作为 hover 操作栏的定位基准 */
 .msg-bubble {
   position: relative;
+  /* 新消息入场:轻量 fadeInUp,一次性动画不残留 transform,不影响已渲染列表 */
+  animation: msg-bubble-in 300ms var(--ease-out);
+}
+
+@keyframes msg-bubble-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-bubble {
+    animation: none;
+  }
 }
 
 /* ---------- 会话版本操作 hover 操作栏 ---------- */

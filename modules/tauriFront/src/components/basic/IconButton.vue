@@ -4,7 +4,7 @@
  * 专门用于只放图标的场景，正方形（宽=高=size 对应高度）
  * 支持 emoji 或字符作为图标内容
  *
- * 微交互：press/release 的 scale 动画由 anime.js v4 驱动（按下到 0.92），
+ * 微交互：press/release 的 scale 动画由 anime.js v4 驱动（按下到 0.97），
  * 替代 CSS :active。hover 颜色过渡仍由 CSS 负责。
  */
 import { computed, ref } from 'vue'
@@ -64,41 +64,41 @@ function onClick(ev: MouseEvent) {
 const btnEl = ref<HTMLButtonElement | null>(null)
 const pressed = ref(false)
 
-function onPointerDown() {
-  if (props.disabled || !btnEl.value) return
-  pressed.value = true
-  animate(btnEl.value, {
-    scale: [1, 0.92],
-    duration: 120,
-    ease: 'out(3)',
-  })
-}
+  function onPointerDown() {
+    if (props.disabled || !btnEl.value) return
+    pressed.value = true
+    animate(btnEl.value, {
+      scale: [1, 0.97],
+      duration: 160,
+      ease: 'out(3)',
+    })
+  }
 
-function onPointerUp() {
-  if (!pressed.value || !btnEl.value) return
-  pressed.value = false
-  animate(btnEl.value, {
-    scale: [0.92, 1],
-    duration: 150,
-    ease: 'out(3)',
-    onComplete: () => {
-      if (btnEl.value) btnEl.value.style.transform = ''
-    },
-  })
-}
+  function onPointerUp() {
+    if (!pressed.value || !btnEl.value) return
+    pressed.value = false
+    animate(btnEl.value, {
+      scale: [0.97, 1],
+      duration: 150,
+      ease: 'out(3)',
+      onComplete: () => {
+        if (btnEl.value) btnEl.value.style.transform = ''
+      },
+    })
+  }
 
-function onPointerLeave() {
-  if (!pressed.value || !btnEl.value) return
-  pressed.value = false
-  animate(btnEl.value, {
-    scale: [0.92, 1],
-    duration: 150,
-    ease: 'out(3)',
-    onComplete: () => {
-      if (btnEl.value) btnEl.value.style.transform = ''
-    },
-  })
-}
+  function onPointerLeave() {
+    if (!pressed.value || !btnEl.value) return
+    pressed.value = false
+    animate(btnEl.value, {
+      scale: [0.97, 1],
+      duration: 150,
+      ease: 'out(3)',
+      onComplete: () => {
+        if (btnEl.value) btnEl.value.style.transform = ''
+      },
+    })
+  }
 </script>
 
 <template>

@@ -319,23 +319,23 @@ function onQuestionLeave(el: Element, done: () => void) {
   word-break: break-word;
 }
 
-/* 选中态勾选图标:从 0.5 缩放到 1,带弹性曲线 */
-.option-card-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #fff;
-  opacity: 0;
-  transform: scale(0.5);
-  transition:
-    opacity 0.2s ease,
-    transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
+/* 选中态勾选图标:从 0.95 缩放到 1,配合 opacity 淡入(ease-out, ≤250ms) */
+  .option-card-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+    opacity: 0;
+    transform: scale(0.95);
+    transition:
+      opacity 0.2s ease,
+      transform 0.24s var(--ease-out);
+  }
 
 .option-card--selected .option-card-check {
   opacity: 1;

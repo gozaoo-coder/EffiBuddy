@@ -1020,7 +1020,9 @@ function cancel() {
   font-weight: 500;
   white-space: nowrap;
   font-family: inherit;
-  transition: all var(--duration-fast) var(--ease-standard);
+    transition: border-color var(--duration-fast) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard),
+      opacity var(--duration-fast) var(--ease-standard);
 }
 
 .pmf-fetch-btn:hover:not(:disabled) {

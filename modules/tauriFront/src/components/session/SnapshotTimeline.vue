@@ -343,7 +343,7 @@ function fmtBytes(n: number): string {
   background: var(--bg);
   color: var(--muted);
   cursor: pointer;
-  transition: all 0.15s ease;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
 }
 
 .st-op:disabled {

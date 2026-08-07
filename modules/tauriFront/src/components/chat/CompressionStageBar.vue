@@ -79,7 +79,7 @@ const { compressStage, compressStageMsg, compressElapsedMs, compressProgress, co
   background: var(--card-2);
   color: var(--muted);
   border: 1px solid var(--border);
-  transition: all 0.2s ease;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
 .compress-stage-badge.stage-active {

@@ -86,7 +86,7 @@ export interface UseLayoutReturn {
  *   duration: 280,
  *   ease: 'outQuad',
  *   enterFrom: { opacity: 0, transform: 'translateY(20px) scale(.8)' },
- *   leaveTo: { opacity: 0, transform: 'scale(0)' },
+ *   leaveTo: { opacity: 0, transform: 'scale(0.95)' },
  * })
  * // 切换 display 模式
  * async function toggleGrid() {
