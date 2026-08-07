@@ -167,6 +167,15 @@ pub(crate) async fn send_message(
     // 增量更新 memory index（幂等，已存在则跳过）
     memory.add(&conversation_id, user_msg_for_memory).await;
 
+    // 首次新对话自动命名：刚 append 首条用户消息且会话未命名 → 后台为它生成一次标题
+    crate::commands::maybe_auto_title_first_message(
+        store.clone(),
+        Arc::clone(&state.config),
+        app_handle.clone(),
+        conversation_id.clone(),
+        conv.title.is_none() && conv.messages.len() == 1,
+    );
+
     // 调用 agent
     let history = conv.history().to_vec();
     let reply = agent.chat(&history).await.map_err(|e| e.to_string())?;
@@ -242,6 +251,15 @@ pub(crate) async fn send_message_stream(
         .map_err(|e| e.to_string())?;
     // 增量更新 memory index
     memory.add(&conversation_id, user_msg_for_memory).await;
+
+    // 首次新对话自动命名：刚 append 首条用户消息且会话未命名 → 后台为它生成一次标题
+    crate::commands::maybe_auto_title_first_message(
+        store.clone(),
+        Arc::clone(&state.config),
+        handle.clone(),
+        conversation_id.clone(),
+        conv.title.is_none() && conv.messages.len() == 1,
+    );
 
     // 同步会话级工作区到 agent 句柄：read_file/list_files/shell 据此解析相对路径
     // 优先级：会话级 working_dir > 技能级（enable_skill 工具写入会话） > None

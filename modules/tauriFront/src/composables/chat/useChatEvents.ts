@@ -18,6 +18,7 @@ import type {
   AgentUsagePayload,
   SubAgentEventPayload,
   CompressStatusPayload,
+  ConversationTitlePayload,
   CompressTokenPayload,
   CompressDonePayload,
   CompressErrorPayload,
@@ -113,6 +114,15 @@ export function useChatEvents(
         // 用 API 真实 prompt_tokens 更新"上下文使用"仪表盘
         // （天然包含思维链、系统提示、记忆等整段 prompt，而非字符估算）
         core.setContextUsedTokens(p.input_tokens)
+      }),
+    )
+
+    // 会话标题更新(工具 set_title / 首次消息自动命名):同步当前会话顶栏标题
+    unlistens.push(
+      await listen<ConversationTitlePayload>('conversation-title-updated', (e) => {
+        const p = e.payload
+        if (core.activeId.value !== p.conversation_id) return
+        if (p.title && core.title.value !== p.title) core.title.value = p.title
       }),
     )
 

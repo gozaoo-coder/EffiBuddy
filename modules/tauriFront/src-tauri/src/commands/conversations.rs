@@ -1,8 +1,11 @@
 //! 会话管理命令：列表、读取、创建、删除、重命名、置顶、搜索、自动归类。
 
+use std::sync::Arc;
+
 use effisuite_agent::{build_auto_classify_prompt, call_auto_classify_agent, AutoClassifyResult};
-use effisuite_core::{Conversation, ConversationMeta, SearchHit};
+use effisuite_core::{AgentConfig, Conversation, ConversationMeta, ConversationStore, SearchHit};
 use tauri::Emitter;
+use tokio::sync::RwLock;
 
 use crate::state::{now_ms, AppState};
 
@@ -13,6 +16,107 @@ use crate::state::{now_ms, AppState};
 struct TitleUpdatedPayload<'a> {
     conversation_id: &'a str,
     title: &'a str,
+}
+
+/// 自动归类核心逻辑：加载会话 → 校验配置 → 调用归类 agent → 落盘标题 → emit 事件。
+///
+/// 从 `auto_classify_conversation` 命令抽取，供命令层手动归类与 `send_message_stream`
+/// 首次消息后台命名复用，避免在聊天命令里重复实现一遍归类流程。
+///
+/// - `store` / `config`：会话存储与配置句柄（Arc 克隆廉价）
+/// - `existing_folders`：已有文件夹列表（首次消息命名传空，仅命名不改文件夹）
+pub(crate) async fn run_auto_classify(
+    store: &ConversationStore,
+    config: &Arc<RwLock<Arc<AgentConfig>>>,
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    existing_folders: &[String],
+) -> Result<AutoClassifyResult, String> {
+    // 1. 加载会话
+    let conv = store
+        .load(conversation_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("会话 {conversation_id} 不存在"))?;
+
+    if conv.messages.is_empty() {
+        return Err("会话无消息，无法归类".to_string());
+    }
+
+    // 2. 读取配置快照（Arc clone 廉价，不再深拷贝 AgentConfig）
+    let config = config.read().await.clone();
+    if !config.is_rig_ready() {
+        return Err("未配置 api_key 或 backend 非 openai，无法调用归类 agent".to_string());
+    }
+
+    // 3. 构造归类 prompt
+    let prompt = build_auto_classify_prompt(&conv.messages, existing_folders);
+
+    // 4. 调用归类 agent（优先使用 title_model_id，回退到 active_model_id）
+    let (api_key, base_url, model_name) = config
+        .resolve_title_model()
+        .ok_or_else(|| "未配置命名模型".to_string())?;
+    let result = call_auto_classify_agent(
+        &api_key,
+        &base_url,
+        &model_name,
+        &prompt,
+        existing_folders,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 5. 持久化标题
+    store
+        .rename(conversation_id, result.title.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 6. emit 标题更新事件（与 set_title 工具的事件名一致）
+    let _ = app_handle.emit(
+        "conversation-title-updated",
+        &TitleUpdatedPayload {
+            conversation_id,
+            title: &result.title,
+        },
+    );
+
+    tracing::info!(
+        conversation_id = %conversation_id,
+        title = %result.title,
+        folder = ?result.folder,
+        "自动归类完成"
+    );
+
+    Ok(result)
+}
+
+/// 首次消息自动命名：新对话发出第一条 prompt 后，后台为它生成一次标题。
+///
+/// 触发条件：`conv.title.is_none()` 且 `conv.messages.len() == 1`（刚 append 的首条用户消息）。
+/// 满足条件才 spawn 后台任务，且只做命名（existing_folders 传空，不改文件夹归类）。
+/// 命名失败仅记录 warn，不阻塞 / 不回抛给发送流。
+pub(crate) fn maybe_auto_title_first_message(
+    store: Arc<ConversationStore>,
+    config: Arc<RwLock<Arc<AgentConfig>>>,
+    app_handle: tauri::AppHandle,
+    conversation_id: String,
+    is_first_message: bool,
+) {
+    if !is_first_message {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = run_auto_classify(&store, &config, &app_handle, &conversation_id, &[])
+            .await
+        {
+            tracing::warn!(
+                conversation_id = %conversation_id,
+                error = %e,
+                "首次消息自动命名失败"
+            );
+        }
+    });
 }
 
 #[tauri::command]
@@ -151,17 +255,9 @@ pub(crate) async fn search_conversations(
 
 /// 自动归类会话：调用 LLM 生成标题并建议归入哪个已有文件夹
 ///
-/// 流程：
-/// 1. 加载会话（不存在则返回 Err）
-/// 2. 读取配置快照（锁临界区极短：仅 clone），校验 is_rig_ready
-/// 3. 构造归类 prompt（最近 N 条消息 + 已有文件夹列表）
-/// 4. 调用归类 agent（复用主 agent 的 api_key/base_url/model_name + 归类专用 preamble）
-/// 5. 持久化标题到 store（store.rename）
-/// 6. emit conversation-title-updated 事件，前端立即刷新列表
-/// 7. 返回 AutoClassifyResult（title + folder），前端据此更新文件夹映射
-///
-/// 文件夹映射存储在前端 localStorage，后端不感知；folder 字段为已有文件夹名或 None。
-/// 若 LLM 建议的文件夹不在已有列表中，parse 阶段已降级为 None。
+/// 委托给 [`run_auto_classify`] 核心逻辑。文件夹映射存储在前端 localStorage，
+/// 后端不感知；folder 字段为已有文件夹名或 None（若 LLM 建议不在已有列表中，
+/// parse 阶段已降级为 None）。
 #[tauri::command]
 pub(crate) async fn auto_classify_conversation(
     state: tauri::State<'_, AppState>,
@@ -169,63 +265,12 @@ pub(crate) async fn auto_classify_conversation(
     conversation_id: String,
     existing_folders: Vec<String>,
 ) -> Result<AutoClassifyResult, String> {
-    // 1. 加载会话
-    let conv = state
-        .store
-        .load(&conversation_id)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("会话 {conversation_id} 不存在"))?;
-
-    if conv.messages.is_empty() {
-        return Err("会话无消息，无法归类".to_string());
-    }
-
-    // 2. 读取配置快照（Arc clone 廉价，不再深拷贝 AgentConfig）
-    let config = state.config.read().await.clone();
-    if !config.is_rig_ready() {
-        return Err("未配置 api_key 或 backend 非 openai，无法调用归类 agent".to_string());
-    }
-
-    // 3. 构造归类 prompt
-    let prompt = build_auto_classify_prompt(&conv.messages, &existing_folders);
-
-    // 4. 调用归类 agent（优先使用 title_model_id，回退到 active_model_id）
-    let (api_key, base_url, model_name) = config
-        .resolve_title_model()
-        .ok_or_else(|| "未配置命名模型".to_string())?;
-    let result = call_auto_classify_agent(
-        &api_key,
-        &base_url,
-        &model_name,
-        &prompt,
+    run_auto_classify(
+        &state.store,
+        &state.config,
+        &app_handle,
+        &conversation_id,
         &existing_folders,
     )
     .await
-    .map_err(|e| e.to_string())?;
-
-    // 5. 持久化标题
-    state
-        .store
-        .rename(&conversation_id, result.title.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // 6. emit 标题更新事件（与 set_title 工具的事件名一致）
-    let _ = app_handle.emit(
-        "conversation-title-updated",
-        &TitleUpdatedPayload {
-            conversation_id: &conversation_id,
-            title: &result.title,
-        },
-    );
-
-    tracing::info!(
-        conversation_id = %conversation_id,
-        title = %result.title,
-        folder = ?result.folder,
-        "自动归类完成"
-    );
-
-    Ok(result)
 }
