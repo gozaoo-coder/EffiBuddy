@@ -19,7 +19,9 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import PluginPanel from './components/PluginPanel.vue'
 import ClawHubPanel from './components/ClawHubPanel.vue'
-import SchedulePanel from './components/SchedulePanel.vue'
+import AutomationPanel from './components/AutomationPanel.vue'
+import SubAgentHistoryPanel from './components/SubAgentHistoryPanel.vue'
+
 import type { ModelSettingsView } from './components/model-settings/ModelSettingsRail.vue'
 import ModelSettingsContent from './components/model-settings/ModelSettingsContent.vue'
 import { ToastHost, SnackbarHost, BindSheet, useToast } from './components/basic'
@@ -31,6 +33,7 @@ import { useAgentPool } from './composables/useAgentPool'
 import { useAnimeTransition } from './composables/useAnimeTransition'
 import { usePluginContributions } from './composables/usePluginContributions'
 import { useAppActions } from './composables/appActions'
+import { useSubAgentStore } from './composables/useSubAgentStore'
 import type { ConversationTitlePayload, RailView } from './types'
 
 const agentBackend = ref('')
@@ -45,6 +48,8 @@ const scheduledTasksOpen = ref(false)
 const skillPanelOpen = ref(false)
 const pluginPanelOpen = ref(false)
 const clawhubPanelOpen = ref(false)
+const subAgentHistoryOpen = ref(false)
+
 const { toast } = useToast()
 
 // ============= 模型配置模式 =============
@@ -95,6 +100,7 @@ const activeView = computed<RailView | ''>(() => {
   if (scheduledTasksOpen.value) return 'automation'
   if (skillPanelOpen.value) return 'skills'
   if (pluginPanelOpen.value) return 'plugins'
+  if (activeTab.value?.kind === 'todo') return 'todo'
   if (activeTab.value?.kind === 'widget') return 'widget'
   return 'chat'
 })
@@ -158,6 +164,10 @@ function onRailSelect(view: RailView) {
     case 'plugins':
       pluginPanelOpen.value = !pluginPanelOpen.value
       break
+    case 'todo':
+      closeAllPanels()
+      openTodoTab()
+      break
   }
 }
 
@@ -206,13 +216,22 @@ onMounted(async () => {
     skillPanelOpen.value = true
   })
   registerAction('open-asr', () => openAsrTab('asr-stream'))
-  registerAction('open-todo', () => openPluginPage('effisuite/user-todo'))
+  registerAction('open-todo', () => {
+    openTodoTab()
+  })
   registerAction('open-automation', () => {
     scheduledTasksOpen.value = true
   })
 
   // 加载插件声明式贡献（左栏按钮 / 页面 / 命令）
   await installPluginContributions()
+
+  // 启动加载子 agent 持久化会话（独立落盘 → 重启后仍可回看/继续）
+  try {
+    await useSubAgentStore().loadPersisted()
+  } catch (e) {
+    console.warn('loadPersisted failed', e)
+  }
 
   // 监听 set_title 工具成功更新标题事件：刷新左栏二列表 + 同步页签标题
   unlistens.push(
@@ -297,6 +316,24 @@ function openWidgetTab() {
   })
 }
 
+// 从功能菜单打开待办页签（单例：__todo__ 已存在则仅激活）
+const TODO_TAB_ID = '__todo__'
+function openTodoTab() {
+  const found = tabs.value.find((t) => t.id === TODO_TAB_ID)
+  if (found) {
+    activate(found.id)
+    return
+  }
+  openTab({
+    id: TODO_TAB_ID,
+    kind: 'todo',
+    title: '我的待办',
+    icon: 'check-square',
+    closable: true,
+    instanceKey: '',
+  })
+}
+
 // 从 IconRail 打开 P2P 设备面板（同时刷新数据）
 function openP2pPanel() {
   p2pPanelOpen.value = true
@@ -328,6 +365,11 @@ function openClawHub() {
   skillPanelOpen.value = false
   pluginPanelOpen.value = false
   clawhubPanelOpen.value = true
+}
+
+// 打开子 agent 会话历史面板（独立落盘历史入口）
+function openSubAgentHistory() {
+  subAgentHistoryOpen.value = true
 }
 
 // 打开插件页面页签（单例：同 id 已存在则仅激活）
@@ -381,6 +423,7 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       @open-clawhub="openClawHub"
       @open-p2p="openP2pPanel"
       @open-settings="openSettingsPanel"
+      @open-subagent-history="openSubAgentHistory"
       @open-asr="openAsrTab"
     />
 
@@ -446,9 +489,15 @@ const { onEnter: onMainEnter, onLeave: onMainLeave } = useAnimeTransition({
       @close="clawhubPanelOpen = false"
     />
 
-    <SchedulePanel
+    <AutomationPanel
       :open="scheduledTasksOpen"
       @close="scheduledTasksOpen = false"
+    />
+
+    <!-- 子 agent 会话历史面板（独立落盘历史入口） -->
+    <SubAgentHistoryPanel
+      :open="subAgentHistoryOpen"
+      @close="subAgentHistoryOpen = false"
     />
 
     <!-- 全局反馈宿主：Toast / Snackbar -->

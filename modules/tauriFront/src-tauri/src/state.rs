@@ -10,8 +10,9 @@ use effisuite_agent::{AsrService, ChatAgent, ImageGenConfig, ModelManagerHandle,
 use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
 use effisuite_core::{
-    AgentConfig, CompressionStore, ConversationStore, EventBus, FavoriteWorkspaceStore, MemoryIndex,
-    PinnedMemoryStore, PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord,
+    AgentConfig, AgentDefStore, AgentFlowStore, AgentTeamStore, CompressionStore,
+    ConversationStore, EventBus, FavoriteWorkspaceStore, MemoryIndex, PinnedMemoryStore,
+    PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore, SubAgentRecord, SubAgentStore,
 };
 use effisuite_p2p::P2pManager;
 use tokio::sync::RwLock;
@@ -29,6 +30,12 @@ pub struct AppState {
     pub skill_index: Arc<effisuite_core::SkillIndex>,
     /// 定时任务存储（PathBuf+Arc，4 usize）
     pub schedule_store: ScheduledTaskStore,
+    /// 自定义智能体（AgentDef）存储（PathBuf+Arc，4 usize）
+    pub agent_def_store: AgentDefStore,
+    /// 智能体群组（Agent Team）存储（PathBuf+Arc，4 usize）
+    pub agent_team_store: AgentTeamStore,
+    /// 智能体流程（Agent Flow）存储（PathBuf+Arc，4 usize）
+    pub agent_flow_store: AgentFlowStore,
     /// 已安装插件存储（PathBuf+Arc，4 usize）
     pub plugin_store: PluginStore,
     /// 插件配置存储（PathBuf+Arc，4 usize），按插件命名空间隔离，
@@ -83,6 +90,9 @@ pub struct AppState {
     pub model_manager: Arc<ModelManagerHandle>,
     /// 子 agent 管理器：注入 agent，sub_agent 工具据此召唤子 agent；事件经回调 emit 到前端
     pub sub_agents: Arc<SubAgentManager>,
+    /// 子 agent 会话持久化存储：实时增量落盘，重启可恢复续聊/历史回看。
+    /// 与子 agent 管理器共享同一份 Arc；命令层据此提供 list/get/delete。
+    pub sub_agent_store: SubAgentStore,
     /// 子 agent 事件累积缓冲：key = 主会话 conversation_id，value = 该会话当前
     /// 流式回复中子 agent 的过程记录（emitter 实时累积，流结束时持久化到消息）。
     pub sub_agent_records:

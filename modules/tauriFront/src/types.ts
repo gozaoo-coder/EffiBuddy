@@ -591,7 +591,7 @@ export type ProcessSegment =
 
 // 子 agent 事件 payload（sub-agent-event 事件）
 // 后端 SubAgentManager 在子 agent 执行全流程中实时推送：
-// started → token / tool_call / tool_result / attachment → done | error
+// started → reasoning / token / tool_call / tool_result / attachment → done | error
 export interface SubAgentEventPayload {
   conversation_id: string
   session_id: string
@@ -599,14 +599,56 @@ export interface SubAgentEventPayload {
   model: string
   /** 嵌套深度：1 = 主 agent 直接召唤，2 = 子 agent 再召唤 */
   depth: number
-  kind: 'started' | 'token' | 'tool_call' | 'tool_result' | 'attachment' | 'done' | 'error'
-  /** token 增量 / 工具结果 / 错误信息 / 附件 JSON（ImageGenOutput） */
+  kind: 'started' | 'reasoning' | 'token' | 'tool_call' | 'tool_result' | 'attachment' | 'done' | 'error'
+  /** token 增量 / 工具结果 / 错误信息 / 附件 JSON（ImageGenOutput）*/
   content: string
   /** 工具名（tool_call / tool_result 时有效） */
   tool_name: string
   /** 工具参数 JSON（tool_call 时有效） */
   arguments: string
   is_error: boolean
+}
+
+// 已落盘子 agent 会话的轻量元信息（不含消息体），供历史列表展示
+// 与后端 SubAgentSessionMeta 对齐：session_id / name / model / depth / status /
+// task / created_at / updated_at / message_count。
+export interface SubAgentSessionMeta {
+  session_id: string
+  name: string
+  model: string
+  depth: number
+  status: string
+  task: string
+  created_at: number
+  updated_at: number
+  message_count: number
+}
+
+// 已落盘子 agent 会话完整文档（独立持久化，可恢复续聊）
+// 与后端 SubAgentSessionDoc 对齐，供前端 hydrate 渲染历史会话。
+// 注意：落盘文档的工具记录 result 为非空 string（不同于运行期 ToolCallRecord 的 string|null）。
+export interface SubAgentSessionDoc {
+  session_id: string
+  name: string
+  model: string
+  depth: number
+  conversation_id: string
+  status: string
+  task: string
+  text: string
+  tool_calls: {
+    call_id: string
+    tool_name: string
+    arguments: string
+    result: string
+    is_error: boolean
+  }[]
+  images: { path: string; name: string }[]
+  error: string
+  finished_at: number | null
+  messages: { id: string; role: string; content: string; timestamp: number }[]
+  created_at: number
+  updated_at: number
 }
 
 // 子 agent 卡片记录（前端按 session_id 聚合事件后的结构）
@@ -618,8 +660,12 @@ export interface SubAgentRecord {
   status: 'running' | 'done' | 'error'
   /** 主 agent 交给子 agent 的任务 */
   task: string
+  /** 子 agent 推理全文（流式累积） */
+  reasoning: string
   /** 子 agent 回复全文（流式累积） */
   text: string
+  /** 推理过程段：思考文字与工具调用按到达顺序穿插，与主 agent 相同渲染方式 */
+  segments: ProcessSegment[]
   /** 子 agent 内部工具调用记录 */
   toolCalls: ToolCallRecord[]
   /** 子 agent 生成的图片附件（path + name） */
@@ -628,6 +674,8 @@ export interface SubAgentRecord {
   error: string
   /** 完成时间 */
   finishedAt: number | null
+  /** 是否仍在思考中（推理过程未结束） */
+  isThinking: boolean
 }
 
 // 后台命令会话（shell_session_* 工具 + 前端底栏便签）
@@ -711,6 +759,95 @@ export interface ScheduledTaskResult {
   conversation_id: string
   content: string
   success: boolean
+}
+
+// =========================================================
+// 自定义智能体 / 智能体群组 / 智能体流程（自动化三子类型）
+// =========================================================
+
+// 自定义智能体（AgentDef）
+export interface AgentDef {
+  id: string
+  name: string
+  role: string
+  system_prompt: string
+  model_id?: string | null
+  avatar: string
+  enable_tools: boolean
+  created_at: number
+  updated_at: number
+}
+
+// 智能体群组成员类型
+export type TeamMemberKind = 'user' | 'agent' | 'main_agent'
+// 智能体群组成员角色
+export type TeamRole = 'owner' | 'admin' | 'member'
+// 智能体群组消息类型
+export type TeamMessageKind = 'text' | 'system' | 'task'
+
+export interface TeamMember {
+  id: string
+  name: string
+  avatar: string
+  kind: TeamMemberKind
+  role: TeamRole
+  agent_def_id?: string | null
+  joined_at: number
+}
+
+export interface TeamMessage {
+  id: string
+  sender_id: string
+  sender_name: string
+  sender_avatar: string
+  kind: TeamMessageKind
+  content: string
+  mentions: string[]
+  task_handled: boolean
+  reply?: string | null
+  created_at: number
+}
+
+export interface AgentTeam {
+  id: string
+  name: string
+  description: string
+  owner_id: string
+  members: TeamMember[]
+  messages: TeamMessage[]
+  created_at: number
+  updated_at: number
+}
+
+// 智能体流程（ComfyUI 风格节点）
+// FlowDataType: text | file | image | audio | object | number
+export type FlowDataType = 'text' | 'file' | 'image' | 'audio' | 'object' | 'number'
+
+export interface FlowNode {
+  id: string
+  node_type: string
+  label: string
+  x: number
+  y: number
+  params: Record<string, unknown>
+  input_type: FlowDataType
+  output_type: FlowDataType
+}
+
+export interface FlowEdge {
+  id: string
+  from: string
+  to: string
+}
+
+export interface AgentFlow {
+  id: string
+  name: string
+  description: string
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+  created_at: number
+  updated_at: number
 }
 
 // =========================================================
@@ -939,7 +1076,7 @@ export interface InstalledPlugin {
 // asr-* 页签 id = 业务 uuid
 // =========================================================
 
-  export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history' | 'sub-agent' | 'plugin' | 'widget'
+  export type TabKind = 'chat' | 'asr-stream' | 'asr-upload' | 'asr-history' | 'sub-agent' | 'plugin' | 'widget' | 'todo'
 
   export interface TabItem {
     /** 唯一 id（chat 用 conversation_id，asr-* 用 uuid） */
@@ -977,7 +1114,7 @@ export interface InstalledPlugin {
    * 功能菜单视图（左栏一重定义后的功能入口）
    * 由 TitleBar 左侧第一个按钮弹出的功能菜单（FeatureMenu）驱动。
    */
-  export type RailView = 'chat' | 'model-config' | 'automation' | 'skills' | 'plugins' | 'pool' | 'widget'
+  export type RailView = 'chat' | 'model-config' | 'automation' | 'skills' | 'plugins' | 'pool' | 'widget' | 'todo'
 // =========================================================
 // ASR 语音转写（与 core::asr::types + commands::asr 对齐）
 // 后端 serde 均为 snake_case（未启用 rename_all = "camelCase"）：
@@ -1160,6 +1297,25 @@ export interface TodoItem {
   summary?: string | null
   /** 父任务 id；null/缺省表示根任务，Some(id) 表示该 id 任务的子任务 */
   parent_id?: string | null
+  // ===== 新增高级字段 =====
+  /** 紧急程度: "urgent" | "not_urgent" */
+  urgency?: string | null
+  /** 截止日期（ISO 8601，如 "2026-08-15"） */
+  due_date?: string | null
+  /** 截止时间（ISO 8601，如 "14:30"） */
+  due_time?: string | null
+  /** 提前提醒分钟数 */
+  reminder_minutes_before?: number | null
+  /** 重复类型: "once" | "daily" | "cumulative" */
+  repeat_type?: string | null
+  /** 累计次数 */
+  repeat_count?: number | null
+  /** 打卡日期列表 */
+  check_in_dates?: string[] | null
+  /** 是否启用提醒 */
+  reminder_enabled?: boolean
+  /** 标签 */
+  tags?: string[] | null
 }
 
 /** 树形节点（前端由 TodoItem 列表还原） */
@@ -1169,6 +1325,25 @@ export interface TodoNode {
   priority: TodoPriority
   status: TodoStatus
   summary?: string | null
+  // ===== 新增高级字段 =====
+  /** 紧急程度: "urgent" | "not_urgent" */
+  urgency?: string | null
+  /** 截止日期（ISO 8601，如 "2026-08-15"） */
+  due_date?: string | null
+  /** 截止时间（ISO 8601，如 "14:30"） */
+  due_time?: string | null
+  /** 提前提醒分钟数 */
+  reminder_minutes_before?: number | null
+  /** 重复类型: "once" | "daily" | "cumulative" */
+  repeat_type?: string | null
+  /** 累计次数 */
+  repeat_count?: number | null
+  /** 打卡日期列表 */
+  check_in_dates?: string[] | null
+  /** 是否启用提醒 */
+  reminder_enabled?: boolean
+  /** 标签 */
+  tags?: string[] | null
   children: TodoNode[]
 }
 

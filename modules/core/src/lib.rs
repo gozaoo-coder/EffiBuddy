@@ -8,6 +8,9 @@
 //! ClawHub HTTP API 并解压安装包。把它放在 core 是为了让 tauriFront 命令层
 //! 直接复用，避免在 agent crate 中引入额外耦合。
 
+pub mod agent_def_store;
+pub mod agent_flow_store;
+pub mod agent_team_store;
 pub mod asr;
 pub mod clawhub;
 pub mod compression;
@@ -28,11 +31,17 @@ pub mod schedule_store;
 pub mod skill_index;
 pub mod skill_store;
 pub mod storage;
+pub mod sub_agent_store;
 pub mod tokens;
 pub mod versions;
 
 pub use asr::{
     AsrRecord, AsrSearchQuery, AsrSource, AsrStatus, AsrStore, AsrSummaryHit, AsrSummaryIndex,
+};
+pub use agent_def_store::{AgentDef, AgentDefStore};
+pub use agent_flow_store::{AgentFlow, AgentFlowStore, FlowDataType, FlowEdge, FlowNode};
+pub use agent_team_store::{
+    AgentTeam, AgentTeamStore, TeamMember, TeamMemberKind, TeamMessage, TeamMessageKind, TeamRole,
 };
 pub use clawhub::ClawHubClient;
 pub use compression::{
@@ -70,6 +79,7 @@ pub use schedule_store::ScheduledTaskStore;
 pub use skill_index::{SkillEntry, SkillHit, SkillIndex};
 pub use skill_store::SkillStore;
 pub use storage::{ConversationMeta, ConversationStore, SearchHit};
+pub use sub_agent_store::{SubAgentSessionDoc, SubAgentSessionMeta, SubAgentStore};
 pub use tokens::last_reported_input_tokens;
 pub use versions::{
     Commit, CommitKind, CommitSummary, RefKind, RefSummary, VersionList, VersionOpResult,

@@ -29,9 +29,10 @@ use effisuite_agent::{
 use effisuite_agent::todo_store::TodoStore;
 use effisuite_core::clawhub::ClawHubClient;
   use effisuite_core::{
-      AgentConfig, AsrStore, AsrSummaryIndex, CompressionStore, ConversationStore, EventBus,
-      FavoriteWorkspaceStore, MemoryIndex, PinnedMemoryStore, PluginConfigStore, PluginStore,
-      ScheduledTaskStore, SkillStore, SubAgentRecord,
+      AgentConfig, AgentDefStore, AgentFlowStore, AgentTeamStore, AsrStore, AsrSummaryIndex,
+      CompressionStore, ConversationStore, EventBus, FavoriteWorkspaceStore, MemoryIndex,
+      PinnedMemoryStore, PluginConfigStore, PluginStore, ScheduledTaskStore, SkillStore,
+      SubAgentRecord, SubAgentStore,
   };
 use effisuite_p2p::P2pManager;
 use tauri::{Emitter, Manager};
@@ -186,6 +187,27 @@ pub fn run() {
         }
     };
 
+    // 子 agent 会话持久化存储：每个会话一个 JSON 文件，执行过程中实时增量落盘，
+    // 崩溃/重启后可恢复续聊与历史回看。与主 agent、子 agent 共享同一份 Arc。
+    let sub_agent_store = match effisuite_core::SubAgentStore::new(subagents_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "SubAgentStore 初始化失败，子 agent 会话不落盘");
+            effisuite_core::SubAgentStore::new(std::env::temp_dir().join("effisuite-subagents"))
+                .expect("临时目录 SubAgentStore 必须成功")
+        }
+    };
+    // 自定义智能体（AgentDef）存储：用户创建的自定义 agent 定义，sub-agent 召唤时注入。
+    // 需在 SubAgentManager 构造前创建，以便注入 SubAgentKit 供 sub_agent 召唤自定义智能体。
+    let agent_def_store = match AgentDefStore::new(agent_defs_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "AgentDefStore 初始化失败，回退到临时目录");
+            AgentDefStore::new(std::env::temp_dir().join("effisuite-agent-defs"))
+                .expect("临时目录 AgentDefStore 必须成功")
+        }
+    };
+
 
     // ===== 模型管理句柄 + 子 agent 管理器（注入 agent，供新工具使用） =====
     // 配置版本号：manage_model 工具修改配置后 bump，send_message 时懒重建 agent
@@ -234,6 +256,10 @@ pub fn run() {
               model_config: Arc::clone(&config_lock),
               model_manager: Some(Arc::clone(&model_manager)),
               agent_pool: Some(agent_pool.clone()),
+              // 子 agent 会话持久化存储：实时增量落盘，重启可恢复续聊/历史回看
+              sub_agent_store: Some(sub_agent_store.clone()),
+              // 自定义智能体存储：sub_agent 可召唤用户创建的自定义智能体
+              agent_def_store: Some(agent_def_store.clone()),
           },
           emitter,
       ));
@@ -324,6 +350,26 @@ pub fn run() {
                 .expect("临时目录 ScheduledTaskStore 必须成功")
         }
     };
+    // 自定义智能体（AgentDef）存储：用户创建的自定义 agent 定义，sub-agent 召唤时注入
+    // （已在 SubAgentManager 构造前创建，此处复用同一实例注入 AppState）
+    // 智能体群组（Agent Team）存储：用户创建的多人群聊（含用户 + 自定义智能体）
+    let agent_team_store = match AgentTeamStore::new(agent_teams_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "AgentTeamStore 初始化失败，回退到临时目录");
+            AgentTeamStore::new(std::env::temp_dir().join("effisuite-agent-teams"))
+                .expect("临时目录 AgentTeamStore 必须成功")
+        }
+    };
+    // 智能体流程（Agent Flow）存储：ComfyUI 风格可视化节点流程
+    let agent_flow_store = match AgentFlowStore::new(agent_flows_dir()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "AgentFlowStore 初始化失败，回退到临时目录");
+            AgentFlowStore::new(std::env::temp_dir().join("effisuite-agent-flows"))
+                .expect("临时目录 AgentFlowStore 必须成功")
+        }
+    };
 
     tracing::info!(backend = %agent.backend(), "EffiSuite 启动");
 
@@ -334,6 +380,9 @@ pub fn run() {
         skill_store,
         skill_index,
         schedule_store,
+        agent_def_store,
+        agent_team_store,
+        agent_flow_store,
           plugin_store,
           plugin_config,
           compression_store,
@@ -356,6 +405,7 @@ pub fn run() {
         agent_rev,
         model_manager,
         sub_agents,
+                sub_agent_store,
                 sub_agent_records,
                 asr_service,
                 shell_sessions,
@@ -635,6 +685,26 @@ pub fn run() {
             create_scheduled_task,
             delete_scheduled_task,
             toggle_scheduled_task,
+            // 自定义智能体（AgentDef）
+            list_agent_defs,
+            get_agent_def,
+            save_agent_def,
+            delete_agent_def,
+            // 智能体群组（Agent Team）
+            list_agent_teams,
+            get_agent_team,
+            save_agent_team,
+            delete_agent_team,
+            add_team_member,
+            remove_team_member,
+            send_team_message,
+            assign_team_task,
+            get_team_status,
+            // 智能体流程（Agent Flow）
+            list_agent_flows,
+            get_agent_flow,
+            save_agent_flow,
+            delete_agent_flow,
             // ASR 语音转写
             asr_start_streaming,
             asr_push_audio,
@@ -658,6 +728,10 @@ pub fn run() {
             list_pool,
             get_pool_entry,
             clear_pool,
+            // 已落盘子 agent 会话（独立历史入口：查看 / 继续 / 删除）
+            list_sub_agent_sessions,
+            get_sub_agent_session,
+            delete_sub_agent_session,
             // 提醒通知系统
             check_and_notify_reminders,
         ])
