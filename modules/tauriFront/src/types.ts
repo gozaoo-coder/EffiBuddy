@@ -267,6 +267,14 @@ export interface PickedFile {
   size: number
 }
 
+/** 目录条目（输入框 `@` 文件/文件夹匹配用，来自后端 list_directory） */
+export interface DirEntryInfo {
+  name: string
+  path: string
+  is_dir: boolean
+  size: number
+  extension?: string | null
+}
 // =========================================================
 // 附件（已上移到文件顶部与 Message 一起定义）
 // =========================================================

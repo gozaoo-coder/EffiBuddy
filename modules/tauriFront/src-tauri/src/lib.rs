@@ -120,15 +120,19 @@ pub fn run() {
         }
     };
 
-    let skill_store = match SkillStore::new(skills_dir()) {
+    // 初始化技能存储：官方库（appdata/skills）+ 外部生态技能目录（~/.agents/skills 等）只读合并
+    let skill_store = match SkillStore::with_external_roots(skills_dir(), external_skills_roots()) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(error = %e, "SkillStore 初始化失败，回退到临时目录");
-            SkillStore::new(std::env::temp_dir().join("effisuite-skills"))
-                .expect("临时目录 SkillStore 必须成功")
+            SkillStore::with_external_roots(
+                std::env::temp_dir().join("effisuite-skills"),
+                Vec::<std::path::PathBuf>::new(),
+            )
+            .expect("临时目录 SkillStore 必须成功")
         }
     };
-      let plugin_store = match PluginStore::new(plugins_dir()) {
+    let plugin_store = match PluginStore::new(plugins_dir()) {
           Ok(s) => s,
           Err(e) => {
               tracing::error!(error = %e, "PluginStore 初始化失败，回退到临时目录");
@@ -368,6 +372,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             // 回填子 agent 事件发射器所需的 AppHandle（setup 阶段才可用）
             *emitter_slot.lock().unwrap() = Some(app.handle().clone());
@@ -445,6 +450,7 @@ pub fn run() {
                 Arc::clone(&state.store),
                 state.plugin_store.clone(),
                 Arc::clone(&state.pinned_memory),
+                state.todo_store.clone(),
             );
             tauri::async_runtime::spawn(async move {
                 // 确保目录存在（load_or_create 仅写文件，不创建父目录）
@@ -541,6 +547,10 @@ pub fn run() {
             get_todo_tree,
             save_todo_tree,
             clear_todo_tree,
+            // 高级待办（打卡、提醒、批量更新）
+            check_in_todo,
+            get_todo_reminders,
+            batch_update_todos,
             // chat
             send_message,
             send_message_stream,
@@ -568,6 +578,7 @@ pub fn run() {
             capture_photo,
             read_file_text,
             pick_directory,
+            list_directory,
             // 技能
             list_skills,
             create_skill,
@@ -647,6 +658,8 @@ pub fn run() {
             list_pool,
             get_pool_entry,
             clear_pool,
+            // 提醒通知系统
+            check_and_notify_reminders,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

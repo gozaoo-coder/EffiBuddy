@@ -26,6 +26,23 @@ pub(crate) fn skills_dir() -> std::path::PathBuf {
     appdata_root().join("skills")
 }
 
+/// 外部技能根目录列表（npx skills / OpenClaw 等生态安装的目录型技能）。
+///
+/// 返回候选目录（可能不存在，扫描时静默跳过）：
+/// - `<home>/.agents/skills`：`npx skills add ...` 的默认安装位置
+/// - `<home>/.openclaw/skills`：OpenClaw 技能目录（常为指向 .agents 的符号链接）
+///
+/// 这些目录下的技能（每个技能一个目录 + SKILL.md）会被 SkillStore 只读合并，
+/// 使 EffiSuite 能识别并启用社区生态安装的技能。
+pub(crate) fn external_skills_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".agents").join("skills"));
+        roots.push(home.join(".openclaw").join("skills"));
+    }
+    roots
+}
+
 /// 插件存储目录：`<appdata>/plugins`
   /// 插件存储目录：`<appdata>/plugins`
   pub(crate) fn plugins_dir() -> std::path::PathBuf {

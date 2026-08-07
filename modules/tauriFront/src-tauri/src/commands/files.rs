@@ -99,3 +99,62 @@ pub(crate) async fn pick_directory(app: tauri::AppHandle) -> Result<Option<Strin
         .blocking_pick_folder();
     Ok(path.map(|p| p.to_string()))
 }
+
+/// 目录条目信息（供输入框 `@` 文件/文件夹匹配）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DirEntryInfo {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub extension: Option<String>,
+}
+
+/// 列出指定目录内容（供输入框 `@` 匹配文件 / 文件夹 / 目录浏览）。
+///
+/// - 目录不存在或不可读时返回空 Vec（不报错，输入框静默忽略）
+/// - 支持 `~` / `~/...` 展开为用户主目录（`@` 缺省根使用）
+/// - 目录在前，名称不区分大小写排序
+#[tauri::command]
+pub(crate) async fn list_directory(dir: String) -> Result<Vec<DirEntryInfo>, String> {
+    // 展开 `~`（空串 / `~` / `~/...`）为用户主目录
+    let expanded = if dir.is_empty() || dir == "~" {
+        dirs::home_dir()
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else if let Some(rest) = dir.strip_prefix("~/") {
+        dirs::home_dir()
+            .map(|h| h.join(rest).to_string_lossy().into_owned())
+            .unwrap_or(dir)
+    } else {
+        dir
+    };
+    let p = std::path::Path::new(&expanded);
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(p) {
+        Ok(e) => e,
+        Err(_) => return Ok(Vec::new()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        let meta = std::fs::metadata(&path).ok();
+        out.push(DirEntryInfo {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: path.to_string_lossy().into_owned(),
+            is_dir,
+            size: if is_dir {
+                0
+            } else {
+                meta.map(|m| m.len()).unwrap_or(0)
+            },
+            extension: path.extension().map(|e| e.to_string_lossy().into_owned()),
+        });
+    }
+    out.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(out)
+}

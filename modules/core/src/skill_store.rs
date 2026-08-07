@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use tokio::sync::RwLock;
 
-use crate::{CoreError, Result, Skill};
+use crate::{external_skills::scan_external_skills, CoreError, Result, Skill};
 
 /// 内置技能 id：agent-reach
 pub const BUILTIN_AGENT_REACH: &str = "agent-reach";
@@ -25,16 +25,31 @@ pub const BUILTIN_BROWSER_ACT: &str = "browser-act";
 #[derive(Clone)]
 pub struct SkillStore {
     root: PathBuf,
+    /// 外部技能根目录（如 `~/.agents/skills`、`~/.openclaw/skills`），只读扫描 SKILL.md。
+    /// 为空表示不启用外部技能兼容。
+    external_roots: Vec<PathBuf>,
     _lock: std::sync::Arc<RwLock<()>>,
 }
 
 impl SkillStore {
-    /// 创建存储，root 不存在时自动创建
+    /// 创建存储，root 不存在时自动创建；默认不启用外部技能扫描。
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
+        Self::with_external_roots(root, Vec::new())
+    }
+
+    /// 创建存储并附带外部技能根目录（builder 风格，消费 self）。
+    ///
+    /// 外部技能以目录型 SKILL.md 形式存在于这些根目录下（npx skills / OpenClaw 生态），
+    /// 会被 `list_user` / `get` / `list_all` 只读合并。
+    pub fn with_external_roots(
+        root: impl Into<PathBuf>,
+        external_roots: impl Into<Vec<PathBuf>>,
+    ) -> Result<Self> {
         let root = root.into();
         std::fs::create_dir_all(&root).map_err(CoreError::Io)?;
         Ok(Self {
             root,
+            external_roots: external_roots.into(),
             _lock: std::sync::Arc::new(RwLock::new(())),
         })
     }
@@ -111,25 +126,36 @@ impl SkillStore {
             };
             out.push(skill);
         }
+        // 合并外部技能（npx skills / OpenClaw 目录型 SKILL.md），只读扫描
+        if !self.external_roots.is_empty() {
+            out.extend(scan_external_skills(&self.external_roots).await);
+        }
         // 按 created_at 降序，新的在前
         out.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         Ok(out)
     }
 
-    /// 列出全部技能：内置在前，用户自定义在后。
+    /// 列出全部技能：内置在前，用户自定义（含外部目录技能）在后。
     pub async fn list_all(&self) -> Result<Vec<Skill>> {
         let mut out = Self::list_builtin();
         out.extend(self.list_user().await?);
         Ok(out)
     }
 
-    /// 加载单个技能：先查内置（按 id），再查磁盘。
+    /// 加载单个技能：先查内置（按 id），再查磁盘，最后回退外部技能（按 id=slug）。
     pub async fn get(&self, id: &str) -> Result<Option<Skill>> {
         if let Some(b) = Self::list_builtin().into_iter().find(|s| s.id == id) {
             return Ok(Some(b));
         }
         let path = self.path_for(id);
         if !path.exists() {
+            // 回退：外部技能（目录型 SKILL.md，按目录名 id 匹配）
+            if !self.external_roots.is_empty() {
+                let external = scan_external_skills(&self.external_roots).await;
+                if let Some(s) = external.into_iter().find(|s| s.id == id) {
+                    return Ok(Some(s));
+                }
+            }
             return Ok(None);
         }
         let bytes = tokio::fs::read(&path).await.map_err(CoreError::Io)?;
